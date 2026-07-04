@@ -110,6 +110,7 @@ async function updateView(view: ViewKey) {
     // Show/hide main content
     resumeView.style.display = isAboutView ? 'block' : 'none';
     canvas.style.display = isAboutView ? 'none' : 'block';
+    updateLayout();
 }
 
 // --- EVENT LISTENERS ---
