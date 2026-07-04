@@ -110,10 +110,31 @@ body {
 
 .sidebar-pane {
   grid-area: sidebar;
+  overflow-y: auto;
   background-color: var(--sidebar-bg);
   border-right: 1px solid var(--border-color);
-  padding: 10px;
+  padding: 2.5rem 1.5rem;
 }
+
+/* --- CUSTOM SCROLLBAR --- */
+.sidebar-pane::-webkit-scrollbar {
+  width: 7px;
+}
+
+.sidebar-pane::-webkit-scrollbar-track {
+  background: var(--sidebar-bg);
+}
+
+.sidebar-pane::-webkit-scrollbar-thumb {
+  background-color: #3a3d42; /* A slightly lighter grey for the thumb */
+  border-radius: 7px;
+  border: 2px solid var(--sidebar-bg); /* Creates a padding effect */
+}
+
+.sidebar-pane::-webkit-scrollbar-thumb:hover {
+  background-color: #555; /* Lighter on hover */
+}
+
 
 .sidebar-pane a {
   color: var(--accent-color);
@@ -225,7 +246,6 @@ canvas {
 
   .sidebar-pane {
     border-right: none;
-    overflow-y: auto;
     mask-image: linear-gradient(to bottom, transparent 0%, black 10px);
     -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 10px);
   }
@@ -261,7 +281,48 @@ canvas {
   }
 
   .resume-view {
-      padding: 20px;
+      padding: 1.5rem 1.25rem;
+  }
+
+  .markdown-content {
+    padding: 1.75rem 1.25rem !important;
+    box-sizing: border-box;
+  }
+
+  /* Give the main file header clean spacing below the toolbar boundary */
+  .markdown-content h1 {
+    font-size: 1.5rem;         /* Clean mobile scale down */
+    margin-top: 0.5rem;
+    margin-bottom: 0.75rem;
+    line-height: 1.2;
+  }
+
+  /* Format the horizontal rule to act as a crisp structural separator */
+  .markdown-content hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 1rem 0 1.5rem 0;
+  }
+
+  /* Add comfortable vertical tracking to the introductory bio paragraphs */
+  .markdown-content p {
+    font-size: 0.95rem;
+    line-height: 1.65;
+    margin-bottom: 1.25rem;    /* Clear division between prose blocks */
+  }
+
+  /* Force clean column tracking on mobile list items */
+  .markdown-content ul, 
+  .markdown-content ol {
+    padding-left: 1.25rem !important;
+    margin: 1rem 0;
+  }
+
+  .markdown-content li {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+    padding-left: 0.25rem;     /* Gutter space between token and link */
   }
 }
 
