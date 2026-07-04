@@ -3,7 +3,7 @@ import mkcert from 'vite-plugin-mkcert';
 
 export default defineConfig({
   // Tells Vite your live site will be served from a subfolder named after your repo
-  base: '/portfolio/',
+  base: '/Portfolio/',
   
   server: {
     host: true,
