@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://formspree.io; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none';">
+    <title>Litbox | E. T. Langley</title>
+    <link rel="stylesheet" href="/src/style.css">
+  </head>
+  <body>
+    <div class="app-container">
+      <header class="title-bar">
+        <div class="title">Litbox</div>
+      </header>
+      <nav class="activity-bar">
+        <button data-view="intro" class="active" title="Introduction"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg></button>
+        <button data-view="litbox" title="Litbox"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg></button>
+        <button data-view="fractals" title="Fractals" disabled><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="16" cy="12" r="5"></circle><circle cx="8" cy="12" r="3"></circle><line x1="5" y1="12" x2="2" y2="12"></line></svg></button>
+        <button data-view="about" title="About Evan"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></button>
+      </nav>
+      <aside class="sidebar-pane">
+        <!-- Content will be injected by TypeScript -->
+      </aside>
+      <main class="workspace-viewport">
+        <canvas></canvas>
+        <div class="terminal-profiler" style="display: none;">
+          <!-- Terminal/Profiler content -->
+        </div>
+        <div class="resume-view" style="display: none;">
+          <div class="resume-scroll-area">
+              <div class="header-links">
+                  <a href="https://drive.google.com/file/d/1umXyAsDQRjX6Kj8BfhX0GppJerKLyQsd/view?usp=sharing" target="_blank">PDF 💾</a>
+                  <a href="#" id="contact-link">Contact 🗨️</a>
+              </div>
+              <div class="resume-view-specialist"></div>
+              <div class="resume-view-generalist" style="display: none;"></div>
+          </div>
+        </div>
+      </main>
+      <footer class="status-bar">
+        <div class="status-left">
+          <span>branch: main</span>
+          <span>🟢 WebGPU: Active</span>
+        </div>
+        <div class="status-center">
+          <span>Click + Drag to rotate camera</span>
+        </div>
+        <div class="status-right">
+          <a href="https://drive.google.com/file/d/1umXyAsDQRjX6Kj8BfhX0GppJerKLyQsd/view?usp=sharing" target="_blank">[💾 Download PDF]</a>
+        </div>
+      </footer>
+    </div>
+    <div id="console-container" style="display: none;"></div>
+
+    <div id="contact-modal-overlay" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <!-- Contact form will be injected here -->
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script> <!-- Your main app script -->
+  </body>
+</html>
