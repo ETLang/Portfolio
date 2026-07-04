@@ -224,108 +224,6 @@ canvas {
     font-weight: bold;
 }
 
-
-/* --- MOBILE LAYOUT (PORTRAIT) --- */
-@media (max-width: 768px) {
-  .app-container {
-    grid-template-columns: 1fr;
-    grid-template-rows: 40vh 1fr 60px; /* Canvas, Sidebar, Nav */
-    grid-template-areas:
-      "workspace"
-      "sidebar"
-      "activity";
-  }
-
-  .title-bar, .status-bar {
-    display: none; /* Hide desktop-specific bars */
-  }
-
-  .workspace-viewport {
-      /* Pinned to top 40vh */
-  }
-
-  .sidebar-pane {
-    border-right: none;
-    mask-image: linear-gradient(to bottom, transparent 0%, black 10px);
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 10px);
-  }
-
-  .activity-bar {
-    grid-area: activity;
-    flex-direction: row;
-    justify-content: space-around;
-    border-top: 1px solid var(--border-color);
-    padding-top: 0;
-  }
-
-  .activity-bar button.active::before {
-    top: auto;
-    bottom: 0;
-    left: 25%;
-    width: 50%;
-    height: 3px;
-  }
-
-  .sidebar-pane .slider, .sidebar-pane button {
-      min-height: 44px;
-      padding: 10px;
-  }
-
-  /* --- ABOUT PAGE --- */
-  .app-container[data-active-view="about"] {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr 60px; /* Canvas, Nav */
-    grid-template-areas:
-      "workspace"
-      "activity";
-  }
-
-  .resume-view {
-      padding: 1.5rem 1.25rem;
-  }
-
-  .markdown-content {
-    padding: 1.75rem 1.25rem !important;
-    box-sizing: border-box;
-  }
-
-  /* Give the main file header clean spacing below the toolbar boundary */
-  .markdown-content h1 {
-    font-size: 1.5rem;         /* Clean mobile scale down */
-    margin-top: 0.5rem;
-    margin-bottom: 0.75rem;
-    line-height: 1.2;
-  }
-
-  /* Format the horizontal rule to act as a crisp structural separator */
-  .markdown-content hr {
-    border: none;
-    border-top: 1px solid var(--border-color);
-    margin: 1rem 0 1.5rem 0;
-  }
-
-  /* Add comfortable vertical tracking to the introductory bio paragraphs */
-  .markdown-content p {
-    font-size: 0.95rem;
-    line-height: 1.65;
-    margin-bottom: 1.25rem;    /* Clear division between prose blocks */
-  }
-
-  /* Force clean column tracking on mobile list items */
-  .markdown-content ul, 
-  .markdown-content ol {
-    padding-left: 1.25rem !important;
-    margin: 1rem 0;
-  }
-
-  .markdown-content li {
-    font-size: 0.95rem;
-    line-height: 1.6;
-    margin-bottom: 0.75rem;
-    padding-left: 0.25rem;     /* Gutter space between token and link */
-  }
-}
-
 /* --- ON-SCREEN CONSOLE --- */
 #console-container {
   position: fixed;
@@ -581,9 +479,142 @@ canvas {
     margin-top: 1em;
 }
 
+/* --- MOBILE LAYOUT (PORTRAIT) --- */
 @media (max-width: 768px) {
-    .modal-content {
-        width: 85%;
-        padding: 20px;
-    }
+  .modal-content {
+      width: 85%;
+      padding: 20px;
+  }
+
+  .app-container {
+    grid-template-columns: 1fr;
+    grid-template-rows: 40vh 1fr 60px; /* Canvas, Sidebar, Nav */
+    grid-template-areas:
+      "workspace"
+      "sidebar"
+      "activity";
+  }
+
+  .title-bar, .status-bar {
+    display: none; /* Hide desktop-specific bars */
+  }
+
+  .workspace-viewport {
+      /* Pinned to top 40vh */
+  }
+
+  .sidebar-pane {
+    border-right: none;
+    mask-image: linear-gradient(to bottom, transparent 0%, black 10px);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 10px);
+  }
+
+  .activity-bar {
+    grid-area: activity;
+    flex-direction: row;
+    justify-content: space-around;
+    border-top: 1px solid var(--border-color);
+    padding-top: 0;
+  }
+
+  .activity-bar button.active::before {
+    top: auto;
+    bottom: 0;
+    left: 25%;
+    width: 50%;
+    height: 3px;
+  }
+
+  .sidebar-pane .slider, .sidebar-pane button {
+      min-height: 44px;
+      padding: 10px;
+  }
+
+  /* --- ABOUT PAGE --- */
+  .app-container[data-active-view="about"] {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 60px; /* Canvas, Nav */
+    grid-template-areas:
+      "workspace"
+      "activity";
+  }
+
+  .resume-view {
+      padding: 0;
+  }
+
+  .header-links {
+      position: absolute;
+      top: 3rem;
+      right: 1.75rem;
+  }
+
+  .markdown-content {
+    /* padding: 0.25rem 1.25rem !important; */
+    padding: 1.75rem 1.75rem !important;
+    box-sizing: border-box;
+  }
+
+  /* Give the main file header clean spacing below the toolbar boundary */
+  .markdown-content h1 {
+    font-size: 2rem;
+    margin-top: 0.5rem;
+    margin-bottom: 1rem;
+    line-height: 1.2;
+  }
+
+  .markdown-content h1 + h3 {
+      margin-top: 0.5rem;
+      font-size: 1.1em;
+  }
+
+  .markdown-content h1 + h3 + p {
+      text-align: center;
+      margin: 0em -1em 1em;
+      font-size: 1.1em;
+      color: var(--text-subtitle);
+  }
+
+  .markdown-content h1 + h3 + p a {
+      color: var(--text-secondary-header);
+      text-decoration: none;
+      font-weight: 600;
+      margin: 0 1em;
+  }
+
+  .markdown-content h1 + h3 + p a:first-child {
+      cursor: default;
+  }
+
+  .markdown-content h1 + h3 + p strong {
+      margin-right: 1em;
+  }
+
+  /* Format the horizontal rule to act as a crisp structural separator */
+  .markdown-content hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 1rem 0 1.5rem 0;
+  }
+
+  /* Add comfortable vertical tracking to the introductory bio paragraphs */
+  .markdown-content p {
+    font-size: 0.95rem;
+    line-height: 1.65;
+    margin-bottom: 1.25rem;    /* Clear division between prose blocks */
+  }
+
+  /* Force clean column tracking on mobile list items */
+  .markdown-content ul, 
+  .markdown-content ol {
+    padding-left: 1.25rem !important;
+    margin: 1rem 0;
+  }
+
+  .markdown-content li {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin-bottom: 0.75rem;
+    padding-left: 0.25rem;     /* Gutter space between token and link */
+  }
 }
