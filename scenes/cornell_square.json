@@ -1,0 +1,950 @@
+{
+    "simulations": [
+        {
+            "width": 512,
+            "height": 512,
+            "raysPerFrame": 128000,
+            "integrationInterval": 0.10000000149011612,
+            "photonBounces": -1
+        }
+    ],
+    "objects": [
+        {
+            "active": true,
+            "id": -20854,
+            "name": "Right Wall",
+            "parentId": -42158,
+            "position": {
+                "x": 3.0199997425079347,
+                "y": 0.10000000149011612
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.4625000059604645,
+                "y": 9.071094512939454
+            }
+        },
+        {
+            "active": true,
+            "id": -36512,
+            "name": "Floor",
+            "parentId": -42158,
+            "position": {
+                "x": -1.340000033378601,
+                "y": -4.570000171661377
+            },
+            "depth": 0.0,
+            "rotation": 90.0,
+            "scale": {
+                "x": 0.4625000059604645,
+                "y": 9.071094512939454
+            }
+        },
+        {
+            "active": true,
+            "id": -48940,
+            "name": "Traced",
+            "parentId": -48926,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -45166,
+            "name": "Square",
+            "parentId": -44986,
+            "position": {
+                "x": -3.5299999713897707,
+                "y": -3.2100000381469728
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 2.861786365509033,
+                "y": 2.861786365509033
+            }
+        },
+        {
+            "active": false,
+            "id": 42926,
+            "name": "Laser",
+            "parentId": -44154,
+            "position": {
+                "x": -3.049999952316284,
+                "y": 3.640000104904175
+            },
+            "depth": 0.0,
+            "rotation": 18.60475730895996,
+            "scale": {
+                "x": 0.009999997913837433,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 42978,
+            "name": "Diagnostic",
+            "parentId": -1,
+            "position": {
+                "x": 8.392430305480957,
+                "y": -0.24077999591827393
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 6.720481872558594,
+                "y": 7.299896717071533
+            }
+        },
+        {
+            "active": true,
+            "id": -38324,
+            "name": "Sprite",
+            "parentId": -38322,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -36510,
+            "name": "Traced",
+            "parentId": -36512,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": false,
+            "id": -48926,
+            "name": "Rotating Square",
+            "parentId": -44986,
+            "position": {
+                "x": -0.4699999988079071,
+                "y": 2.869999885559082
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.7336000204086304,
+                "y": 1.7336000204086304
+            }
+        },
+        {
+            "active": true,
+            "id": -44986,
+            "name": "Content",
+            "parentId": 43006,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -44154,
+            "name": "Lights",
+            "parentId": 43006,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -38828,
+            "name": "Right Ceiling",
+            "parentId": -42158,
+            "position": {
+                "x": 1.2799999713897706,
+                "y": 4.75
+            },
+            "depth": 0.0,
+            "rotation": 90.0,
+            "scale": {
+                "x": 0.4625000059604645,
+                "y": 3.6284377574920656
+            }
+        },
+        {
+            "active": true,
+            "id": 42916,
+            "name": "Main Camera",
+            "parentId": -1,
+            "position": {
+                "x": 2.8399999141693117,
+                "y": 0.0
+            },
+            "depth": -10.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -36508,
+            "name": "Sprite",
+            "parentId": -36512,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -48930,
+            "name": "Sprite",
+            "parentId": -48926,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 43000,
+            "name": "Background",
+            "parentId": 43006,
+            "position": {
+                "x": -1.3175699710845948,
+                "y": -0.19077999889850617
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 9.800000190734864,
+                "y": 10.0
+            }
+        },
+        {
+            "active": true,
+            "id": -38326,
+            "name": "Traced",
+            "parentId": -38322,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -45170,
+            "name": "Sprite",
+            "parentId": -45166,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -34868,
+            "name": "Left Wall",
+            "parentId": -42158,
+            "position": {
+                "x": -5.739999771118164,
+                "y": 0.10000000149011612
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.4625000059604645,
+                "y": 9.071094512939454
+            }
+        },
+        {
+            "active": true,
+            "id": 42888,
+            "name": "Simulation",
+            "parentId": -1,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 9.65555191040039,
+                "y": 9.65555191040039
+            }
+        },
+        {
+            "active": true,
+            "id": -42158,
+            "name": "Walls",
+            "parentId": 43006,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 43006,
+            "name": "Scene",
+            "parentId": -1,
+            "position": {
+                "x": 1.2999999523162842,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -38826,
+            "name": "Traced",
+            "parentId": -38828,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 42904,
+            "name": "Sprite",
+            "parentId": -20854,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -38824,
+            "name": "Sprite",
+            "parentId": -38828,
+            "position": {
+                "x": 0.0,
+                "y": -0.02199999988079071
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -45566,
+            "name": "Sprite",
+            "parentId": -45562,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -38322,
+            "name": "Left Ceiling",
+            "parentId": -42158,
+            "position": {
+                "x": -3.9800000190734865,
+                "y": 4.75
+            },
+            "depth": 0.0,
+            "rotation": 90.0,
+            "scale": {
+                "x": 0.4625000059604645,
+                "y": 3.6284377574920656
+            }
+        },
+        {
+            "active": true,
+            "id": -34870,
+            "name": "Sprite",
+            "parentId": -34868,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -12756,
+            "name": "Traced",
+            "parentId": -20854,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 42980,
+            "name": "Overhead Light",
+            "parentId": -44154,
+            "position": {
+                "x": -1.2999999523162842,
+                "y": 4.590000152587891
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.600000023841858,
+                "y": 0.09000000357627869
+            }
+        },
+        {
+            "active": true,
+            "id": -45562,
+            "name": "Circle",
+            "parentId": -44986,
+            "position": {
+                "x": 0.47999998927116396,
+                "y": -3.240000009536743
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 2.144584894180298,
+                "y": 2.144584894180298
+            }
+        },
+        {
+            "active": true,
+            "id": -34872,
+            "name": "Traced",
+            "parentId": -34868,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -45576,
+            "name": "Traced",
+            "parentId": -45562,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -45180,
+            "name": "Traced",
+            "parentId": -45166,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "ownerId": 42916,
+            "verticalSize": 5.0,
+            "exposure": 0.0
+        }
+    ],
+    "raytraced": [
+        {
+            "ownerId": -38326,
+            "logDensity": -0.12999999523162843,
+            "roughness": 0.8460000157356262,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.9450980424880981,
+                "g": 0.9450980424880981,
+                "b": 0.9450980424880981,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "rect"
+        },
+        {
+            "ownerId": -45180,
+            "logDensity": -0.27000001072883608,
+            "roughness": 0.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.9528301954269409,
+                "g": 0.8944019079208374,
+                "b": 0.8944019079208374,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "rect"
+        },
+        {
+            "ownerId": -48940,
+            "logDensity": 0.0,
+            "roughness": 0.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.9528301954269409,
+                "g": 0.8944019079208374,
+                "b": 0.8944019079208374,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "rect"
+        },
+        {
+            "ownerId": 43000,
+            "logDensity": -2.4700000286102297,
+            "roughness": 1.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -12756,
+            "logDensity": -0.12999999523162843,
+            "roughness": 0.8460000157356262,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 1.0,
+                "g": 0.04894980788230896,
+                "b": 0.04894980788230896,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "rect"
+        },
+        {
+            "ownerId": -36510,
+            "logDensity": -0.12999999523162843,
+            "roughness": 0.8460000157356262,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.9450980424880981,
+                "g": 0.9450980424880981,
+                "b": 0.9450980424880981,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "rect"
+        },
+        {
+            "ownerId": -34872,
+            "logDensity": -0.12999999523162843,
+            "roughness": 0.8460000157356262,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.047058820724487308,
+                "g": 1.0,
+                "b": 0.05863914638757706,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "rect"
+        },
+        {
+            "ownerId": -45576,
+            "logDensity": -0.3700000047683716,
+            "roughness": 0.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -38826,
+            "logDensity": -0.12999999523162843,
+            "roughness": 0.8460000157356262,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.9450980424880981,
+                "g": 0.9450980424880981,
+                "b": 0.9450980424880981,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "rect"
+        }
+    ],
+    "sprites": [
+        {
+            "ownerId": -34870,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -36508,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -38824,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -45566,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": 42904,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -48930,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -38324,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -45170,
+            "layer": 0,
+            "opacity": 0.0,
+            "image": "",
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        }
+    ],
+    "pointLights": [],
+    "spotlights": [
+        {
+            "ownerId": 42980,
+            "color": {
+                "r": 0.8496375679969788,
+                "g": 0.7411832809448242,
+                "b": 0.5572184920310974,
+                "a": 0.0
+            },
+            "intensity": 0.01209999993443489,
+            "pinch": 5.0,
+            "bounces": 7
+        }
+    ],
+    "laserLights": [
+        {
+            "ownerId": 42926,
+            "color": {
+                "r": 1.0,
+                "g": 0.019999980926513673,
+                "b": 0.019999980926513673,
+                "a": 0.0
+            },
+            "intensity": 8.122499465942383,
+            "bounces": 4
+        }
+    ],
+    "directionalLights": [],
+    "ambientLights": []
+}
