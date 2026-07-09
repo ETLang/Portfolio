@@ -3,6 +3,7 @@ import type { Scene, SceneSprite } from './scene.ts';
 import type { SceneGraph } from './scene_graph.ts';
 import type { TextureCache } from './texture_cache.ts';
 import type { SimulationResources } from './simulation.ts';
+import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } from './quad_mesh.ts';
 import spriteShaderCode from './shaders/sprite.wgsl?raw';
 
 // erasableSyntaxOnly forbids `enum` - matches shapeId encoding in sprite.wgsl.
@@ -10,16 +11,6 @@ const PRIMITIVE_SHAPE_ID: Record<string, number> = { '': 0, rect: 1, ellipse: 2 
 
 // Must match the SpriteInstance struct layout in sprite.wgsl.
 const SPRITE_INSTANCE_STRIDE_BYTES = 144;
-
-// Unit quad, two triangles, matching SceneObject.scale semantics ([-0.5, 0.5]^2 local space).
-const QUAD_VERTICES = new Float32Array([
-    -0.5, -0.5,
-    0.5, -0.5,
-    0.5, 0.5,
-    -0.5, -0.5,
-    0.5, 0.5,
-    -0.5, 0.5,
-]);
 
 interface ResolvedSprite {
     layer: number;
@@ -46,13 +37,7 @@ export class SpriteResources {
 
     constructor(device: GPUDevice) {
         this.device = device;
-        this.vertexBuffer = device.createBuffer({
-            size: QUAD_VERTICES.byteLength,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-            mappedAtCreation: true,
-        });
-        new Float32Array(this.vertexBuffer.getMappedRange()).set(QUAD_VERTICES);
-        this.vertexBuffer.unmap();
+        this.vertexBuffer = getQuadVertexBuffer(device);
     }
 
     public initialize(cameraBindGroupLayout: GPUBindGroupLayout, hdrFormat: GPUTextureFormat): void {
@@ -78,7 +63,7 @@ export class SpriteResources {
             vertex: {
                 module: shaderModule,
                 entryPoint: 'vertex_main',
-                buffers: [{ arrayStride: 4 * 2, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }],
+                buffers: [QUAD_VERTEX_BUFFER_LAYOUT],
             },
             fragment: {
                 module: shaderModule,
@@ -135,7 +120,7 @@ export class SpriteResources {
                 continue;
             }
             passEncoder.setBindGroup(1, resolved.bindGroup);
-            passEncoder.draw(6);
+            passEncoder.draw(QUAD_VERTEX_COUNT);
         }
     }
 

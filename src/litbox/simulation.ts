@@ -1,19 +1,10 @@
 import { mat4 } from 'gl-matrix';
 import type { Scene, SceneSimulation } from './scene.ts';
 import type { SceneGraph } from './scene_graph.ts';
+import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } from './quad_mesh.ts';
 import compositeShaderCode from './shaders/simulation_composite.wgsl?raw';
 
 const LIGHTMAP_FORMAT: GPUTextureFormat = 'rgba16float';
-
-// Unit quad, two triangles, matching SceneObject.scale semantics ([-0.5, 0.5]^2 local space).
-const QUAD_VERTICES = new Float32Array([
-    -0.5, -0.5,
-    0.5, -0.5,
-    0.5, 0.5,
-    -0.5, -0.5,
-    0.5, 0.5,
-    -0.5, 0.5,
-]);
 
 /**
  * Owns the HDR mipmapped lightmap produced by the (currently stubbed)
@@ -42,13 +33,7 @@ export class SimulationResources {
     constructor(device: GPUDevice) {
         this.device = device;
         this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
-        this.vertexBuffer = device.createBuffer({
-            size: QUAD_VERTICES.byteLength,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-            mappedAtCreation: true,
-        });
-        new Float32Array(this.vertexBuffer.getMappedRange()).set(QUAD_VERTICES);
-        this.vertexBuffer.unmap();
+        this.vertexBuffer = getQuadVertexBuffer(device);
     }
 
     public initialize(cameraBindGroupLayout: GPUBindGroupLayout): void {
@@ -66,7 +51,7 @@ export class SimulationResources {
             vertex: {
                 module: shaderModule,
                 entryPoint: 'vertex_main',
-                buffers: [{ arrayStride: 4 * 2, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }],
+                buffers: [QUAD_VERTEX_BUFFER_LAYOUT],
             },
             fragment: {
                 module: shaderModule,
@@ -166,6 +151,6 @@ export class SimulationResources {
         passEncoder.setPipeline(this.pipeline);
         passEncoder.setBindGroup(1, this.compositeBindGroup);
         passEncoder.setVertexBuffer(0, this.vertexBuffer);
-        passEncoder.draw(6);
+        passEncoder.draw(QUAD_VERTEX_COUNT);
     }
 }
