@@ -13,6 +13,7 @@ export interface Color {
 }
 
 export interface SceneSimulation {
+    ownerId: number;
     width: number;
     height: number;
     raysPerFrame: number;
@@ -54,6 +55,7 @@ export interface SceneSprite {
     layer: number; // negative = renders before additive simulation. Positive = renders after
     opacity: number;
     image: string;
+    colorMod: Color; // modulates the image color to produce the final albedo
     ambient: Color;
     emissive: Color;
     simContribution: Color;

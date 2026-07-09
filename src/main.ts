@@ -1,7 +1,8 @@
 import './style.css';
 import { marked } from 'marked';
 import { ModalDialog } from './modal-dialog.ts';
-import { RotatingCube } from './rotating_cube.ts';
+import { LitboxSceneRenderer } from './litbox_scene_renderer.ts';
+import { parseScene } from './litbox/scene.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
 import introMdText from './intro.md?raw';
@@ -110,6 +111,7 @@ async function updateView(view: ViewKey) {
     // Show/hide main content
     resumeView.style.display = isAboutView ? 'block' : 'none';
     canvas.style.display = isAboutView ? 'none' : 'block';
+
     updateLayout();
 }
 
@@ -154,10 +156,8 @@ function updateLayout() {
     if (canvas.width !== rect.width || canvas.height !== rect.height) {
         canvas.width = rect.width;
         canvas.height = rect.height;
-        if (cube) {
-            // Manually trigger a render to avoid stretching during resize.
-            cube.render();
-        }
+        // Manually trigger a render to avoid stretching during resize.
+        litboxRenderer?.render();
     }
 }
 
@@ -165,10 +165,10 @@ function updateLayout() {
 // Set default view
 updateView('intro');
 
-// Initialize WebGPU Cube
-let cube: RotatingCube | null = null;
+// Initialize the Litbox scene renderer (shared by the intro and litbox views).
+let litboxRenderer: LitboxSceneRenderer | null = null;
 if (canvas) {
-    cube = new RotatingCube(canvas);
+    const renderer = new LitboxSceneRenderer(canvas);
 
     // Set initial size
     updateLayout();
@@ -178,8 +178,13 @@ if (canvas) {
         updateLayout();
     });
     resizeObserver.observe(appContainer);
-    
-    cube.start();
+
+    fetch(`${import.meta.env.BASE_URL}scenes/cornell_square.json`)
+        .then(response => response.text())
+        .then(json => renderer.setScene(parseScene(json)))
+        .then(() => renderer.start())
+        .then(() => { litboxRenderer = renderer; })
+        .catch(error => console.error('Failed to start Litbox scene renderer:', error));
 } else {
     console.error("Canvas element not found!");
 }
