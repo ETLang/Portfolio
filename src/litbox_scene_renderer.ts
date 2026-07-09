@@ -1,5 +1,6 @@
 import { mat4 } from 'gl-matrix';
-import type { Scene, SceneCamera } from './litbox/scene.ts';
+import type { SceneCamera } from './litbox/scene.ts';
+import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { SceneGraph } from './litbox/scene_graph.ts';
 import { TextureCache } from './litbox/texture_cache.ts';
 import { LightResources } from './litbox/light_resources.ts';
@@ -50,7 +51,8 @@ export class LitboxSceneRenderer {
     private spriteResources!: SpriteResources;
     private tonemapResources!: TonemapResources;
 
-    private scene: Scene | null = null;
+    private activeScene: LitboxScene | null = null;
+    private lastFrameTimeMs: number | null = null;
 
     /**
      * Diagnostic aid: when true, sprites render as flat, fully-opaque, shape-colored
@@ -74,7 +76,7 @@ export class LitboxSceneRenderer {
         this.configureCanvas();
         this.createSharedResources();
 
-        if (this.scene) {
+        if (this.activeScene) {
             await this.rebuildFromScene();
         }
 
@@ -83,8 +85,9 @@ export class LitboxSceneRenderer {
     }
 
     /** Stages (or swaps in) a scene. Safe to call before or after start(). */
-    public async setScene(scene: Scene): Promise<void> {
-        this.scene = scene;
+    public async setScene(scene: LitboxScene): Promise<void> {
+        this.activeScene = scene;
+        scene.onLoad();
         if (this.device) {
             await this.rebuildFromScene();
         }
@@ -159,10 +162,10 @@ export class LitboxSceneRenderer {
     }
 
     private async rebuildFromScene(): Promise<void> {
-        if (!this.scene) {
+        if (!this.activeScene) {
             return;
         }
-        const scene = this.scene;
+        const scene = this.activeScene.data;
         this.sceneGraph = new SceneGraph(scene);
 
         this.lightResources.updateFromScene(scene, this.sceneGraph);
@@ -172,14 +175,15 @@ export class LitboxSceneRenderer {
     }
 
     private getActiveCamera(): ActiveCamera | null {
-        if (!this.scene || !this.sceneGraph) {
+        if (!this.activeScene || !this.sceneGraph) {
             return null;
         }
-        if (this.scene.cameras.length !== 1) {
-            console.warn(`Litbox: expected exactly 1 camera, found ${this.scene.cameras.length}; using the first active one.`);
+        const scene = this.activeScene.data;
+        if (scene.cameras.length !== 1) {
+            console.warn(`Litbox: expected exactly 1 camera, found ${scene.cameras.length}; using the first active one.`);
         }
         const sceneGraph = this.sceneGraph;
-        const camera = this.scene.cameras.find(c => sceneGraph.isActiveInHierarchy(c.ownerId));
+        const camera = scene.cameras.find((c: SceneCamera) => sceneGraph.isActiveInHierarchy(c.ownerId));
         if (!camera) {
             return null;
         }
@@ -219,10 +223,14 @@ export class LitboxSceneRenderer {
         return exposure;
     }
 
-    public render(): void {
+    public render(timeMs: number = performance.now()): void {
         if (!this.device) {
             return;
         }
+
+        const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
+        this.lastFrameTimeMs = timeMs;
+        this.activeScene?.onFrame(deltaTimeSeconds);
 
         if (this.canvas.width !== this.presentationSize[0] || this.canvas.height !== this.presentationSize[1]) {
             this.presentationSize = [this.canvas.width, this.canvas.height];

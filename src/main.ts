@@ -2,7 +2,7 @@ import './style.css';
 import { marked } from 'marked';
 import { ModalDialog } from './modal-dialog.ts';
 import { LitboxSceneRenderer } from './litbox_scene_renderer.ts';
-import { parseScene } from './litbox/scene.ts';
+import { CornellSquareScene } from './litbox/scenes/cornell_square_scene.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
 import introMdText from './intro.md?raw';
@@ -179,9 +179,8 @@ if (canvas) {
     });
     resizeObserver.observe(appContainer);
 
-    fetch(`${import.meta.env.BASE_URL}scenes/cornell_square.json`)
-        .then(response => response.text())
-        .then(json => renderer.setScene(parseScene(json)))
+    CornellSquareScene.load()
+        .then(scene => renderer.setScene(scene))
         .then(() => renderer.start())
         .then(() => { litboxRenderer = renderer; })
         .catch(error => console.error('Failed to start Litbox scene renderer:', error));
