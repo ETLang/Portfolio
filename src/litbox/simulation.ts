@@ -32,7 +32,7 @@ export class SimulationResources {
 
     private pipeline: GPURenderPipeline | null = null;
     private vertexBuffer: GPUBuffer;
-    private quadUniformBuffer: GPUBuffer | null = null;
+    private compositeUniformBuffer: GPUBuffer | null = null;
     private compositeBindGroup: GPUBindGroup | null = null;
     private compositeBindGroupLayout: GPUBindGroupLayout | null = null;
 
@@ -82,7 +82,7 @@ export class SimulationResources {
             primitive: { topology: 'triangle-list' },
         });
 
-        this.quadUniformBuffer = this.device.createBuffer({
+        this.compositeUniformBuffer = this.device.createBuffer({
             size: 4 * 16,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
@@ -134,17 +134,17 @@ export class SimulationResources {
             this.mipViews.push(this.lightmapTexture.createView({ baseMipLevel: mip, mipLevelCount: 1 }));
         }
 
-        if (this.compositeBindGroupLayout && this.quadUniformBuffer) {
+        if (this.compositeBindGroupLayout && this.compositeUniformBuffer) {
             this.compositeBindGroup = this.device.createBindGroup({
                 layout: this.compositeBindGroupLayout,
                 entries: [
-                    { binding: 0, resource: { buffer: this.quadUniformBuffer } },
+                    { binding: 0, resource: { buffer: this.compositeUniformBuffer } },
                     { binding: 1, resource: this.lightmapView },
                     { binding: 2, resource: this.sampler },
                 ],
             });
             const worldTransformData = this.worldTransform as Float32Array;
-            this.device.queue.writeBuffer(this.quadUniformBuffer, 0, worldTransformData.buffer, worldTransformData.byteOffset, worldTransformData.byteLength);
+            this.device.queue.writeBuffer(this.compositeUniformBuffer, 0, worldTransformData.buffer, worldTransformData.byteOffset, worldTransformData.byteLength);
         }
     }
 

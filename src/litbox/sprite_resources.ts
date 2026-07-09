@@ -113,7 +113,7 @@ export class SpriteResources {
         this.lightmapBindGroup = this.device.createBindGroup({
             layout: this.lightmapBindGroupLayout,
             entries: [
-                { binding: 0, resource: lightmapView ?? textureCache.getBlackFallback().createView() },
+                { binding: 0, resource: lightmapView ?? textureCache.getBlackTexture().createView() },
                 { binding: 1, resource: simulationResources.getSampler() },
             ],
         });
@@ -161,7 +161,7 @@ export class SpriteResources {
             entries: [
                 { binding: 0, resource: { buffer: uniformBuffer } },
                 { binding: 1, resource: texture.createView() },
-                { binding: 2, resource: textureCache.sampler },
+                { binding: 2, resource: textureCache.trilinearClamped },
             ],
         });
 

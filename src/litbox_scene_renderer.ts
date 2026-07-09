@@ -7,6 +7,7 @@ import { RaytracedResources } from './litbox/raytraced_resources.ts';
 import { SimulationResources } from './litbox/simulation.ts';
 import { SpriteResources } from './litbox/sprite_resources.ts';
 import { TonemapResources } from './litbox/tonemap.ts';
+import { RingBufferedUniform } from './litbox/ring_buffered_uniform.ts';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // viewProjection (mat4) + simInverseWorldTransform (mat4) + debugMode (f32, padded to 16
@@ -36,11 +37,10 @@ export class LitboxSceneRenderer {
     private presentationSize!: [number, number];
 
     private hdrFrameTexture!: GPUTexture;
+    private hdrFrameTextureView!: GPUTextureView;
 
     private cameraBindGroupLayout!: GPUBindGroupLayout;
-    private cameraUniformBuffers: GPUBuffer[] = [];
-    private cameraBindGroups: GPUBindGroup[] = [];
-    private frameIndex = 0;
+    private cameraUniform!: RingBufferedUniform;
 
     private sceneGraph: SceneGraph | null = null;
     private textureCache!: TextureCache;
@@ -134,23 +134,13 @@ export class LitboxSceneRenderer {
         this.spriteResources = new SpriteResources(this.device);
         this.tonemapResources = new TonemapResources(this.device, this.presentationFormat);
 
-        // Shared by the sprite and simulation-composite pipelines. Double-buffered because
+        // Shared by the sprite and simulation-composite pipelines. Ring-buffered because
         // it's the only per-frame-rewritten uniform in this renderer (everything else is
         // only rewritten on scene rebuilds).
         this.cameraBindGroupLayout = this.device.createBindGroupLayout({
-            entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
+            entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform', hasDynamicOffset: true } }],
         });
-        for (let i = 0; i < FRAMES_IN_FLIGHT; i++) {
-            const buffer = this.device.createBuffer({
-                size: CAMERA_UNIFORM_SIZE_BYTES,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            });
-            this.cameraUniformBuffers.push(buffer);
-            this.cameraBindGroups.push(this.device.createBindGroup({
-                layout: this.cameraBindGroupLayout,
-                entries: [{ binding: 0, resource: { buffer } }],
-            }));
-        }
+        this.cameraUniform = new RingBufferedUniform(this.device, this.cameraBindGroupLayout, CAMERA_UNIFORM_SIZE_BYTES, FRAMES_IN_FLIGHT);
 
         this.simulationResources.initialize(this.cameraBindGroupLayout);
         this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
@@ -165,6 +155,7 @@ export class LitboxSceneRenderer {
             format: HDR_FORMAT,
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
+        this.hdrFrameTextureView = this.hdrFrameTexture.createView();
     }
 
     private async rebuildFromScene(): Promise<void> {
@@ -223,7 +214,7 @@ export class LitboxSceneRenderer {
         data.set(viewProjection as Float32Array, 0);
         data.set(simInverse as Float32Array, 16);
         data[32] = this.debugSolidColor ? 1 : 0;
-        this.device.queue.writeBuffer(this.cameraUniformBuffers[this.frameIndex], 0, data);
+        this.cameraUniform.write(data);
 
         return exposure;
     }
@@ -251,13 +242,13 @@ export class LitboxSceneRenderer {
             // transparency, so just draw them back to front.
             const hdrPass = encoder.beginRenderPass({
                 colorAttachments: [{
-                    view: this.hdrFrameTexture.createView(),
+                    view: this.hdrFrameTextureView,
                     clearValue: { r: 0, g: 0, b: 0, a: 0 },
                     loadOp: 'clear',
                     storeOp: 'store',
                 }],
             });
-            hdrPass.setBindGroup(0, this.cameraBindGroups[this.frameIndex]);
+            hdrPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
             this.spriteResources.draw(hdrPass, layer => layer <= 0);
             this.simulationResources.compositeInto(hdrPass);
             this.spriteResources.draw(hdrPass, layer => layer >= 1);
@@ -272,11 +263,11 @@ export class LitboxSceneRenderer {
                     storeOp: 'store',
                 }],
             });
-            this.tonemapResources.apply(tonemapPass, this.hdrFrameTexture.createView(), exposure);
+            this.tonemapResources.apply(tonemapPass, this.hdrFrameTextureView, exposure);
             tonemapPass.end();
 
             this.device.queue.submit([encoder.finish()]);
-            this.frameIndex = (this.frameIndex + 1) % FRAMES_IN_FLIGHT;
+            this.cameraUniform.advance();
         } finally {
             // Third-party WebGPU instrumentation (browser devtools extensions wrapping
             // queue.submit, etc.) can throw after our own work is done. Keep the render

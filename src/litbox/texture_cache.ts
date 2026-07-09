@@ -1,32 +1,48 @@
 /**
  * Loads image paths into GPUTextures and caches them by path. Also provides
- * 1x1 white/black fallback textures, matching the Unity reference shader's
+ * 1x1 white/black default textures, matching the Unity reference shader's
  * own material defaults (_MainTex = "white", _LightMap = "black").
  */
 export class TextureCache {
     private device: GPUDevice;
     private cache = new Map<string, GPUTexture>();
-    private whiteFallback: GPUTexture;
-    private blackFallback: GPUTexture;
-    public readonly sampler: GPUSampler;
+    private whiteTexture: GPUTexture;
+    private blackTexture: GPUTexture;
+
+    /** Trilinear filtering (linear min/mag/mip), clamped to edge. */
+    public readonly trilinearClamped: GPUSampler;
+    /** Bilinear filtering (linear min/mag, nearest mip level), clamped to edge. */
+    public readonly bilinearClamped: GPUSampler;
+    /** Nearest-neighbor filtering (min/mag/mip), clamped to edge. */
+    public readonly nearestClamped: GPUSampler;
 
     constructor(device: GPUDevice) {
         this.device = device;
-        this.sampler = device.createSampler({
+        this.trilinearClamped = device.createSampler({
             magFilter: 'linear',
             minFilter: 'linear',
             mipmapFilter: 'linear',
         });
-        this.whiteFallback = this.createSolidColorTexture([255, 255, 255, 255]);
-        this.blackFallback = this.createSolidColorTexture([0, 0, 0, 0]);
+        this.bilinearClamped = device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+            mipmapFilter: 'nearest',
+        });
+        this.nearestClamped = device.createSampler({
+            magFilter: 'nearest',
+            minFilter: 'nearest',
+            mipmapFilter: 'nearest',
+        });
+        this.whiteTexture = this.createSolidColorTexture([255, 255, 255, 255]);
+        this.blackTexture = this.createSolidColorTexture([0, 0, 0, 0]);
     }
 
-    public getWhiteFallback(): GPUTexture {
-        return this.whiteFallback;
+    public getWhiteTexture(): GPUTexture {
+        return this.whiteTexture;
     }
 
-    public getBlackFallback(): GPUTexture {
-        return this.blackFallback;
+    public getBlackTexture(): GPUTexture {
+        return this.blackTexture;
     }
 
     /**
@@ -35,7 +51,7 @@ export class TextureCache {
      */
     public async resolve(path: string, fallback: 'white' | 'black' = 'white'): Promise<GPUTexture> {
         if (!path) {
-            return fallback === 'white' ? this.whiteFallback : this.blackFallback;
+            return fallback === 'white' ? this.whiteTexture : this.blackTexture;
         }
 
         const cached = this.cache.get(path);
@@ -59,7 +75,7 @@ export class TextureCache {
             return texture;
         } catch (error) {
             console.error(`Litbox texture cache: failed to load "${path}":`, error);
-            const fallbackTexture = fallback === 'white' ? this.whiteFallback : this.blackFallback;
+            const fallbackTexture = fallback === 'white' ? this.whiteTexture : this.blackTexture;
             this.cache.set(path, fallbackTexture);
             return fallbackTexture;
         }
