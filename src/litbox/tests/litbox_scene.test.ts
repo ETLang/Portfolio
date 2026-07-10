@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LitboxScene } from '../litbox_scene.ts';
 import type { Color, PointLight, Scene, SceneCamera, SceneObject, SceneSimulation, SceneSprite, Spotlight } from '../scene.ts';
 
 class TestScene extends LitboxScene {
     public static readonly jsonPath = 'test.json';
+}
+
+class NestedTestScene extends LitboxScene {
+    public static readonly jsonPath = 'scenes/nested_test.json';
 }
 
 const WHITE: Color = { r: 1, g: 1, b: 1, a: 1 };
@@ -78,6 +82,7 @@ function makeFixtureScene(): Scene {
         laserLights: [],
         directionalLights: [],
         ambientLights: [],
+        textureAtlasKeys: [],
     };
 }
 
@@ -112,6 +117,26 @@ describe('LitboxScene name/path resolution', () => {
         const second = scene.makeLightDynamic('Light Owner', 1);
         expect('bounces' in first && !('pinch' in first)).toBe(true);
         expect('pinch' in second).toBe(true);
+    });
+});
+
+describe('LitboxScene.load', () => {
+    it('defaults baseUrl to empty for a jsonPath with no directory', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ text: () => Promise.resolve(JSON.stringify(makeFixtureScene())) }));
+
+        const scene = await TestScene.load();
+        expect(scene.baseUrl).toBe('');
+
+        vi.unstubAllGlobals();
+    });
+
+    it('derives baseUrl from the directory portion of a nested jsonPath', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ text: () => Promise.resolve(JSON.stringify(makeFixtureScene())) }));
+
+        const scene = await NestedTestScene.load();
+        expect(scene.baseUrl).toBe('scenes/');
+
+        vi.unstubAllGlobals();
     });
 });
 

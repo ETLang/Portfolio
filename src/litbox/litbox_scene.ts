@@ -98,6 +98,15 @@ type StructuralOp =
 export abstract class LitboxScene {
     public readonly data: Scene;
 
+    /**
+     * The directory containing this scene's JSON file, relative to Vite's `BASE_URL` (e.g.
+     * "scenes/" for a jsonPath of "scenes/cornell_square.json"). Texture paths in this scene's
+     * data - both `textureAtlasKeys[].atlasName` and any un-atlassed image/map name - are
+     * resolved relative to this directory, not to `BASE_URL` directly. Empty for scenes
+     * constructed directly (e.g. in tests) rather than via `load()`.
+     */
+    public readonly baseUrl: string;
+
     private nameIndex = new Map<string, SceneObject[]>();
 
     private transformFlags = new DynamicSet<SceneObject>();
@@ -108,8 +117,9 @@ export abstract class LitboxScene {
     private nextObjectId: number;
     private pendingStructuralOps: StructuralOp[] = [];
 
-    constructor(data: Scene) {
+    constructor(data: Scene, baseUrl = '') {
         this.data = data;
+        this.baseUrl = baseUrl;
         for (const obj of data.objects) {
             if (obj.name.includes('/')) {
                 throw new Error(
@@ -132,10 +142,11 @@ export abstract class LitboxScene {
      * (resolved against Vite's `BASE_URL`), constructing an instance of it.
      */
     public static async load<T extends LitboxScene>(
-        this: { new (data: Scene): T; jsonPath: string },
+        this: { new (data: Scene, baseUrl?: string): T; jsonPath: string },
     ): Promise<T> {
         const response = await fetch(`${import.meta.env.BASE_URL}${this.jsonPath}`);
-        return new this(parseScene(await response.text()));
+        const baseUrl = this.jsonPath.slice(0, this.jsonPath.lastIndexOf('/') + 1);
+        return new this(parseScene(await response.text()), baseUrl);
     }
 
     /**

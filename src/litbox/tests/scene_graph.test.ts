@@ -27,6 +27,7 @@ function makeScene(objects: SceneObject[]): Scene {
         laserLights: [],
         directionalLights: [],
         ambientLights: [],
+        textureAtlasKeys: [],
     };
 }
 

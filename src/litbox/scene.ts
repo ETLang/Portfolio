@@ -101,6 +101,45 @@ export interface AmbientLight {
 
 export type AnyLight = PointLight | Spotlight | LaserLight | DirectionalLight | AmbientLight;
 
+/**
+ * A 3x2 affine transform applied to the UV coordinates used to sample a texture that has
+ * been packed into an atlas: `u' = a*u + b*v + c`, `v' = d*u + e*v + f`.
+ */
+export interface UvTransform {
+    a: number;
+    b: number;
+    c: number;
+    d: number;
+    e: number;
+    f: number;
+}
+
+/**
+ * Maps one packed texture's name to the atlas it lives in and the UV transform needed to
+ * sample it: `sample(atlasName, <u,v> * uvTransform)`.
+ */
+export interface TextureAtlasKey {
+    textureName: string;
+    atlasName: string;
+    uvTransform: UvTransform;
+}
+
+interface RawTextureAtlasKey {
+    textureName: string;
+    atlasName: string;
+    uvTransform: string;
+}
+
+/** Parses the `"[[a, b, c], [d, e, f]]"` string form of a UvTransform. */
+export function parseUvTransform(raw: string): UvTransform {
+    const rows = JSON.parse(raw) as number[][];
+    if (rows.length !== 2 || rows[0].length !== 3 || rows[1].length !== 3) {
+        throw new Error(`Litbox: malformed uvTransform "${raw}" - expected a 2x3 array.`);
+    }
+    const [[a, b, c], [d, e, f]] = rows;
+    return { a, b, c, d, e, f };
+}
+
 export interface Scene {
     simulations: SceneSimulation[];
     objects: SceneObject[];
@@ -112,6 +151,7 @@ export interface Scene {
     laserLights: LaserLight[];
     directionalLights: DirectionalLight[];
     ambientLights: AmbientLight[];
+    textureAtlasKeys: TextureAtlasKey[];
 }
 
 /**
@@ -119,7 +159,19 @@ export interface Scene {
  * LitboxDemoSceneExporter.cs. Missing array fields default to empty arrays.
  */
 export function parseScene(json: string): Scene {
-    const data = JSON.parse(json) as Partial<Scene>;
+    const data = JSON.parse(json) as Partial<{
+        simulations: SceneSimulation[];
+        objects: SceneObject[];
+        cameras: SceneCamera[];
+        raytraced: RaytracedObject[];
+        sprites: SceneSprite[];
+        pointLights: PointLight[];
+        spotlights: Spotlight[];
+        laserLights: LaserLight[];
+        directionalLights: DirectionalLight[];
+        ambientLights: AmbientLight[];
+        textureAtlasKeys: RawTextureAtlasKey[];
+    }>;
 
     return {
         simulations: data.simulations ?? [],
@@ -132,6 +184,11 @@ export function parseScene(json: string): Scene {
         laserLights: data.laserLights ?? [],
         directionalLights: data.directionalLights ?? [],
         ambientLights: data.ambientLights ?? [],
+        textureAtlasKeys: (data.textureAtlasKeys ?? []).map(key => ({
+            textureName: key.textureName,
+            atlasName: key.atlasName,
+            uvTransform: parseUvTransform(key.uvTransform),
+        })),
     };
 }
 

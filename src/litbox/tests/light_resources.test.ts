@@ -29,6 +29,7 @@ function makeScene(): Scene {
         laserLights: [],
         directionalLights: [],
         ambientLights: [],
+        textureAtlasKeys: [],
     };
 }
 

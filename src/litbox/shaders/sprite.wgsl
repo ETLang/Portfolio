@@ -46,18 +46,32 @@ struct SpriteProperties {
     simBlur: f32,
     primitiveShapeId: u32,
 }
+// Maps this sprite's base [0,1] UV into its texture's sub-rectangle within a shared atlas:
+// atlasUv = vec2(dot(vec3(uv, 1.0), row0.xyz), dot(vec3(uv, 1.0), row1.xyz)). A texture that
+// isn't atlassed gets an identity transform (row0 = (1,0,0), row1 = (0,1,0)) from
+// TextureCache, so this is applied unconditionally.
+struct SpriteAtlasTransform {
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+}
 @group(1) @binding(0) var<uniform> spriteTransform: SpriteTransform;
 @group(1) @binding(1) var<uniform> spriteProperties: SpriteProperties;
 @group(1) @binding(2) var mainTex: texture_2d<f32>;
 @group(1) @binding(3) var mainSampler: sampler;
+@group(1) @binding(4) var<uniform> atlasTransform: SpriteAtlasTransform;
 
 @group(2) @binding(0) var lightmapTex: texture_2d<f32>;
 @group(2) @binding(1) var lightmapSampler: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
+    // Base [0,1] quad-local UV, used for shape masking - NOT atlas-transformed, since the
+    // shape mask is defined in quad space regardless of which sub-rectangle of an atlas
+    // this sprite's texture occupies.
     @location(0) uv: vec2<f32>,
     @location(1) worldPos: vec4<f32>,
+    // uv passed through atlasTransform, used only for sampling mainTex.
+    @location(2) atlasUv: vec2<f32>,
 }
 
 @vertex
@@ -67,6 +81,12 @@ fn vertex_main(@location(0) localPos: vec2<f32>) -> VertexOutput {
     out.worldPos = world;
     out.position = camera.viewProjection * world;
     out.uv = localPos + vec2<f32>(0.5, 0.5);
+    let atlasUvHomogeneous = vec3<f32>(out.uv, 1.0);
+    out.atlasUv = vec2<f32>(dot(atlasUvHomogeneous, atlasTransform.row0.xyz), dot(atlasUvHomogeneous, atlasTransform.row1.xyz));
+    // The exported uvTransform is expressed in the atlas packer's own (Unity/OpenGL-style)
+    // bottom-left-origin V, but our texture upload keeps the source PNG's row order as-is
+    // (row 0 = top, matching WebGPU's top-left-origin sampling) - flip V to compensate.
+    out.atlasUv.y = 1.0 - out.atlasUv.y;
     return out;
 }
 
@@ -97,7 +117,7 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(debugColor, 1.0);
     }
 
-    let baseColor = textureSample(mainTex, mainSampler, in.uv);
+    let baseColor = textureSample(mainTex, mainSampler, in.atlasUv);
 
     let simLocal = camera.simInverseWorldTransform * in.worldPos;
     let lightUV = simLocal.xy + vec2<f32>(0.5, 0.5);

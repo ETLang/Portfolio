@@ -48,6 +48,7 @@ function makeScene(): Scene {
         laserLights: [],
         directionalLights: [],
         ambientLights: [],
+        textureAtlasKeys: [],
     };
 }
 
@@ -64,15 +65,16 @@ async function setup(): Promise<{ device: FakeGpuDevice; spriteResources: Sprite
 
     const scene = makeScene();
     const sceneGraph = new SceneGraph(scene);
+    textureCache.loadScene('', scene.textureAtlasKeys);
     await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources);
 
     return { device, spriteResources, scene, sceneGraph, textureCache };
 }
 
 describe('SpriteResources', () => {
-    it('writes both transform and properties buffers once per sprite on updateFromScene', async () => {
+    it('writes transform, properties, and atlas buffers once per sprite on updateFromScene', async () => {
         const { device } = await setup();
-        expect(device.writeCalls).toHaveLength(4); // 2 sprites x (transform + properties)
+        expect(device.writeCalls).toHaveLength(6); // 2 sprites x (transform + properties + atlas)
     });
 
     it('refreshTransform rewrites only that owner\'s transform buffer with a fresh world transform', async () => {
@@ -139,7 +141,7 @@ describe('SpriteResources', () => {
 
         const newSprite = makeSprite(3);
         await spriteResources.addSprite(newSprite, sceneGraph, textureCache);
-        expect(device.writeCalls).toHaveLength(2); // transform + properties for the new sprite only
+        expect(device.writeCalls).toHaveLength(3); // transform + properties + atlas for the new sprite only
 
         device.writeCalls = [];
         spriteResources.refreshProperties(1);
@@ -161,6 +163,7 @@ describe('SpriteResources', () => {
         const spriteB = makeSprite(1); // same owner as spriteA
         const scene: Scene = { ...makeScene(), sprites: [spriteA, spriteB] };
         const sceneGraph = new SceneGraph(scene);
+        textureCache.loadScene('', scene.textureAtlasKeys);
         await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources);
         device.writeCalls = [];
 

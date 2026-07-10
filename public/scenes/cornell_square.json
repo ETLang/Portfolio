@@ -316,22 +316,6 @@
         },
         {
             "active": true,
-            "id": 42888,
-            "name": "Simulation",
-            "parentId": -1,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -1.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 9.65555191040039,
-                "y": 9.65555191040039
-            }
-        },
-        {
-            "active": true,
             "id": -34868,
             "name": "Left Wall",
             "parentId": -42158,
@@ -344,22 +328,6 @@
             "scale": {
                 "x": 0.4625000059604645,
                 "y": 9.071094512939454
-            }
-        },
-        {
-            "active": true,
-            "id": -44154,
-            "name": "Lights",
-            "parentId": 43006,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
             }
         },
         {
@@ -396,6 +364,22 @@
         },
         {
             "active": true,
+            "id": -44154,
+            "name": "Lights",
+            "parentId": 43006,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
             "id": -42158,
             "name": "Walls",
             "parentId": 43006,
@@ -427,7 +411,7 @@
             }
         },
         {
-            "active": false,
+            "active": true,
             "id": -48926,
             "name": "Rotating Square",
             "parentId": -44986,
@@ -440,6 +424,22 @@
             "scale": {
                 "x": 1.7336000204086304,
                 "y": 1.7336000204086304
+            }
+        },
+        {
+            "active": true,
+            "id": 42888,
+            "name": "Simulation",
+            "parentId": -1,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 9.65555191040039,
+                "y": 9.65555191040039
             }
         },
         {
@@ -524,22 +524,6 @@
         },
         {
             "active": true,
-            "id": 42916,
-            "name": "Main Camera",
-            "parentId": -1,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -10.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
             "id": -45562,
             "name": "Circle",
             "parentId": -44986,
@@ -552,6 +536,22 @@
             "scale": {
                 "x": 2.144584894180298,
                 "y": 2.144584894180298
+            }
+        },
+        {
+            "active": true,
+            "id": 42916,
+            "name": "Main Camera",
+            "parentId": -1,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -10.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
             }
         }
     ],
@@ -670,7 +670,7 @@
                 "b": 1.0,
                 "a": 1.0
             },
-            "albedoMap": "",
+            "albedoMap": "Moon",
             "logDensityMap": "",
             "sdfNormalMap": "",
             "primitiveShape": "ellipse"
@@ -809,7 +809,7 @@
             "ownerId": -48930,
             "layer": 0,
             "opacity": 1.0,
-            "image": "",
+            "image": "Sample1",
             "colorMod": {
                 "r": 1.0,
                 "g": 1.0,
@@ -873,7 +873,7 @@
             "ownerId": -45566,
             "layer": 0,
             "opacity": 1.0,
-            "image": "",
+            "image": "Moon",
             "colorMod": {
                 "r": 1.0,
                 "g": 1.0,
@@ -995,5 +995,17 @@
         }
     ],
     "directionalLights": [],
-    "ambientLights": []
+    "ambientLights": [],
+    "textureAtlasKeys": [
+        {
+            "textureName": "Moon",
+            "atlasName": "cornell_square_atlases/atlas_rgba32_srgb_0.png",
+            "uvTransform": "[[0.3837891, 0, 0.5058594], [0, 0.3837891, 0.001953125]]"
+        },
+        {
+            "textureName": "Sample1",
+            "atlasName": "cornell_square_atlases/atlas_rgba32_srgb_0.png",
+            "uvTransform": "[[0.5, 0, 0.001953125], [0, 0.5, 0.001953125]]"
+        }
+    ]
 }

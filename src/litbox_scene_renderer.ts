@@ -191,6 +191,7 @@ export class LitboxSceneRenderer {
         }
         const scene = this.activeScene.data;
         this.sceneGraph = new SceneGraph(scene);
+        this.textureCache.loadScene(this.activeScene.baseUrl, scene.textureAtlasKeys);
 
         this.lightResources.updateFromScene(scene, this.sceneGraph);
         await this.raytracedResources.updateFromScene(scene, this.sceneGraph, this.textureCache);
