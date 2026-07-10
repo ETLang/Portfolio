@@ -52,7 +52,13 @@ export class FakeGpuBuffer {
     }
 }
 
-class FakeGpuTexture {
+export class FakeGpuTexture {
+    public descriptor: { size: number[]; format: string; usage: number };
+
+    constructor(descriptor: { size: number[]; format: string; usage: number }) {
+        this.descriptor = descriptor;
+    }
+
     public createView(): object {
         return {};
     }
@@ -60,9 +66,20 @@ class FakeGpuTexture {
     public destroy(): void {}
 }
 
-/** Records every queue.writeBuffer call so tests can assert target buffer/offset/bytes. */
+export interface WriteTextureCall {
+    texture: FakeGpuTexture;
+    data: Uint8Array;
+    dataLayout: { bytesPerRow?: number; rowsPerImage?: number };
+    size: number[];
+}
+
+/** Records every queue.writeBuffer/writeTexture and createTexture call so tests can assert on them. */
 export class FakeGpuDevice {
     public writeCalls: WriteBufferCall[] = [];
+    public writeTextureCalls: WriteTextureCall[] = [];
+    public createTextureCalls: { size: number[]; format: string; usage: number }[] = [];
+    /** Empty by default - tests opt a fake device into a feature via `device.features.add(name)`. */
+    public features = new Set<string>();
 
     public queue = {
         writeBuffer: (buffer: FakeGpuBuffer, bufferOffset: number, data: BufferSource): void => {
@@ -71,7 +88,15 @@ export class FakeGpuDevice {
                 : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
             this.writeCalls.push({ buffer, bufferOffset, data: arrayBuffer });
         },
-        writeTexture: (): void => {},
+        writeTexture: (
+            destination: { texture: FakeGpuTexture },
+            data: BufferSource,
+            dataLayout: { bytesPerRow?: number; rowsPerImage?: number },
+            size: number[],
+        ): void => {
+            const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+            this.writeTextureCalls.push({ texture: destination.texture, data: bytes.slice(), dataLayout, size });
+        },
         copyExternalImageToTexture: (): void => {},
         submit: (): void => {},
     };
@@ -80,8 +105,9 @@ export class FakeGpuDevice {
         return new FakeGpuBuffer(descriptor.size);
     }
 
-    public createTexture(): FakeGpuTexture {
-        return new FakeGpuTexture();
+    public createTexture(descriptor: { size: number[]; format: string; usage: number }): FakeGpuTexture {
+        this.createTextureCalls.push(descriptor);
+        return new FakeGpuTexture(descriptor);
     }
 
     public createSampler(): object {

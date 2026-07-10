@@ -124,7 +124,14 @@ export class LitboxSceneRenderer {
                 return false;
             }
             this.adapter = adapter;
-            this.device = await this.adapter.requestDevice();
+            // BC1-compressed textures (see TextureCache) need this feature enabled on the
+            // device to be usable; request it opportunistically since not every GPU/browser
+            // supports it (mobile GPUs typically don't) - TextureCache falls back gracefully
+            // when it's absent.
+            const requiredFeatures: GPUFeatureName[] = adapter.features.has('texture-compression-bc')
+                ? ['texture-compression-bc']
+                : [];
+            this.device = await this.adapter.requestDevice({ requiredFeatures });
             this.device.addEventListener('uncapturederror', (event) => {
                 console.error('WebGPU device error:', (event as GPUUncapturedErrorEvent).error.message);
             });
@@ -191,6 +198,7 @@ export class LitboxSceneRenderer {
         }
         const scene = this.activeScene.data;
         this.sceneGraph = new SceneGraph(scene);
+        this.textureCache.loadScene(this.activeScene.baseUrl, scene.textureAtlasKeys);
 
         this.lightResources.updateFromScene(scene, this.sceneGraph);
         await this.raytracedResources.updateFromScene(scene, this.sceneGraph, this.textureCache);

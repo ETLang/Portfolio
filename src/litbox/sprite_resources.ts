@@ -1,5 +1,5 @@
 import type { mat4 } from 'gl-matrix';
-import type { Scene, SceneSprite } from './scene.ts';
+import type { Scene, SceneSprite, UvTransform } from './scene.ts';
 import type { SceneGraph } from './scene_graph.ts';
 import type { TextureCache } from './texture_cache.ts';
 import type { SimulationResources } from './simulation.ts';
@@ -9,9 +9,10 @@ import spriteShaderCode from './shaders/sprite.wgsl?raw';
 // erasableSyntaxOnly forbids `enum` - matches shapeId encoding in sprite.wgsl.
 const PRIMITIVE_SHAPE_ID: Record<string, number> = { '': 0, rect: 1, ellipse: 2 };
 
-// Must match the SpriteTransform/SpriteProperties struct layouts in sprite.wgsl.
+// Must match the SpriteTransform/SpriteProperties/SpriteAtlasTransform struct layouts in sprite.wgsl.
 const SPRITE_TRANSFORM_STRIDE_BYTES = 64;
 const SPRITE_PROPERTIES_STRIDE_BYTES = 80;
+const SPRITE_ATLAS_STRIDE_BYTES = 32;
 
 interface ResolvedSprite {
     ownerId: number;
@@ -20,8 +21,9 @@ interface ResolvedSprite {
     isActive: boolean;
     transformBuffer: GPUBuffer;
     propertiesBuffer: GPUBuffer;
+    atlasBuffer: GPUBuffer;
     bindGroup: GPUBindGroup;
-    lastResolvedImage: string; // image currently baked into bindGroup's texture
+    lastResolvedImage: string; // image currently baked into bindGroup's texture and atlasBuffer's uvTransform
     pendingImage: string | null; // image an in-flight refreshTexture() call is resolving, if any
 }
 
@@ -36,7 +38,11 @@ interface ResolvedSprite {
  *
  * Transform and properties are separate uniform buffers (not one combined
  * struct) precisely so a transform-only update (cascaded from a dynamic
- * ancestor) never has to touch the properties buffer, and vice versa.
+ * ancestor) never has to touch the properties buffer, and vice versa. The
+ * atlas UV transform is a third, separate buffer for the same reason: it
+ * changes only when a sprite's image changes, at the same frequency as (and
+ * is rewritten alongside) the texture binding itself, independent of both
+ * transform and properties updates.
  */
 export class SpriteResources {
     private device: GPUDevice;
@@ -60,6 +66,7 @@ export class SpriteResources {
                 { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
                 { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+                { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
             ],
         });
         this.lightmapBindGroupLayout = this.device.createBindGroupLayout({
@@ -108,6 +115,7 @@ export class SpriteResources {
         for (const resolved of this.sprites) {
             resolved.transformBuffer.destroy();
             resolved.propertiesBuffer.destroy();
+            resolved.atlasBuffer.destroy();
         }
 
         const lightmapView = simulationResources.getLightmapView();
@@ -168,6 +176,7 @@ export class SpriteResources {
         const [removed] = this.sprites.splice(index, 1);
         removed.transformBuffer.destroy();
         removed.propertiesBuffer.destroy();
+        removed.atlasBuffer.destroy();
     }
 
     /**
@@ -184,6 +193,7 @@ export class SpriteResources {
             }
             resolved.transformBuffer.destroy();
             resolved.propertiesBuffer.destroy();
+            resolved.atlasBuffer.destroy();
         }
         this.sprites = kept;
     }
@@ -220,7 +230,7 @@ export class SpriteResources {
     private async resolveSprite(sprite: SceneSprite, sceneGraph: SceneGraph, textureCache: TextureCache): Promise<ResolvedSprite> {
         const worldTransform = sceneGraph.getWorldTransform(sprite.ownerId);
         const isActive = sceneGraph.isActiveInHierarchy(sprite.ownerId);
-        const texture = await textureCache.resolve(sprite.image, 'white');
+        const { texture, uvTransform } = await textureCache.resolve(sprite.image, 'white');
         const shapeId = this.resolveShapeId(sprite);
 
         const transformBuffer = this.device.createBuffer({
@@ -235,6 +245,12 @@ export class SpriteResources {
         });
         this.writePropertiesData(propertiesBuffer, sprite, shapeId);
 
+        const atlasBuffer = this.device.createBuffer({
+            size: SPRITE_ATLAS_STRIDE_BYTES,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        this.writeAtlasData(atlasBuffer, uvTransform);
+
         const bindGroup = this.device.createBindGroup({
             layout: this.instanceBindGroupLayout!,
             entries: [
@@ -242,6 +258,7 @@ export class SpriteResources {
                 { binding: 1, resource: { buffer: propertiesBuffer } },
                 { binding: 2, resource: texture.createView() },
                 { binding: 3, resource: textureCache.trilinearClamped },
+                { binding: 4, resource: { buffer: atlasBuffer } },
             ],
         });
 
@@ -252,6 +269,7 @@ export class SpriteResources {
             isActive,
             transformBuffer,
             propertiesBuffer,
+            atlasBuffer,
             bindGroup,
             lastResolvedImage: sprite.image,
             pendingImage: null,
@@ -259,14 +277,14 @@ export class SpriteResources {
     }
 
     /**
-     * Resolves a sprite's newly-assigned image and swaps its bind group in once ready.
-     * Fire-and-forget from refreshProperties (not awaited by the render loop):
-     * `draw()` keeps using the old bind group - still valid, still bound to a live
+     * Resolves a sprite's newly-assigned image (and its atlas transform) and swaps its bind
+     * group in once ready. Fire-and-forget from refreshProperties (not awaited by the render
+     * loop): `draw()` keeps using the old bind group - still valid, still bound to a live
      * texture - until this completes, so there's no flicker or invalid-binding window.
      */
     private async refreshTexture(resolved: ResolvedSprite): Promise<void> {
         const targetImage = resolved.sprite.image;
-        const texture = await this.textureCache!.resolve(targetImage, 'white');
+        const { texture, uvTransform } = await this.textureCache!.resolve(targetImage, 'white');
 
         if (resolved.sprite.image !== targetImage) {
             // Superseded by a newer image change while this resolve was in flight;
@@ -276,6 +294,7 @@ export class SpriteResources {
             return;
         }
 
+        this.writeAtlasData(resolved.atlasBuffer, uvTransform);
         resolved.bindGroup = this.device.createBindGroup({
             layout: this.instanceBindGroupLayout!,
             entries: [
@@ -283,6 +302,7 @@ export class SpriteResources {
                 { binding: 1, resource: { buffer: resolved.propertiesBuffer } },
                 { binding: 2, resource: texture.createView() },
                 { binding: 3, resource: this.textureCache!.trilinearClamped },
+                { binding: 4, resource: { buffer: resolved.atlasBuffer } },
             ],
         });
         resolved.lastResolvedImage = targetImage;
@@ -296,6 +316,13 @@ export class SpriteResources {
             shapeId = PRIMITIVE_SHAPE_ID[''];
         }
         return shapeId;
+    }
+
+    private writeAtlasData(buffer: GPUBuffer, uvTransform: UvTransform): void {
+        const data = new Float32Array(SPRITE_ATLAS_STRIDE_BYTES / 4);
+        data.set([uvTransform.a, uvTransform.b, uvTransform.c, 0], 0);
+        data.set([uvTransform.d, uvTransform.e, uvTransform.f, 0], 4);
+        this.device.queue.writeBuffer(buffer, 0, data);
     }
 
     private writeTransformData(buffer: GPUBuffer, worldTransform: mat4): void {
