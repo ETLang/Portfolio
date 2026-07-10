@@ -1000,12 +1000,12 @@
         {
             "textureName": "Moon",
             "atlasName": "cornell_square_atlases/atlas_rgba32_srgb_0.png",
-            "uvTransform": "[[0.3837891, 0, 0.5058594], [0, 0.3837891, 0.001953125]]"
+            "uvTransform": "[[0.7675781, 0, 0.00390625], [0, 0.7675781, 0.00390625]]"
         },
         {
             "textureName": "Sample1",
-            "atlasName": "cornell_square_atlases/atlas_rgba32_srgb_0.png",
-            "uvTransform": "[[0.5, 0, 0.001953125], [0, 0.5, 0.001953125]]"
+            "atlasName": "cornell_square_atlases/atlas_dxt1_0.bc1",
+            "uvTransform": "[[0.5, 0, 0.00390625], [0, 0.5, 0.00390625]]"
         }
     ]
 }
