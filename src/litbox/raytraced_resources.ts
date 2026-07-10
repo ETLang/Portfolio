@@ -33,4 +33,19 @@ export class RaytracedResources {
             sdfNormalMap: await textureCache.resolve(entry.sdfNormalMap, 'black'),
         })));
     }
+
+    /**
+     * Targeted CPU-side world-transform refresh for the entry owned by `ownerId`
+     * (no-op if none exists). TODO: once a GPU storage buffer + simulation pass exist
+     * for raytraced objects, split transform from properties the same way
+     * LightResources/SpriteResources do, and also queue.writeBuffer the updated
+     * transform here - there's currently nothing to upload to.
+     */
+    public refreshEntry(ownerId: number, sceneGraph: SceneGraph): void {
+        const resolved = this.entries.find(e => e.entry.ownerId === ownerId);
+        if (!resolved) {
+            return;
+        }
+        resolved.worldTransform = sceneGraph.getWorldTransform(ownerId);
+    }
 }

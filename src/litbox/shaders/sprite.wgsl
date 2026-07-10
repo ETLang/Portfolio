@@ -30,8 +30,14 @@ struct CameraUniform {
 }
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
-struct SpriteInstance {
+// Transform and properties are separate uniforms (not one combined struct) so a
+// dynamically-marked ancestor's transform cascade can rewrite just the small transform
+// uniform without touching the (usually static) properties uniform, and vice versa for
+// a sprite whose own color/opacity/etc. is marked dynamic independent of its transform.
+struct SpriteTransform {
     worldTransform: mat4x4<f32>,
+}
+struct SpriteProperties {
     ambient: vec4<f32>,
     emissive: vec4<f32>,
     simContribution: vec4<f32>,
@@ -40,9 +46,10 @@ struct SpriteInstance {
     simBlur: f32,
     primitiveShapeId: u32,
 }
-@group(1) @binding(0) var<uniform> sprite: SpriteInstance;
-@group(1) @binding(1) var mainTex: texture_2d<f32>;
-@group(1) @binding(2) var mainSampler: sampler;
+@group(1) @binding(0) var<uniform> spriteTransform: SpriteTransform;
+@group(1) @binding(1) var<uniform> spriteProperties: SpriteProperties;
+@group(1) @binding(2) var mainTex: texture_2d<f32>;
+@group(1) @binding(3) var mainSampler: sampler;
 
 @group(2) @binding(0) var lightmapTex: texture_2d<f32>;
 @group(2) @binding(1) var lightmapSampler: sampler;
@@ -56,7 +63,7 @@ struct VertexOutput {
 @vertex
 fn vertex_main(@location(0) localPos: vec2<f32>) -> VertexOutput {
     var out: VertexOutput;
-    let world = sprite.worldTransform * vec4<f32>(localPos, 0.0, 1.0);
+    let world = spriteTransform.worldTransform * vec4<f32>(localPos, 0.0, 1.0);
     out.worldPos = world;
     out.position = camera.viewProjection * world;
     out.uv = localPos + vec2<f32>(0.5, 0.5);
@@ -82,9 +89,9 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Diagnostic: ignore opacity/shape/image entirely so geometry, transforms, and
         // camera placement can be verified independent of per-sprite data (e.g. opacity 0).
         var debugColor = vec3<f32>(0.2, 0.4, 1.0);
-        if (sprite.primitiveShapeId == 1u) {
+        if (spriteProperties.primitiveShapeId == 1u) {
             debugColor = vec3<f32>(1.0, 0.2, 0.2);
-        } else if (sprite.primitiveShapeId == 2u) {
+        } else if (spriteProperties.primitiveShapeId == 2u) {
             debugColor = vec3<f32>(0.2, 1.0, 0.2);
         }
         return vec4<f32>(debugColor, 1.0);
@@ -94,13 +101,13 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let simLocal = camera.simInverseWorldTransform * in.worldPos;
     let lightUV = simLocal.xy + vec2<f32>(0.5, 0.5);
-    let lightSample = textureSampleLevel(lightmapTex, lightmapSampler, lightUV, sprite.simBlur);
+    let lightSample = textureSampleLevel(lightmapTex, lightmapSampler, lightUV, spriteProperties.simBlur);
 
-    let light = lightSample * sprite.simContribution + sprite.ambient;
-    var color = baseColor * light * sprite.colorMod;
-    color = color + sprite.emissive;
-    color = color * sprite.opacity;
+    let light = lightSample * spriteProperties.simContribution + spriteProperties.ambient;
+    var color = baseColor * light * spriteProperties.colorMod;
+    color = color + spriteProperties.emissive;
+    color = color * spriteProperties.opacity;
 
-    let alpha = clamp(shapeAlpha(sprite.primitiveShapeId, in.uv) * color.a, 0.0, 1.0);
+    let alpha = clamp(shapeAlpha(spriteProperties.primitiveShapeId, in.uv) * color.a, 0.0, 1.0);
     return vec4<f32>(color.rgb, alpha);
 }

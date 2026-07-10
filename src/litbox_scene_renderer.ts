@@ -1,5 +1,5 @@
-import { mat4 } from 'gl-matrix';
-import type { SceneCamera } from './litbox/scene.ts';
+import { mat4, vec4 } from 'gl-matrix';
+import type { SceneCamera, Vector2 } from './litbox/scene.ts';
 import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { SceneGraph } from './litbox/scene_graph.ts';
 import { TextureCache } from './litbox/texture_cache.ts';
@@ -96,10 +96,19 @@ export class LitboxSceneRenderer {
     /** Stages (or swaps in) a scene. Safe to call before or after start(). */
     public async setScene(scene: LitboxScene): Promise<void> {
         this.activeScene = scene;
-        scene.onLoad();
+        scene.onLoad(this);
         if (this.device) {
             await this.rebuildFromScene();
         }
+    }
+
+    /**
+     * The canvas this renderer draws into. Exposed so a scene's onLoad can wire up DOM
+     * interaction (e.g. click listeners) against it, converting event coordinates to world space
+     * via screenToWorld - LitboxScene itself has no DOM access.
+     */
+    public getCanvas(): HTMLCanvasElement {
+        return this.canvas;
     }
 
     private async initWebGPU(): Promise<boolean> {
@@ -189,6 +198,120 @@ export class LitboxSceneRenderer {
         await this.spriteResources.updateFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources);
     }
 
+    /**
+     * Applies every structural change (create/destroy/reparent) queued by the active scene's
+     * onFrame() this frame - see LitboxScene's createObject/destroyObject/reparentObject - to the
+     * live SceneGraph and, where needed, the GPU resource managers. Runs before
+     * applyDynamicSceneUpdates() so the SceneGraph is structurally up to date before that pass
+     * consults it.
+     */
+    private applyPendingStructuralOps(): void {
+        if (!this.activeScene || !this.sceneGraph) {
+            return;
+        }
+
+        const sceneGraph = this.sceneGraph;
+        const scene = this.activeScene.data;
+        const ops = this.activeScene.getPendingStructuralOps();
+        for (const op of ops) {
+            if (op.type === 'create') {
+                sceneGraph.addObject(op.object);
+                if (op.sprite) {
+                    void this.spriteResources.addSprite(op.sprite, sceneGraph, this.textureCache);
+                }
+                if (op.raytraced) {
+                    void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+                }
+                if (op.light) {
+                    this.lightResources.updateFromScene(scene, sceneGraph);
+                }
+            } else if (op.type === 'destroy') {
+                const removed = sceneGraph.removeObject(op.rootId);
+                this.lightResources.updateFromScene(scene, sceneGraph);
+                void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+                this.spriteResources.removeByOwnerIds(new Set(removed));
+            } else if (op.type === 'destroySprite') {
+                this.spriteResources.removeSprite(op.sprite);
+            } else if (op.type === 'destroyRaytraced') {
+                void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+            } else if (op.type === 'destroyLight') {
+                this.lightResources.updateFromScene(scene, sceneGraph);
+            } else {
+                sceneGraph.setParent(op.id, op.newParentId);
+                this.refreshTransformCascade(op.id);
+            }
+        }
+
+        if (ops.length > 0) {
+            this.activeScene.clearPendingStructuralOps();
+        }
+    }
+
+    /**
+     * Invalidates `rootId`'s cached world transform (and every descendant's, since world
+     * transforms are hierarchical) and pushes a targeted GPU refresh of just the transform-derived
+     * data for each affected owner. Shared by applyDynamicSceneUpdates (per dynamic/dirty
+     * transform) and applyPendingStructuralOps (for a reparent, which only changes transforms -
+     * no owned sprite/light/raytraced data changes, so no other GPU-resource code is needed).
+     */
+    private refreshTransformCascade(rootId: number): number[] {
+        if (!this.sceneGraph) {
+            return [];
+        }
+        const sceneGraph = this.sceneGraph;
+        sceneGraph.invalidateSubtree(rootId);
+        const affectedIds = [rootId, ...sceneGraph.getDescendantIds(rootId)];
+        for (const ownerId of affectedIds) {
+            this.lightResources.refreshTransform(ownerId, sceneGraph);
+            this.spriteResources.refreshTransform(ownerId, sceneGraph);
+            this.raytracedResources.refreshEntry(ownerId, sceneGraph);
+        }
+        return affectedIds;
+    }
+
+    /**
+     * Consults the active scene's dynamic/dirty flags (see LitboxScene) and pushes
+     * targeted GPU updates for exactly the affected entries, instead of re-uploading
+     * everything (wasteful) or nothing (broken for animation/interaction). Runs before
+     * any GPU pass is recorded since every write here is a bare queue.writeBuffer.
+     *
+     * Transform changes cascade to the whole descendant subtree (world transforms are
+     * hierarchical), but only ever touch each entry's transform-derived GPU data -
+     * never its properties (color, opacity, etc.), which are refreshed independently
+     * when the entry itself (not its owner's transform) is marked dynamic/dirty.
+     */
+    private applyDynamicSceneUpdates(): void {
+        if (!this.activeScene || !this.sceneGraph) {
+            return;
+        }
+
+        const frameState = this.activeScene.getDynamicFrameState();
+        const transformAffectedIds = new Set<number>();
+        for (const obj of frameState.transforms) {
+            for (const affectedId of this.refreshTransformCascade(obj.id)) {
+                transformAffectedIds.add(affectedId);
+            }
+        }
+
+        for (const light of frameState.lights) {
+            this.lightResources.refreshProperties(light.ownerId);
+        }
+        for (const sprite of frameState.sprites) {
+            this.spriteResources.refreshProperties(sprite.ownerId);
+        }
+        // frameState.raytraced entries deliberately have no per-entry properties update here:
+        // RaytracedResources has no GPU buffer yet (see its refreshEntry TODO), so a raytraced
+        // entry marked dynamic/dirty in isolation (owner transform unchanged) has nothing to
+        // upload to - it's tracked purely for API symmetry until the simulation pass exists.
+
+        const simOwnerId = this.simulationResources.getOwnerId();
+        if (simOwnerId !== null && transformAffectedIds.has(simOwnerId)) {
+            this.simulationResources.refreshWorldTransform(this.sceneGraph);
+        }
+
+        this.activeScene.clearFrameDirtyFlags();
+    }
+
     private getActiveCamera(): ActiveCamera | null {
         if (!this.activeScene || !this.sceneGraph) {
             return null;
@@ -238,6 +361,33 @@ export class LitboxSceneRenderer {
         return exposure;
     }
 
+    /**
+     * Converts a canvas-space pixel coordinate (origin top-left, +y down - matching
+     * MouseEvent.offsetX/offsetY against this renderer's canvas) into the active camera's
+     * world-space XY plane, by inverting the same orthographic projection writeCameraUniform
+     * builds. Returns null if there's no active camera to project against.
+     */
+    public screenToWorld(canvasX: number, canvasY: number): Vector2 | null {
+        const activeCamera = this.getActiveCamera();
+        if (!activeCamera || this.presentationSize[0] <= 0 || this.presentationSize[1] <= 0) {
+            return null;
+        }
+
+        const ndcX = (canvasX / this.presentationSize[0]) * 2 - 1;
+        const ndcY = 1 - (canvasY / this.presentationSize[1]) * 2;
+
+        const aspect = this.presentationSize[0] / this.presentationSize[1];
+        const halfHeight = activeCamera.camera.verticalSize;
+        const halfWidth = halfHeight * aspect;
+
+        const worldPoint = vec4.transformMat4(
+            vec4.create(),
+            vec4.fromValues(ndcX * halfWidth, ndcY * halfHeight, 0, 1),
+            activeCamera.worldTransform,
+        );
+        return { x: worldPoint[0], y: worldPoint[1] };
+    }
+
     public render(timeMs: number = performance.now()): void {
         if (!this.device) {
             return;
@@ -246,6 +396,8 @@ export class LitboxSceneRenderer {
         const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
         this.lastFrameTimeMs = timeMs;
         this.activeScene?.onFrame(deltaTimeSeconds);
+        this.applyPendingStructuralOps();
+        this.applyDynamicSceneUpdates();
 
         if (this.canvas.width !== this.presentationSize[0] || this.canvas.height !== this.presentationSize[1]) {
             this.presentationSize = [this.canvas.width, this.canvas.height];

@@ -91,6 +91,21 @@ export class SimulationResources {
         return this.simulation !== null;
     }
 
+    /** Owner id of the current simulation, or null if none - lets callers cheaply check subtree membership. */
+    public getOwnerId(): number | null {
+        return this.simulation?.ownerId ?? null;
+    }
+
+    /** Targeted re-derivation of the composite uniform's world transform and its (already transform-only) GPU upload. */
+    public refreshWorldTransform(sceneGraph: SceneGraph): void {
+        if (!this.simulation || !this.compositeUniformBuffer) {
+            return;
+        }
+        this.worldTransform = sceneGraph.getWorldTransform(this.simulation.ownerId);
+        const worldTransformData = this.worldTransform as Float32Array;
+        this.device.queue.writeBuffer(this.compositeUniformBuffer, 0, worldTransformData.buffer, worldTransformData.byteOffset, worldTransformData.byteLength);
+    }
+
     public updateFromScene(scene: Scene, sceneGraph: SceneGraph): void {
         this.lightmapTexture?.destroy();
         this.lightmapTexture = null;
