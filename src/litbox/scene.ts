@@ -99,6 +99,8 @@ export interface AmbientLight {
     bounces: number;
 }
 
+export type AnyLight = PointLight | Spotlight | LaserLight | DirectionalLight | AmbientLight;
+
 export interface Scene {
     simulations: SceneSimulation[];
     objects: SceneObject[];

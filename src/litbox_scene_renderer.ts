@@ -189,6 +189,58 @@ export class LitboxSceneRenderer {
         await this.spriteResources.updateFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources);
     }
 
+    /**
+     * Consults the active scene's dynamic/dirty flags (see LitboxScene) and pushes
+     * targeted GPU updates for exactly the affected entries, instead of re-uploading
+     * everything (wasteful) or nothing (broken for animation/interaction). Runs before
+     * any GPU pass is recorded since every write here is a bare queue.writeBuffer.
+     *
+     * Transform changes cascade to the whole descendant subtree (world transforms are
+     * hierarchical), but only ever touch each entry's transform-derived GPU data -
+     * never its properties (color, opacity, etc.), which are refreshed independently
+     * when the entry itself (not its owner's transform) is marked dynamic/dirty.
+     */
+    private applyDynamicSceneUpdates(): void {
+        if (!this.activeScene || !this.sceneGraph) {
+            return;
+        }
+
+        const frameState = this.activeScene.getDynamicFrameState();
+        const sceneGraph = this.sceneGraph;
+        const transformAffectedIds = new Set<number>();
+        for (const obj of frameState.transforms) {
+            sceneGraph.invalidateSubtree(obj.id);
+            transformAffectedIds.add(obj.id);
+            for (const descendantId of sceneGraph.getDescendantIds(obj.id)) {
+                transformAffectedIds.add(descendantId);
+            }
+        }
+
+        for (const ownerId of transformAffectedIds) {
+            this.lightResources.refreshTransform(ownerId, sceneGraph);
+            this.spriteResources.refreshTransform(ownerId, sceneGraph);
+            this.raytracedResources.refreshEntry(ownerId, sceneGraph);
+        }
+
+        for (const light of frameState.lights) {
+            this.lightResources.refreshProperties(light.ownerId);
+        }
+        for (const sprite of frameState.sprites) {
+            this.spriteResources.refreshProperties(sprite.ownerId);
+        }
+        // frameState.raytraced entries deliberately have no per-entry properties update here:
+        // RaytracedResources has no GPU buffer yet (see its refreshEntry TODO), so a raytraced
+        // entry marked dynamic/dirty in isolation (owner transform unchanged) has nothing to
+        // upload to - it's tracked purely for API symmetry until the simulation pass exists.
+
+        const simOwnerId = this.simulationResources.getOwnerId();
+        if (simOwnerId !== null && transformAffectedIds.has(simOwnerId)) {
+            this.simulationResources.refreshWorldTransform(sceneGraph);
+        }
+
+        this.activeScene.clearFrameDirtyFlags();
+    }
+
     private getActiveCamera(): ActiveCamera | null {
         if (!this.activeScene || !this.sceneGraph) {
             return null;
@@ -246,6 +298,7 @@ export class LitboxSceneRenderer {
         const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
         this.lastFrameTimeMs = timeMs;
         this.activeScene?.onFrame(deltaTimeSeconds);
+        this.applyDynamicSceneUpdates();
 
         if (this.canvas.width !== this.presentationSize[0] || this.canvas.height !== this.presentationSize[1]) {
             this.presentationSize = [this.canvas.width, this.canvas.height];
