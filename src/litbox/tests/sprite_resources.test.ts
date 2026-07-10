@@ -1,0 +1,111 @@
+import { describe, expect, it } from 'vitest';
+import { SpriteResources } from '../sprite_resources.ts';
+import { SceneGraph } from '../scene_graph.ts';
+import { TextureCache } from '../texture_cache.ts';
+import { SimulationResources } from '../simulation.ts';
+import { createFakeGpuDevice, type FakeGpuDevice } from './test_gpu_stubs.ts';
+import type { Color, Scene, SceneObject, SceneSprite } from '../scene.ts';
+
+const WHITE: Color = { r: 1, g: 1, b: 1, a: 1 };
+
+function makeObject(id: number, x: number): SceneObject {
+    return {
+        active: true,
+        id,
+        name: `obj${id}`,
+        parentId: -1,
+        position: { x, y: 0 },
+        depth: 0,
+        rotation: 0,
+        scale: { x: 1, y: 1 },
+    };
+}
+
+function makeSprite(ownerId: number): SceneSprite {
+    return {
+        ownerId,
+        layer: 0,
+        opacity: 1,
+        image: '',
+        colorMod: WHITE,
+        ambient: WHITE,
+        emissive: WHITE,
+        simContribution: WHITE,
+        simBlur: 0,
+        primitiveShape: 'rect',
+    };
+}
+
+function makeScene(): Scene {
+    return {
+        simulations: [],
+        objects: [makeObject(1, 3), makeObject(2, 7)],
+        cameras: [],
+        raytraced: [],
+        sprites: [makeSprite(1), makeSprite(2)],
+        pointLights: [],
+        spotlights: [],
+        laserLights: [],
+        directionalLights: [],
+        ambientLights: [],
+    };
+}
+
+async function setup(): Promise<{ device: FakeGpuDevice; spriteResources: SpriteResources; scene: Scene }> {
+    const device = createFakeGpuDevice();
+    const gpuDevice = device as unknown as GPUDevice;
+    const textureCache = new TextureCache(gpuDevice);
+    const simulationResources = new SimulationResources(gpuDevice);
+    const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
+    simulationResources.initialize(cameraBindGroupLayout);
+
+    const spriteResources = new SpriteResources(gpuDevice);
+    spriteResources.initialize(cameraBindGroupLayout, 'rgba16float');
+
+    const scene = makeScene();
+    const sceneGraph = new SceneGraph(scene);
+    await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources);
+
+    return { device, spriteResources, scene };
+}
+
+describe('SpriteResources', () => {
+    it('writes both transform and properties buffers once per sprite on updateFromScene', async () => {
+        const { device } = await setup();
+        expect(device.writeCalls).toHaveLength(4); // 2 sprites x (transform + properties)
+    });
+
+    it('refreshTransform rewrites only that owner\'s transform buffer with a fresh world transform', async () => {
+        const { device, spriteResources, scene } = await setup();
+        device.writeCalls = [];
+
+        scene.objects[0].position.x = 99; // owner 1's object
+        const freshGraph = new SceneGraph(scene);
+        spriteResources.refreshTransform(1, freshGraph);
+
+        expect(device.writeCalls).toHaveLength(1);
+        expect(new Float32Array(device.writeCalls[0].data)[12]).toBe(99);
+    });
+
+    it('refreshProperties rewrites only that owner\'s properties buffer with current sprite field values', async () => {
+        const { device, spriteResources, scene } = await setup();
+        device.writeCalls = [];
+
+        scene.sprites[0].opacity = 0.25; // owner 1's sprite, live reference
+        spriteResources.refreshProperties(1);
+
+        expect(device.writeCalls).toHaveLength(1);
+        const floats = new Float32Array(device.writeCalls[0].data);
+        expect(floats[16]).toBeCloseTo(0.25); // opacity: byte 64 -> float index 16
+    });
+
+    it('no-ops for an owner with no sprites', async () => {
+        const { device, spriteResources } = await setup();
+        device.writeCalls = [];
+
+        spriteResources.refreshTransform(999, new SceneGraph(makeScene()));
+        spriteResources.refreshProperties(999);
+
+        expect(device.writeCalls).toHaveLength(0);
+    });
+});
