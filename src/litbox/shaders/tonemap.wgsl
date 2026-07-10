@@ -16,12 +16,24 @@ struct VertexOutput {
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>(3.0, -1.0),
-        vec2<f32>(-1.0, 3.0),
-    );
-    let pos = positions[vertexIndex];
+    // Deliberately not array-indexed: some mobile GPU drivers (confirmed on a Pixel 10
+    // Pro, both Chrome and Brave) silently corrupt geometry when a fullscreen-quad's
+    // positions come from a WGSL array indexed by vertex_index. Branching instead of
+    // indexing works around it.
+    var pos: vec2<f32>;
+    if (vertexIndex == 0u) {
+        pos = vec2<f32>(-1.0, -1.0);
+    } else if (vertexIndex == 1u) {
+        pos = vec2<f32>(1.0, -1.0);
+    } else if (vertexIndex == 2u) {
+        pos = vec2<f32>(-1.0, 1.0);
+    } else if (vertexIndex == 3u) {
+        pos = vec2<f32>(-1.0, 1.0);
+    } else if (vertexIndex == 4u) {
+        pos = vec2<f32>(1.0, -1.0);
+    } else {
+        pos = vec2<f32>(1.0, 1.0);
+    }
 
     var out: VertexOutput;
     out.position = vec4<f32>(pos, 0.0, 1.0);

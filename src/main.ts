@@ -54,6 +54,16 @@ if (consoleContainer) {
         originalError(...args);
         appendLog(args.map(arg => String(arg)).join(' '), 'error');
     };
+
+    // Uncaught exceptions and unhandled promise rejections don't go through
+    // console.error, so without these they'd never reach the on-page overlay.
+    window.addEventListener('error', (event) => {
+        appendLog(`Uncaught error: ${event.message} (${event.filename}:${event.lineno}:${event.colno})`, 'error');
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+        appendLog(`Unhandled promise rejection: ${String(event.reason)}`, 'error');
+    });
 }
 
 
