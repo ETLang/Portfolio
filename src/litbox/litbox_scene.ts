@@ -1,5 +1,20 @@
-import { parseScene, type AnyLight, type RaytracedObject, type Scene, type SceneObject, type SceneSprite, type Vector2 } from './scene.ts';
+import {
+    parseScene,
+    type AmbientLight,
+    type AnyLight,
+    type Color,
+    type DirectionalLight,
+    type LaserLight,
+    type PointLight,
+    type RaytracedObject,
+    type Scene,
+    type SceneObject,
+    type SceneSprite,
+    type Spotlight,
+    type Vector2,
+} from './scene.ts';
 import { DynamicSet } from './dynamic_set.ts';
+import type { LitboxSceneRenderer } from '../litbox_scene_renderer.ts';
 
 const ROOT_PARENT_ID = -1;
 
@@ -14,15 +29,57 @@ export interface CreateObjectOptions {
     active?: boolean;
 }
 
+/** CreateObjectOptions plus the subset of SceneSprite fields worth overriding per call; the rest default to a plain, fully-opaque, unshaded white square. */
+export interface CreateSpriteOptions extends CreateObjectOptions {
+    layer?: number;
+    opacity?: number;
+    image?: string;
+    colorMod?: Color;
+    ambient?: Color;
+    emissive?: Color;
+    simContribution?: Color;
+    simBlur?: number;
+    primitiveShape?: string;
+}
+
+/** CreateObjectOptions plus the subset of RaytracedObject fields worth overriding per call; the rest default to a plain, unshaded white primitive. */
+export interface CreateRaytracedOptions extends CreateObjectOptions {
+    logDensity?: number;
+    roughness?: number;
+    heightScale?: number;
+    albedo?: Color;
+    albedoMap?: string;
+    logDensityMap?: string;
+    sdfNormalMap?: string;
+    primitiveShape?: string;
+}
+
+/** CreateObjectOptions plus the fields shared by every light kind; the rest default to a plain white light. */
+export interface CreateLightOptions extends CreateObjectOptions {
+    color?: Color;
+    intensity?: number;
+    bounces?: number;
+}
+
+/** CreateLightOptions plus the one field unique to spotlights. */
+export interface CreateSpotlightOptions extends CreateLightOptions {
+    pinch?: number;
+}
+
 /**
- * A pending structural change recorded by createObject/destroyObject/reparentObject, applied to
- * the live SceneGraph (and GPU resources) once per frame by LitboxSceneRenderer - the same
- * two-phase split as the dynamic/dirty transform flags below, since LitboxScene never touches
- * SceneGraph directly.
+ * A pending structural change recorded by createObject/createSprite/createRaytraced/create<Light>/
+ * destroyObject/destroySprite/destroyRaytraced/destroyLight/reparentObject, applied to the live
+ * SceneGraph (and GPU resources) once per frame by LitboxSceneRenderer - the same two-phase split
+ * as the dynamic/dirty transform flags below, since LitboxScene never touches SceneGraph directly.
+ * `sprite`/`raytraced`/`light` are only present when the object was created via the matching
+ * create* method, so the renderer knows to also upload that data alongside the new object.
  */
 type StructuralOp =
-    | { type: 'create'; object: SceneObject }
+    | { type: 'create'; object: SceneObject; sprite?: SceneSprite; raytraced?: RaytracedObject; light?: AnyLight }
     | { type: 'destroy'; rootId: number }
+    | { type: 'destroySprite'; sprite: SceneSprite }
+    | { type: 'destroyRaytraced'; raytraced: RaytracedObject }
+    | { type: 'destroyLight'; light: AnyLight }
     | { type: 'reparent'; id: number; newParentId: number };
 
 /**
@@ -82,11 +139,13 @@ export abstract class LitboxScene {
     }
 
     /**
-     * Called once, immediately after the scene's JSON has been loaded and
-     * parsed. Override to look up specific objects/sprites/lights from
-     * `data` (e.g. via make*Dynamic) and stash references for use in onFrame().
+     * Called once, when this scene is staged (or swapped in) via LitboxSceneRenderer.setScene,
+     * immediately after its JSON has been loaded and parsed. Override to look up specific
+     * objects/sprites/lights from `data` (e.g. via make*Dynamic) and stash references for use in
+     * onFrame(), and/or to wire up interaction that needs the renderer itself - e.g. a canvas click
+     * listener via renderer.getCanvas()/screenToWorld().
      */
-    public onLoad(): void {}
+    public onLoad(_renderer: LitboxSceneRenderer): void {}
 
     /**
      * Called at the start of every rendered frame, before the frame is
@@ -155,6 +214,99 @@ export abstract class LitboxScene {
 
     /** Creates a new SceneObject as a child of `options.parent` (or a root object if omitted) and returns it. */
     public createObject(options: CreateObjectOptions): SceneObject {
+        const obj = this.buildObject(options);
+        this.pendingStructuralOps.push({ type: 'create', object: obj });
+        return obj;
+    }
+
+    /** Creates a new SceneObject (as createObject) with a single sprite attached to it, and returns the object. */
+    public createSprite(options: CreateSpriteOptions): SceneObject {
+        const obj = this.buildObject(options);
+        const sprite: SceneSprite = {
+            ownerId: obj.id,
+            layer: options.layer ?? 0,
+            opacity: options.opacity ?? 1,
+            image: options.image ?? '',
+            colorMod: options.colorMod ?? { r: 1, g: 1, b: 1, a: 1 },
+            ambient: options.ambient ?? { r: 1, g: 1, b: 1, a: 1 },
+            emissive: options.emissive ?? { r: 0, g: 0, b: 0, a: 1 },
+            simContribution: options.simContribution ?? { r: 0, g: 0, b: 0, a: 0 },
+            simBlur: options.simBlur ?? 0,
+            primitiveShape: options.primitiveShape ?? 'rect',
+        };
+
+        this.data.sprites.push(sprite);
+        this.pendingStructuralOps.push({ type: 'create', object: obj, sprite });
+        return obj;
+    }
+
+    /** Creates a new SceneObject (as createObject) with a single raytraced entry attached to it, and returns the object. */
+    public createRaytraced(options: CreateRaytracedOptions): SceneObject {
+        const obj = this.buildObject(options);
+        const raytraced: RaytracedObject = {
+            ownerId: obj.id,
+            logDensity: options.logDensity ?? 0,
+            roughness: options.roughness ?? 0.5,
+            heightScale: options.heightScale ?? 1,
+            albedo: options.albedo ?? { r: 1, g: 1, b: 1, a: 1 },
+            albedoMap: options.albedoMap ?? '',
+            logDensityMap: options.logDensityMap ?? '',
+            sdfNormalMap: options.sdfNormalMap ?? '',
+            primitiveShape: options.primitiveShape ?? 'rect',
+        };
+
+        this.data.raytraced.push(raytraced);
+        this.pendingStructuralOps.push({ type: 'create', object: obj, raytraced });
+        return obj;
+    }
+
+    /** Creates a new SceneObject (as createObject) with a single point light attached to it, and returns the object. */
+    public createPointLight(options: CreateLightOptions): SceneObject {
+        const obj = this.buildObject(options);
+        const light: PointLight = this.lightDefaults(obj, options);
+        this.data.pointLights.push(light);
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        return obj;
+    }
+
+    /** Creates a new SceneObject (as createObject) with a single spotlight attached to it, and returns the object. */
+    public createSpotlight(options: CreateSpotlightOptions): SceneObject {
+        const obj = this.buildObject(options);
+        const light: Spotlight = { ...this.lightDefaults(obj, options), pinch: options.pinch ?? 0.5 };
+        this.data.spotlights.push(light);
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        return obj;
+    }
+
+    /** Creates a new SceneObject (as createObject) with a single laser light attached to it, and returns the object. */
+    public createLaserLight(options: CreateLightOptions): SceneObject {
+        const obj = this.buildObject(options);
+        const light: LaserLight = this.lightDefaults(obj, options);
+        this.data.laserLights.push(light);
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        return obj;
+    }
+
+    /** Creates a new SceneObject (as createObject) with a single directional light attached to it, and returns the object. */
+    public createDirectionalLight(options: CreateLightOptions): SceneObject {
+        const obj = this.buildObject(options);
+        const light: DirectionalLight = this.lightDefaults(obj, options);
+        this.data.directionalLights.push(light);
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        return obj;
+    }
+
+    /** Creates a new SceneObject (as createObject) with a single ambient light attached to it, and returns the object. */
+    public createAmbientLight(options: CreateLightOptions): SceneObject {
+        const obj = this.buildObject(options);
+        const light: AmbientLight = this.lightDefaults(obj, options);
+        this.data.ambientLights.push(light);
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        return obj;
+    }
+
+    /** Constructs and registers (in `data.objects` and `nameIndex`) a new SceneObject; shared by createObject/createSprite/createRaytraced/create<Light>. */
+    private buildObject(options: CreateObjectOptions): SceneObject {
         if (options.name.includes('/')) {
             throw new Error(
                 `Litbox scene: object name "${options.name}" contains a "/" character, which is ` +
@@ -181,8 +333,17 @@ export abstract class LitboxScene {
             this.nameIndex.set(obj.name, [obj]);
         }
 
-        this.pendingStructuralOps.push({ type: 'create', object: obj });
         return obj;
+    }
+
+    /** Builds the fields shared by every light kind, owned by `obj`; shared by createPointLight/createSpotlight/createLaserLight/createDirectionalLight/createAmbientLight. */
+    private lightDefaults(obj: SceneObject, options: CreateLightOptions): { ownerId: number; color: Color; intensity: number; bounces: number } {
+        return {
+            ownerId: obj.id,
+            color: options.color ?? { r: 1, g: 1, b: 1, a: 1 },
+            intensity: options.intensity ?? 1,
+            bounces: options.bounces ?? 1,
+        };
     }
 
     /**
@@ -232,6 +393,34 @@ export abstract class LitboxScene {
         this.data.raytraced = this.filterOwned(this.data.raytraced, cascadeIds, r => this.raytracedFlags.delete(r));
 
         this.pendingStructuralOps.push({ type: 'destroy', rootId: root.id });
+    }
+
+    /** Destroys the named object's Nth owned sprite (index across just sprites, as findSpriteByOwner). The object itself and any other data it owns are untouched. */
+    public destroySprite(name: string, index = 0): void {
+        const sprite = this.findSpriteByOwner(this.resolvePath(name), index);
+        this.data.sprites = this.data.sprites.filter(s => s !== sprite);
+        this.spriteFlags.delete(sprite);
+        this.pendingStructuralOps.push({ type: 'destroySprite', sprite });
+    }
+
+    /** Destroys the named object's Nth owned raytraced entry (index across just raytraced entries, as findRaytracedByOwner). The object itself and any other data it owns are untouched. */
+    public destroyRaytraced(name: string, index = 0): void {
+        const entry = this.findRaytracedByOwner(this.resolvePath(name), index);
+        this.data.raytraced = this.data.raytraced.filter(r => r !== entry);
+        this.raytracedFlags.delete(entry);
+        this.pendingStructuralOps.push({ type: 'destroyRaytraced', raytraced: entry });
+    }
+
+    /** Destroys the named object's Nth owned light (combined across all light kinds, as findLightByOwner). The object itself and any other data it owns are untouched. */
+    public destroyLight(name: string, index = 0): void {
+        const light = this.findLightByOwner(this.resolvePath(name), index);
+        this.data.pointLights = this.data.pointLights.filter(l => l !== light);
+        this.data.spotlights = this.data.spotlights.filter(l => l !== light);
+        this.data.laserLights = this.data.laserLights.filter(l => l !== light);
+        this.data.directionalLights = this.data.directionalLights.filter(l => l !== light);
+        this.data.ambientLights = this.data.ambientLights.filter(l => l !== light);
+        this.lightFlags.delete(light);
+        this.pendingStructuralOps.push({ type: 'destroyLight', light });
     }
 
     /**

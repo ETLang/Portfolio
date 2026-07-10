@@ -141,6 +141,36 @@ export class SpriteResources {
     }
 
     /**
+     * Resolves and uploads a single newly-created sprite, appending it to the draw list without
+     * touching any existing sprite's buffers, bind group, or texture - the targeted counterpart
+     * (for a structural create op) to updateFromScene's full rebuild.
+     */
+    public async addSprite(sprite: SceneSprite, sceneGraph: SceneGraph, textureCache: TextureCache): Promise<void> {
+        if (!this.instanceBindGroupLayout || !this.lightmapBindGroupLayout) {
+            throw new Error('SpriteResources.initialize() must be called before addSprite().');
+        }
+        const resolved = await this.resolveSprite(sprite, sceneGraph, textureCache);
+        this.sprites.push(resolved);
+        this.sprites.sort((a, b) => a.layer - b.layer);
+    }
+
+    /**
+     * Destroys the GPU buffers for exactly one sprite (matched by reference, not ownerId) and
+     * drops it from the draw list, leaving any sibling sprites the same owner has untouched - the
+     * targeted counterpart (for a destroySprite structural op) to removeByOwnerIds below, which
+     * removes every sprite an owner has.
+     */
+    public removeSprite(sprite: SceneSprite): void {
+        const index = this.sprites.findIndex(resolved => resolved.sprite === sprite);
+        if (index === -1) {
+            return;
+        }
+        const [removed] = this.sprites.splice(index, 1);
+        removed.transformBuffer.destroy();
+        removed.propertiesBuffer.destroy();
+    }
+
+    /**
      * Destroys the GPU buffers for every sprite owned by an id in `ownerIds` and drops them from
      * the draw list. Unlike updateFromScene, this never touches any surviving sprite's buffers,
      * bind group, or texture - the targeted counterpart for structural destroy ops.

@@ -178,6 +178,89 @@ describe('LitboxScene.createObject', () => {
     });
 });
 
+describe('LitboxScene.createSprite', () => {
+    it('creates the object and appends a sprite owned by it, defaulting unspecified fields', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createSprite({ name: 'New Sprite' });
+        const sprite = scene.data.sprites.find(s => s.ownerId === obj.id);
+        expect(sprite).toBeDefined();
+        expect(sprite!.primitiveShape).toBe('rect');
+        expect(sprite!.opacity).toBe(1);
+    });
+
+    it('honors overridden sprite fields', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createSprite({ name: 'New Sprite', layer: 2, primitiveShape: 'ellipse' });
+        const sprite = scene.data.sprites.find(s => s.ownerId === obj.id)!;
+        expect(sprite.layer).toBe(2);
+        expect(sprite.primitiveShape).toBe('ellipse');
+    });
+
+    it('records a pending create op carrying both the object and the sprite', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createSprite({ name: 'New Sprite' });
+        const sprite = scene.data.sprites.find(s => s.ownerId === obj.id);
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'create', object: obj, sprite }]);
+    });
+});
+
+describe('LitboxScene.createRaytraced', () => {
+    it('creates the object and appends a raytraced entry owned by it, defaulting unspecified fields', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createRaytraced({ name: 'New Traced' });
+        const entry = scene.data.raytraced.find(r => r.ownerId === obj.id);
+        expect(entry).toBeDefined();
+        expect(entry!.roughness).toBe(0.5);
+        expect(entry!.primitiveShape).toBe('rect');
+    });
+
+    it('records a pending create op carrying both the object and the raytraced entry', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createRaytraced({ name: 'New Traced' });
+        const raytraced = scene.data.raytraced.find(r => r.ownerId === obj.id);
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'create', object: obj, raytraced }]);
+    });
+});
+
+describe('LitboxScene create<Light>', () => {
+    it('createPointLight appends a point light owned by the new object', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createPointLight({ name: 'New Light', intensity: 2 });
+        expect(scene.data.pointLights.find(l => l.ownerId === obj.id)?.intensity).toBe(2);
+    });
+
+    it('createSpotlight appends a spotlight owned by the new object, defaulting pinch', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createSpotlight({ name: 'New Spot' });
+        expect(scene.data.spotlights.find(l => l.ownerId === obj.id)?.pinch).toBe(0.5);
+    });
+
+    it('createLaserLight appends a laser light owned by the new object', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createLaserLight({ name: 'New Laser' });
+        expect(scene.data.laserLights.some(l => l.ownerId === obj.id)).toBe(true);
+    });
+
+    it('createDirectionalLight appends a directional light owned by the new object', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createDirectionalLight({ name: 'New Directional' });
+        expect(scene.data.directionalLights.some(l => l.ownerId === obj.id)).toBe(true);
+    });
+
+    it('createAmbientLight appends an ambient light owned by the new object', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createAmbientLight({ name: 'New Ambient' });
+        expect(scene.data.ambientLights.some(l => l.ownerId === obj.id)).toBe(true);
+    });
+
+    it('records a pending create op carrying both the object and the light', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createPointLight({ name: 'New Light' });
+        const light = scene.data.pointLights.find(l => l.ownerId === obj.id);
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'create', object: obj, light }]);
+    });
+});
+
 describe('LitboxScene.destroyObject', () => {
     it('removes the object and its descendants from data.objects', () => {
         const scene = new TestScene(makeFixtureScene());
@@ -232,6 +315,54 @@ describe('LitboxScene.destroyObject', () => {
         expect(() => scene.destroyObject('Root')).toThrow(/camera or simulation/);
         expect(scene.data.objects.map(o => o.id)).toContain(1);
         expect(scene.getPendingStructuralOps()).toHaveLength(0);
+    });
+});
+
+describe('LitboxScene.destroySprite/destroyRaytraced/destroyLight', () => {
+    it('destroySprite removes just that sprite, leaving the object and its other data intact', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.destroySprite('Left Wall/Sprite'); // owner id 4
+        expect(scene.data.sprites.some(s => s.ownerId === 4)).toBe(false);
+        expect(scene.data.objects.map(o => o.id)).toContain(4); // object itself survives
+    });
+
+    it('destroySprite drops the dynamic/dirty flag for the removed sprite', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.makeSpriteDynamic('Left Wall/Sprite');
+        expect(scene.getDynamicFrameState().sprites).toHaveLength(1);
+        scene.destroySprite('Left Wall/Sprite');
+        expect(scene.getDynamicFrameState().sprites).toHaveLength(0);
+    });
+
+    it('destroySprite records a pending destroySprite op', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const sprite = scene.makeSpriteDynamic('Left Wall/Sprite');
+        scene.destroySprite('Left Wall/Sprite');
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'destroySprite', sprite }]);
+    });
+
+    it('destroyRaytraced removes just that entry, leaving the object intact', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.createRaytraced({ name: 'Traced', parent: 'Left Wall' });
+        scene.clearPendingStructuralOps();
+        scene.destroyRaytraced('Left Wall/Traced');
+        expect(scene.data.raytraced).toHaveLength(0);
+        expect(() => scene.makeTransformDynamic('Left Wall/Traced')).not.toThrow();
+    });
+
+    it('destroyLight removes just the Nth light (combined across kinds), leaving the other kind and the object intact', () => {
+        const scene = new TestScene(makeFixtureScene()); // 'Light Owner' owns a point light (0) then a spotlight (1)
+        scene.destroyLight('Light Owner', 0);
+        expect(scene.data.pointLights).toHaveLength(0);
+        expect(scene.data.spotlights).toHaveLength(1);
+        expect(() => scene.makeTransformDynamic('Light Owner')).not.toThrow();
+    });
+
+    it('destroyLight records a pending destroyLight op', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const light = scene.makeLightDynamic('Light Owner', 0);
+        scene.destroyLight('Light Owner', 0);
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'destroyLight', light }]);
     });
 });
 

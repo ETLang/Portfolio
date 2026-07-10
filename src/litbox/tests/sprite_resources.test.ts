@@ -51,7 +51,7 @@ function makeScene(): Scene {
     };
 }
 
-async function setup(): Promise<{ device: FakeGpuDevice; spriteResources: SpriteResources; scene: Scene }> {
+async function setup(): Promise<{ device: FakeGpuDevice; spriteResources: SpriteResources; scene: Scene; sceneGraph: SceneGraph; textureCache: TextureCache }> {
     const device = createFakeGpuDevice();
     const gpuDevice = device as unknown as GPUDevice;
     const textureCache = new TextureCache(gpuDevice);
@@ -66,7 +66,7 @@ async function setup(): Promise<{ device: FakeGpuDevice; spriteResources: Sprite
     const sceneGraph = new SceneGraph(scene);
     await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources);
 
-    return { device, spriteResources, scene };
+    return { device, spriteResources, scene, sceneGraph, textureCache };
 }
 
 describe('SpriteResources', () => {
@@ -131,5 +131,52 @@ describe('SpriteResources', () => {
 
         spriteResources.refreshProperties(1);
         expect(device.writeCalls).toHaveLength(1); // owner 1 sprite still present
+    });
+
+    it('addSprite uploads and appends a new sprite, leaving existing sprites untouched', async () => {
+        const { device, spriteResources, sceneGraph, textureCache } = await setup();
+        device.writeCalls = [];
+
+        const newSprite = makeSprite(3);
+        await spriteResources.addSprite(newSprite, sceneGraph, textureCache);
+        expect(device.writeCalls).toHaveLength(2); // transform + properties for the new sprite only
+
+        device.writeCalls = [];
+        spriteResources.refreshProperties(1);
+        expect(device.writeCalls).toHaveLength(1); // owner 1's original sprite is still present
+    });
+
+    it('removeSprite removes exactly the given sprite, leaving a sibling sprite owned by the same object intact', async () => {
+        const device = createFakeGpuDevice();
+        const gpuDevice = device as unknown as GPUDevice;
+        const textureCache = new TextureCache(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice);
+        const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
+        simulationResources.initialize(cameraBindGroupLayout);
+
+        const spriteResources = new SpriteResources(gpuDevice);
+        spriteResources.initialize(cameraBindGroupLayout, 'rgba16float');
+
+        const spriteA = makeSprite(1);
+        const spriteB = makeSprite(1); // same owner as spriteA
+        const scene: Scene = { ...makeScene(), sprites: [spriteA, spriteB] };
+        const sceneGraph = new SceneGraph(scene);
+        await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources);
+        device.writeCalls = [];
+
+        spriteResources.removeSprite(spriteA);
+        spriteResources.refreshProperties(1); // combined-owner refresh should now only touch spriteB
+
+        expect(device.writeCalls).toHaveLength(1);
+    });
+
+    it('removeSprite is a no-op for a sprite reference it does not track', async () => {
+        const { device, spriteResources } = await setup();
+        device.writeCalls = [];
+
+        spriteResources.removeSprite(makeSprite(999));
+        spriteResources.refreshProperties(1);
+
+        expect(device.writeCalls).toHaveLength(1); // owner 1 sprite untouched
     });
 });

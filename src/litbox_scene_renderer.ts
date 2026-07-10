@@ -1,5 +1,5 @@
-import { mat4 } from 'gl-matrix';
-import type { SceneCamera } from './litbox/scene.ts';
+import { mat4, vec4 } from 'gl-matrix';
+import type { SceneCamera, Vector2 } from './litbox/scene.ts';
 import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { SceneGraph } from './litbox/scene_graph.ts';
 import { TextureCache } from './litbox/texture_cache.ts';
@@ -96,10 +96,19 @@ export class LitboxSceneRenderer {
     /** Stages (or swaps in) a scene. Safe to call before or after start(). */
     public async setScene(scene: LitboxScene): Promise<void> {
         this.activeScene = scene;
-        scene.onLoad();
+        scene.onLoad(this);
         if (this.device) {
             await this.rebuildFromScene();
         }
+    }
+
+    /**
+     * The canvas this renderer draws into. Exposed so a scene's onLoad can wire up DOM
+     * interaction (e.g. click listeners) against it, converting event coordinates to world space
+     * via screenToWorld - LitboxScene itself has no DOM access.
+     */
+    public getCanvas(): HTMLCanvasElement {
+        return this.canvas;
     }
 
     private async initWebGPU(): Promise<boolean> {
@@ -202,16 +211,31 @@ export class LitboxSceneRenderer {
         }
 
         const sceneGraph = this.sceneGraph;
+        const scene = this.activeScene.data;
         const ops = this.activeScene.getPendingStructuralOps();
         for (const op of ops) {
             if (op.type === 'create') {
                 sceneGraph.addObject(op.object);
+                if (op.sprite) {
+                    void this.spriteResources.addSprite(op.sprite, sceneGraph, this.textureCache);
+                }
+                if (op.raytraced) {
+                    void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+                }
+                if (op.light) {
+                    this.lightResources.updateFromScene(scene, sceneGraph);
+                }
             } else if (op.type === 'destroy') {
                 const removed = sceneGraph.removeObject(op.rootId);
-                const scene = this.activeScene.data;
                 this.lightResources.updateFromScene(scene, sceneGraph);
                 void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
                 this.spriteResources.removeByOwnerIds(new Set(removed));
+            } else if (op.type === 'destroySprite') {
+                this.spriteResources.removeSprite(op.sprite);
+            } else if (op.type === 'destroyRaytraced') {
+                void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+            } else if (op.type === 'destroyLight') {
+                this.lightResources.updateFromScene(scene, sceneGraph);
             } else {
                 sceneGraph.setParent(op.id, op.newParentId);
                 this.refreshTransformCascade(op.id);
@@ -335,6 +359,33 @@ export class LitboxSceneRenderer {
         this.cameraUniform.write(data);
 
         return exposure;
+    }
+
+    /**
+     * Converts a canvas-space pixel coordinate (origin top-left, +y down - matching
+     * MouseEvent.offsetX/offsetY against this renderer's canvas) into the active camera's
+     * world-space XY plane, by inverting the same orthographic projection writeCameraUniform
+     * builds. Returns null if there's no active camera to project against.
+     */
+    public screenToWorld(canvasX: number, canvasY: number): Vector2 | null {
+        const activeCamera = this.getActiveCamera();
+        if (!activeCamera || this.presentationSize[0] <= 0 || this.presentationSize[1] <= 0) {
+            return null;
+        }
+
+        const ndcX = (canvasX / this.presentationSize[0]) * 2 - 1;
+        const ndcY = 1 - (canvasY / this.presentationSize[1]) * 2;
+
+        const aspect = this.presentationSize[0] / this.presentationSize[1];
+        const halfHeight = activeCamera.camera.verticalSize;
+        const halfWidth = halfHeight * aspect;
+
+        const worldPoint = vec4.transformMat4(
+            vec4.create(),
+            vec4.fromValues(ndcX * halfWidth, ndcY * halfHeight, 0, 1),
+            activeCamera.worldTransform,
+        );
+        return { x: worldPoint[0], y: worldPoint[1] };
     }
 
     public render(timeMs: number = performance.now()): void {
