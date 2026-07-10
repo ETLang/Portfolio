@@ -25,6 +25,11 @@ export class DynamicSet<T> {
         return [...this.flags.keys()];
     }
 
+    /** Removes an entry entirely, regardless of its current flag. For entries that no longer exist (e.g. a destroyed object). */
+    public delete(item: T): void {
+        this.flags.delete(item);
+    }
+
     /** Drops 'dirty' entries; leaves 'dynamic' entries untouched. Call once per frame, after processing. */
     public clearDirty(): void {
         for (const [item, flag] of this.flags) {

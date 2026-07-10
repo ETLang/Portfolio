@@ -108,4 +108,28 @@ describe('SpriteResources', () => {
 
         expect(device.writeCalls).toHaveLength(0);
     });
+
+    it('removeByOwnerIds drops the matching sprite so its refresh calls become no-ops, leaving others untouched', async () => {
+        const { device, spriteResources } = await setup();
+
+        spriteResources.removeByOwnerIds(new Set([1]));
+        device.writeCalls = [];
+
+        spriteResources.refreshTransform(1, new SceneGraph(makeScene()));
+        spriteResources.refreshProperties(1);
+        expect(device.writeCalls).toHaveLength(0); // owner 1 sprite is gone
+
+        spriteResources.refreshProperties(2);
+        expect(device.writeCalls).toHaveLength(1); // owner 2 sprite still present
+    });
+
+    it('removeByOwnerIds is a no-op for an unknown owner', async () => {
+        const { device, spriteResources } = await setup();
+
+        spriteResources.removeByOwnerIds(new Set([999]));
+        device.writeCalls = [];
+
+        spriteResources.refreshProperties(1);
+        expect(device.writeCalls).toHaveLength(1); // owner 1 sprite still present
+    });
 });

@@ -190,6 +190,62 @@ export class LitboxSceneRenderer {
     }
 
     /**
+     * Applies every structural change (create/destroy/reparent) queued by the active scene's
+     * onFrame() this frame - see LitboxScene's createObject/destroyObject/reparentObject - to the
+     * live SceneGraph and, where needed, the GPU resource managers. Runs before
+     * applyDynamicSceneUpdates() so the SceneGraph is structurally up to date before that pass
+     * consults it.
+     */
+    private applyPendingStructuralOps(): void {
+        if (!this.activeScene || !this.sceneGraph) {
+            return;
+        }
+
+        const sceneGraph = this.sceneGraph;
+        const ops = this.activeScene.getPendingStructuralOps();
+        for (const op of ops) {
+            if (op.type === 'create') {
+                sceneGraph.addObject(op.object);
+            } else if (op.type === 'destroy') {
+                const removed = sceneGraph.removeObject(op.rootId);
+                const scene = this.activeScene.data;
+                this.lightResources.updateFromScene(scene, sceneGraph);
+                void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+                this.spriteResources.removeByOwnerIds(new Set(removed));
+            } else {
+                sceneGraph.setParent(op.id, op.newParentId);
+                this.refreshTransformCascade(op.id);
+            }
+        }
+
+        if (ops.length > 0) {
+            this.activeScene.clearPendingStructuralOps();
+        }
+    }
+
+    /**
+     * Invalidates `rootId`'s cached world transform (and every descendant's, since world
+     * transforms are hierarchical) and pushes a targeted GPU refresh of just the transform-derived
+     * data for each affected owner. Shared by applyDynamicSceneUpdates (per dynamic/dirty
+     * transform) and applyPendingStructuralOps (for a reparent, which only changes transforms -
+     * no owned sprite/light/raytraced data changes, so no other GPU-resource code is needed).
+     */
+    private refreshTransformCascade(rootId: number): number[] {
+        if (!this.sceneGraph) {
+            return [];
+        }
+        const sceneGraph = this.sceneGraph;
+        sceneGraph.invalidateSubtree(rootId);
+        const affectedIds = [rootId, ...sceneGraph.getDescendantIds(rootId)];
+        for (const ownerId of affectedIds) {
+            this.lightResources.refreshTransform(ownerId, sceneGraph);
+            this.spriteResources.refreshTransform(ownerId, sceneGraph);
+            this.raytracedResources.refreshEntry(ownerId, sceneGraph);
+        }
+        return affectedIds;
+    }
+
+    /**
      * Consults the active scene's dynamic/dirty flags (see LitboxScene) and pushes
      * targeted GPU updates for exactly the affected entries, instead of re-uploading
      * everything (wasteful) or nothing (broken for animation/interaction). Runs before
@@ -206,20 +262,11 @@ export class LitboxSceneRenderer {
         }
 
         const frameState = this.activeScene.getDynamicFrameState();
-        const sceneGraph = this.sceneGraph;
         const transformAffectedIds = new Set<number>();
         for (const obj of frameState.transforms) {
-            sceneGraph.invalidateSubtree(obj.id);
-            transformAffectedIds.add(obj.id);
-            for (const descendantId of sceneGraph.getDescendantIds(obj.id)) {
-                transformAffectedIds.add(descendantId);
+            for (const affectedId of this.refreshTransformCascade(obj.id)) {
+                transformAffectedIds.add(affectedId);
             }
-        }
-
-        for (const ownerId of transformAffectedIds) {
-            this.lightResources.refreshTransform(ownerId, sceneGraph);
-            this.spriteResources.refreshTransform(ownerId, sceneGraph);
-            this.raytracedResources.refreshEntry(ownerId, sceneGraph);
         }
 
         for (const light of frameState.lights) {
@@ -235,7 +282,7 @@ export class LitboxSceneRenderer {
 
         const simOwnerId = this.simulationResources.getOwnerId();
         if (simOwnerId !== null && transformAffectedIds.has(simOwnerId)) {
-            this.simulationResources.refreshWorldTransform(sceneGraph);
+            this.simulationResources.refreshWorldTransform(this.sceneGraph);
         }
 
         this.activeScene.clearFrameDirtyFlags();
@@ -298,6 +345,7 @@ export class LitboxSceneRenderer {
         const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
         this.lastFrameTimeMs = timeMs;
         this.activeScene?.onFrame(deltaTimeSeconds);
+        this.applyPendingStructuralOps();
         this.applyDynamicSceneUpdates();
 
         if (this.canvas.width !== this.presentationSize[0] || this.canvas.height !== this.presentationSize[1]) {

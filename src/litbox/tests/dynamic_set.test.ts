@@ -39,6 +39,27 @@ describe('DynamicSet', () => {
         expect(set.activeThisFrame()).toEqual(['a']);
     });
 
+    it('delete removes a dynamic entry', () => {
+        const set = new DynamicSet<string>();
+        set.markDynamic('a');
+        set.delete('a');
+        expect(set.activeThisFrame()).toEqual([]);
+    });
+
+    it('delete removes a dirty entry', () => {
+        const set = new DynamicSet<string>();
+        set.markDirty('a');
+        set.delete('a');
+        expect(set.activeThisFrame()).toEqual([]);
+    });
+
+    it('delete on an absent entry is a no-op', () => {
+        const set = new DynamicSet<string>();
+        set.markDynamic('a');
+        set.delete('b');
+        expect(set.activeThisFrame()).toEqual(['a']);
+    });
+
     it('uses object identity as the key, not structural equality', () => {
         const set = new DynamicSet<{ id: number }>();
         const a = { id: 1 };

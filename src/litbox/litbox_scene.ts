@@ -1,5 +1,29 @@
-import { parseScene, type AnyLight, type RaytracedObject, type Scene, type SceneObject, type SceneSprite } from './scene.ts';
+import { parseScene, type AnyLight, type RaytracedObject, type Scene, type SceneObject, type SceneSprite, type Vector2 } from './scene.ts';
 import { DynamicSet } from './dynamic_set.ts';
+
+const ROOT_PARENT_ID = -1;
+
+export interface CreateObjectOptions {
+    name: string;
+    /** Bare name or "/"-separated path (see resolvePath) of the new object's parent. Omit for a root object. */
+    parent?: string;
+    position?: Vector2;
+    depth?: number;
+    rotation?: number;
+    scale?: Vector2;
+    active?: boolean;
+}
+
+/**
+ * A pending structural change recorded by createObject/destroyObject/reparentObject, applied to
+ * the live SceneGraph (and GPU resources) once per frame by LitboxSceneRenderer - the same
+ * two-phase split as the dynamic/dirty transform flags below, since LitboxScene never touches
+ * SceneGraph directly.
+ */
+type StructuralOp =
+    | { type: 'create'; object: SceneObject }
+    | { type: 'destroy'; rootId: number }
+    | { type: 'reparent'; id: number; newParentId: number };
 
 /**
  * Base class for scene-specific animation/interaction logic. Each JSON scene
@@ -24,6 +48,9 @@ export abstract class LitboxScene {
     private spriteFlags = new DynamicSet<SceneSprite>();
     private raytracedFlags = new DynamicSet<RaytracedObject>();
 
+    private nextObjectId: number;
+    private pendingStructuralOps: StructuralOp[] = [];
+
     constructor(data: Scene) {
         this.data = data;
         for (const obj of data.objects) {
@@ -40,6 +67,7 @@ export abstract class LitboxScene {
                 this.nameIndex.set(obj.name, [obj]);
             }
         }
+        this.nextObjectId = Math.max(0, ...data.objects.map(o => o.id)) + 1;
     }
 
     /**
@@ -120,7 +148,126 @@ export abstract class LitboxScene {
         this.raytracedFlags.markDirty(this.findRaytracedByOwner(this.resolvePath(name), index));
     }
 
+    // --- Structural authoring API. Mutates `data` immediately (so subsequent calls in the same
+    // onFrame() see consistent state) and records a pending op for LitboxSceneRenderer to apply to
+    // the live SceneGraph/GPU resources once per frame - LitboxScene never touches SceneGraph
+    // directly, mirroring the dynamic/dirty split above.
+
+    /** Creates a new SceneObject as a child of `options.parent` (or a root object if omitted) and returns it. */
+    public createObject(options: CreateObjectOptions): SceneObject {
+        if (options.name.includes('/')) {
+            throw new Error(
+                `Litbox scene: object name "${options.name}" contains a "/" character, which is ` +
+                `reserved for make*/mark* path lookups (e.g. "Left Wall/Sprite"); choose another name.`,
+            );
+        }
+        const parentId = options.parent ? this.resolvePath(options.parent).id : ROOT_PARENT_ID;
+        const obj: SceneObject = {
+            active: options.active ?? true,
+            id: this.nextObjectId++,
+            name: options.name,
+            parentId,
+            position: options.position ?? { x: 0, y: 0 },
+            depth: options.depth ?? 0,
+            rotation: options.rotation ?? 0,
+            scale: options.scale ?? { x: 1, y: 1 },
+        };
+
+        this.data.objects.push(obj);
+        const matches = this.nameIndex.get(obj.name);
+        if (matches) {
+            matches.push(obj);
+        } else {
+            this.nameIndex.set(obj.name, [obj]);
+        }
+
+        this.pendingStructuralOps.push({ type: 'create', object: obj });
+        return obj;
+    }
+
+    /**
+     * Destroys the named object and its whole subtree: removes them - and everything they own
+     * (sprites, lights, raytraced entries) - from `data`, and drops any dynamic/dirty flags on
+     * them. Throws without mutating anything if the cascade would remove a camera or simulation
+     * owner; there's no supported way to recover the renderer's cached camera/simulation state
+     * from that.
+     */
+    public destroyObject(name: string): void {
+        const root = this.resolvePath(name);
+        const cascade = this.collectDescendantIds(root.id);
+        cascade.unshift(root.id);
+        const cascadeIds = new Set(cascade);
+
+        if (this.data.cameras.some(c => cascadeIds.has(c.ownerId)) || this.data.simulations.some(s => cascadeIds.has(s.ownerId))) {
+            throw new Error(
+                `Litbox scene: cannot destroy object "${root.name}" (id ${root.id}) - its subtree owns a ` +
+                `camera or simulation, which isn't supported.`,
+            );
+        }
+
+        const removedObjects = this.data.objects.filter(o => cascadeIds.has(o.id));
+        this.data.objects = this.data.objects.filter(o => !cascadeIds.has(o.id));
+        for (const obj of removedObjects) {
+            this.transformFlags.delete(obj);
+            const matches = this.nameIndex.get(obj.name);
+            if (!matches) {
+                continue;
+            }
+            const index = matches.indexOf(obj);
+            if (index !== -1) {
+                matches.splice(index, 1);
+            }
+            if (matches.length === 0) {
+                this.nameIndex.delete(obj.name);
+            }
+        }
+
+        const deleteLightFlag = (light: AnyLight): void => this.lightFlags.delete(light);
+        this.data.pointLights = this.filterOwned(this.data.pointLights, cascadeIds, deleteLightFlag);
+        this.data.spotlights = this.filterOwned(this.data.spotlights, cascadeIds, deleteLightFlag);
+        this.data.laserLights = this.filterOwned(this.data.laserLights, cascadeIds, deleteLightFlag);
+        this.data.directionalLights = this.filterOwned(this.data.directionalLights, cascadeIds, deleteLightFlag);
+        this.data.ambientLights = this.filterOwned(this.data.ambientLights, cascadeIds, deleteLightFlag);
+        this.data.sprites = this.filterOwned(this.data.sprites, cascadeIds, s => this.spriteFlags.delete(s));
+        this.data.raytraced = this.filterOwned(this.data.raytraced, cascadeIds, r => this.raytracedFlags.delete(r));
+
+        this.pendingStructuralOps.push({ type: 'destroy', rootId: root.id });
+    }
+
+    /**
+     * Moves the named object (and its whole subtree) to a new parent, or to the scene root if
+     * `newParent` is null. Throws without mutating anything on a self- or descendant-cycle, so a
+     * bad call fails fast inside the caller's onFrame() rather than surfacing later inside the
+     * renderer's frame loop.
+     */
+    public reparentObject(name: string, newParent: string | null): void {
+        const obj = this.resolvePath(name);
+        const newParentId = newParent ? this.resolvePath(newParent).id : ROOT_PARENT_ID;
+
+        if (newParentId === obj.id) {
+            throw new Error(`Litbox scene: cannot reparent object "${obj.name}" (id ${obj.id}) to itself.`);
+        }
+        if (newParentId !== ROOT_PARENT_ID && this.collectDescendantIds(obj.id).includes(newParentId)) {
+            throw new Error(
+                `Litbox scene: cannot reparent object "${obj.name}" (id ${obj.id}) to its own descendant (id ${newParentId}).`,
+            );
+        }
+
+        obj.parentId = newParentId;
+        this.pendingStructuralOps.push({ type: 'reparent', id: obj.id, newParentId });
+    }
+
     // --- Renderer-facing plumbing. Internal use only.
+
+    /** @internal Consumed once per frame by LitboxSceneRenderer, applied to the live SceneGraph/GPU resources. */
+    public getPendingStructuralOps(): readonly StructuralOp[] {
+        return this.pendingStructuralOps;
+    }
+
+    /** @internal Consumed once per frame by LitboxSceneRenderer, after it applies the ops above. */
+    public clearPendingStructuralOps(): void {
+        this.pendingStructuralOps = [];
+    }
 
     /** @internal Consumed once per frame by LitboxSceneRenderer. */
     public getDynamicFrameState(): {
@@ -143,6 +290,38 @@ export abstract class LitboxScene {
         this.lightFlags.clearDirty();
         this.spriteFlags.clearDirty();
         this.raytracedFlags.clearDirty();
+    }
+
+    // --- Structural authoring helpers.
+
+    /** Strict descendants of `id` (excludes `id` itself), depth-first, cycle-guarded - mirrors SceneGraph.getDescendantIds. */
+    private collectDescendantIds(id: number, result: number[] = [], visiting: Set<number> = new Set()): number[] {
+        if (visiting.has(id)) {
+            console.warn(`Litbox scene: cycle detected involving object id ${id} while collecting descendants.`);
+            return result;
+        }
+        visiting.add(id);
+        for (const obj of this.data.objects) {
+            if (obj.parentId === id) {
+                result.push(obj.id);
+                this.collectDescendantIds(obj.id, result, visiting);
+            }
+        }
+        visiting.delete(id);
+        return result;
+    }
+
+    /** Splits `items` by ownerId membership in `removedIds`, calling `onRemove` for each dropped entry and returning the survivors. */
+    private filterOwned<T extends { ownerId: number }>(items: T[], removedIds: Set<number>, onRemove: (item: T) => void): T[] {
+        const kept: T[] = [];
+        for (const item of items) {
+            if (removedIds.has(item.ownerId)) {
+                onRemove(item);
+            } else {
+                kept.push(item);
+            }
+        }
+        return kept;
     }
 
     // --- Name/path resolution.

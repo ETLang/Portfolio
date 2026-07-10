@@ -140,6 +140,24 @@ export class SpriteResources {
         }
     }
 
+    /**
+     * Destroys the GPU buffers for every sprite owned by an id in `ownerIds` and drops them from
+     * the draw list. Unlike updateFromScene, this never touches any surviving sprite's buffers,
+     * bind group, or texture - the targeted counterpart for structural destroy ops.
+     */
+    public removeByOwnerIds(ownerIds: Set<number>): void {
+        const kept: ResolvedSprite[] = [];
+        for (const resolved of this.sprites) {
+            if (!ownerIds.has(resolved.ownerId)) {
+                kept.push(resolved);
+                continue;
+            }
+            resolved.transformBuffer.destroy();
+            resolved.propertiesBuffer.destroy();
+        }
+        this.sprites = kept;
+    }
+
     /** Targeted re-upload of the transform (and CPU-side active-flag) for every sprite owned by `ownerId`. */
     public refreshTransform(ownerId: number, sceneGraph: SceneGraph): void {
         for (const resolved of this.sprites) {

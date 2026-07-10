@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LitboxScene } from '../litbox_scene.ts';
-import type { Color, PointLight, Scene, SceneObject, SceneSprite, Spotlight } from '../scene.ts';
+import type { Color, PointLight, Scene, SceneCamera, SceneObject, SceneSimulation, SceneSprite, Spotlight } from '../scene.ts';
 
 class TestScene extends LitboxScene {
     public static readonly jsonPath = 'test.json';
@@ -42,6 +42,14 @@ function makePointLight(ownerId: number): PointLight {
 
 function makeSpotlight(ownerId: number): Spotlight {
     return { ownerId, color: WHITE, intensity: 1, pinch: 0.5, bounces: 1 };
+}
+
+function makeCamera(ownerId: number): SceneCamera {
+    return { ownerId, verticalSize: 5, exposure: 1 };
+}
+
+function makeSimulation(ownerId: number): SceneSimulation {
+    return { ownerId, width: 64, height: 64, raysPerFrame: 1, integrationInterval: 1, photonBounces: 1 };
 }
 
 // Root
@@ -131,5 +139,138 @@ describe('LitboxScene dynamic/dirty marking', () => {
         expect(scene.getDynamicFrameState().transforms).toHaveLength(1);
         scene.clearFrameDirtyFlags();
         expect(scene.getDynamicFrameState().transforms).toHaveLength(0);
+    });
+});
+
+describe('LitboxScene.createObject', () => {
+    it('allocates a fresh id above the highest existing one and returns the live struct', () => {
+        const scene = new TestScene(makeFixtureScene()); // highest existing id is 6
+        const obj = scene.createObject({ name: 'New Object' });
+        expect(obj.id).toBe(7);
+        expect(obj.parentId).toBe(-1);
+        expect(scene.data.objects).toContain(obj);
+    });
+
+    it('resolves options.parent via the existing path resolution', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createObject({ name: 'Nested', parent: 'Left Wall' });
+        expect(obj.parentId).toBe(2); // 'Left Wall' id
+    });
+
+    it('is immediately resolvable by name for subsequent calls in the same onFrame', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.createObject({ name: 'New Object' });
+        expect(scene.makeTransformDynamic('New Object').name).toBe('New Object');
+    });
+
+    it('throws on a "/" in the name, without allocating an id', () => {
+        const scene = new TestScene(makeFixtureScene());
+        expect(() => scene.createObject({ name: 'Bad/Name' })).toThrow(/contains a "\/" character/);
+        const obj = scene.createObject({ name: 'Next' });
+        expect(obj.id).toBe(7); // id wasn't consumed by the failed call
+    });
+
+    it('records a pending create op', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createObject({ name: 'New Object' });
+        const ops = scene.getPendingStructuralOps();
+        expect(ops).toEqual([{ type: 'create', object: obj }]);
+    });
+});
+
+describe('LitboxScene.destroyObject', () => {
+    it('removes the object and its descendants from data.objects', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.destroyObject('Left Wall'); // owns Sprite (id 4)
+        expect(scene.data.objects.map(o => o.id)).toEqual([1, 3, 5, 6]);
+    });
+
+    it('removes owned sprites/lights/raytraced entries', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.destroyObject('Light Owner');
+        expect(scene.data.pointLights).toHaveLength(0);
+        expect(scene.data.spotlights).toHaveLength(0);
+    });
+
+    it('cleans nameIndex so resolvePath throws afterward', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.destroyObject('Left Wall');
+        expect(() => scene.makeTransformDynamic('Left Wall')).toThrow(/no SceneObject named/);
+    });
+
+    it('drops dynamic/dirty flags for anything destroyed', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.makeLightDynamic('Light Owner', 0);
+        expect(scene.getDynamicFrameState().lights).toHaveLength(1);
+
+        scene.destroyObject('Light Owner');
+
+        expect(scene.getDynamicFrameState().lights).toHaveLength(0);
+    });
+
+    it('records a pending destroy op with just the root id', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.destroyObject('Left Wall');
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'destroy', rootId: 2 }]);
+    });
+
+    it('throws without mutating data when the cascade owns a camera', () => {
+        const fixture = makeFixtureScene();
+        fixture.cameras.push(makeCamera(6)); // 'Light Owner'
+        const scene = new TestScene(fixture);
+
+        expect(() => scene.destroyObject('Light Owner')).toThrow(/camera or simulation/);
+        expect(scene.data.objects.map(o => o.id)).toContain(6);
+        expect(scene.getPendingStructuralOps()).toHaveLength(0);
+    });
+
+    it('throws without mutating data when the cascade owns a simulation', () => {
+        const fixture = makeFixtureScene();
+        fixture.simulations.push(makeSimulation(1)); // 'Root'
+        const scene = new TestScene(fixture);
+
+        expect(() => scene.destroyObject('Root')).toThrow(/camera or simulation/);
+        expect(scene.data.objects.map(o => o.id)).toContain(1);
+        expect(scene.getPendingStructuralOps()).toHaveLength(0);
+    });
+});
+
+describe('LitboxScene.reparentObject', () => {
+    it('updates parentId directly on the live struct', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.reparentObject('Left Wall/Sprite', 'Right Wall');
+        expect(scene.data.objects.find(o => o.id === 4)!.parentId).toBe(3);
+    });
+
+    it('moves an object to scene root when newParent is null', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.reparentObject('Left Wall', null);
+        expect(scene.data.objects.find(o => o.id === 2)!.parentId).toBe(-1);
+    });
+
+    it('throws on reparenting to itself, without mutating parentId', () => {
+        const scene = new TestScene(makeFixtureScene());
+        expect(() => scene.reparentObject('Left Wall', 'Left Wall')).toThrow(/itself/);
+        expect(scene.data.objects.find(o => o.id === 2)!.parentId).toBe(1);
+    });
+
+    it('throws on reparenting to its own descendant', () => {
+        const scene = new TestScene(makeFixtureScene());
+        expect(() => scene.reparentObject('Left Wall', 'Left Wall/Sprite')).toThrow(/descendant/);
+    });
+
+    it('records a pending reparent op', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.reparentObject('Left Wall/Sprite', 'Right Wall');
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'reparent', id: 4, newParentId: 3 }]);
+    });
+});
+
+describe('LitboxScene pending structural ops', () => {
+    it('clearPendingStructuralOps empties the queue', () => {
+        const scene = new TestScene(makeFixtureScene());
+        scene.createObject({ name: 'New Object' });
+        scene.clearPendingStructuralOps();
+        expect(scene.getPendingStructuralOps()).toEqual([]);
     });
 });

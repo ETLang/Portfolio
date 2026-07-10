@@ -83,6 +83,24 @@ describe('LightResources', () => {
         expect(new Float32Array(call.data)[0]).toBe(1); // color.r
     });
 
+    it('a second updateFromScene call with owner-filtered arrays shrinks the light set (used for structural destroy)', () => {
+        const device = createFakeGpuDevice();
+        const resources = new LightResources(device as unknown as GPUDevice);
+        const scene = makeScene();
+        const sceneGraph = new SceneGraph(scene);
+        resources.updateFromScene(scene, sceneGraph);
+        expect(resources.getCount()).toBe(2);
+
+        scene.pointLights = scene.pointLights.filter(l => l.ownerId !== 1); // simulate destroying owner 1
+        device.writeCalls = [];
+        resources.updateFromScene(scene, sceneGraph);
+
+        expect(resources.getCount()).toBe(1);
+        device.writeCalls = [];
+        resources.refreshProperties(2); // owner 2's spotlight is still present at its new flat index
+        expect(device.writeCalls).toHaveLength(1);
+    });
+
     it('no-ops for an owner with no lights', () => {
         const device = createFakeGpuDevice();
         const resources = new LightResources(device as unknown as GPUDevice);
