@@ -28,6 +28,15 @@ interface ActiveCamera {
  * HDR frame buffer that's finally tonemapped to the canvas. See the
  * project's litbox_scene_renderer plan doc for the full architecture
  * rationale.
+ *
+ * WGSL gotcha (confirmed on a Pixel 10 Pro, both Chrome and Brave): dynamically
+ * indexing a function-local array literal (`var x = array<T, N>(...); x[runtimeIndex]`)
+ * can silently corrupt geometry/output on some mobile GPU drivers, with zero validation
+ * error, exception, or device loss to catch it - see tonemap.wgsl's vertex_main for the
+ * workaround (branching instead of indexing). Prefer buffer-backed data (storage/uniform/
+ * workgroup) for anything indexed at runtime; reserve this rule for vertex, fragment, and
+ * compute shaders alike, and confirm any new shader trick on real mobile hardware, not just
+ * desktop.
  */
 export class LitboxSceneRenderer {
     private canvas: HTMLCanvasElement;
@@ -107,6 +116,12 @@ export class LitboxSceneRenderer {
             }
             this.adapter = adapter;
             this.device = await this.adapter.requestDevice();
+            this.device.addEventListener('uncapturederror', (event) => {
+                console.error('WebGPU device error:', (event as GPUUncapturedErrorEvent).error.message);
+            });
+            this.device.lost.then((info) => {
+                console.error(`WebGPU device lost (${info.reason}):`, info.message);
+            });
         } catch (error) {
             console.error("Error initializing WebGPU:", error);
             return false;

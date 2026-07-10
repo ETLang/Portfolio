@@ -3,9 +3,10 @@ import tonemapShaderCode from './shaders/tonemap.wgsl?raw';
 /**
  * Final pass: HDR frame texture -> swapchain. This is the one pass that is
  * genuinely fullscreen/screen-aligned (unlike the simulation composite),
- * so it uses a fullscreen triangle. Applies exposure now; the precise
- * tonemap operator is a placeholder (simple exposure-scaled clamp) to be
- * refined later.
+ * so it draws a fullscreen quad (2 triangles - see tonemap.wgsl for why not
+ * a single oversized triangle). Applies exposure now; the precise tonemap
+ * operator is a placeholder (simple exposure-scaled clamp) to be refined
+ * later.
  */
 export class TonemapResources {
     private device: GPUDevice;
@@ -60,6 +61,6 @@ export class TonemapResources {
 
         passEncoder.setPipeline(this.pipeline);
         passEncoder.setBindGroup(0, this.cachedBindGroup!);
-        passEncoder.draw(3);
+        passEncoder.draw(6);
     }
 }
