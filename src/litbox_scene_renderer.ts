@@ -72,6 +72,17 @@ export class LitboxSceneRenderer {
      */
     public debugSolidColor = false;
 
+    /**
+     * Exposure fed to the tonemap pass (see tonemap.wgsl). Seeded from the active camera's
+     * own exposure value whenever the active camera changes (including first selection on
+     * scene load) - see syncExposureToActiveCamera. Free to reassign afterwards (e.g. from
+     * a UI slider) as a modifier on top of that starting point.
+     */
+    public exposureOverride: number | null = null;
+
+    /** Owner id of the camera exposureOverride was last synced to - see syncExposureToActiveCamera. */
+    private lastActiveCameraOwnerId: number | null = null;
+
     constructor(canvas?: HTMLCanvasElement) {
         this.canvas = canvas || document.createElement('canvas');
         if (!canvas) {
@@ -202,6 +213,11 @@ export class LitboxSceneRenderer {
         const scene = this.activeScene.data;
         this.sceneGraph = new SceneGraph(scene);
         this.textureCache.loadScene(this.activeScene.baseUrl, scene.textureAtlasKeys);
+
+        // Force the next getActiveCamera() call to resync exposureOverride: ownerIds are
+        // scene-local, so a new scene's camera could coincidentally reuse the previous
+        // scene's active camera's id and be mistaken for "the same camera, no change".
+        this.lastActiveCameraOwnerId = null;
 
         this.lightResources.updateFromScene(scene, this.sceneGraph, this.transformResources);
         await this.raytracedResources.updateFromScene(scene, this.sceneGraph, this.textureCache);
@@ -380,7 +396,12 @@ export class LitboxSceneRenderer {
         const sceneGraph = this.sceneGraph;
         const camera = scene.cameras.find((c: SceneCamera) => sceneGraph.isActiveInHierarchy(c.ownerId));
         if (!camera) {
+            this.lastActiveCameraOwnerId = null;
             return null;
+        }
+        if (camera.ownerId !== this.lastActiveCameraOwnerId) {
+            this.lastActiveCameraOwnerId = camera.ownerId;
+            this.exposureOverride = camera.exposure;
         }
         return { camera, worldTransform: sceneGraph.getWorldTransform(camera.ownerId) };
     }
@@ -390,7 +411,7 @@ export class LitboxSceneRenderer {
         let exposure = 0;
 
         if (activeCamera) {
-            exposure = activeCamera.camera.exposure;
+            exposure = this.exposureOverride ?? activeCamera.camera.exposure;
 
             const view = mat4.create();
             mat4.invert(view, activeCamera.worldTransform);
