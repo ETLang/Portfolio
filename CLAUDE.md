@@ -20,3 +20,23 @@
     is the safe fallback.
   - Any new shader trick like this needs to be confirmed on real mobile hardware, not
     just desktop - this class of bug produces no signal in desktop-only testing.
+
+## WebGPU JS-API gotchas (mobile)
+
+- **Never use `GPUQueue.copyExternalImageToTexture` to upload an `ImageBitmap` on mobile.**
+  Confirmed on a Pixel 10 Pro XL (Imagination PowerVR GPU, Chrome for Android) that it
+  silently leaves the destination texture black/empty - texture creation succeeds, the copy
+  call raises no validation error or exception, and `textureSample` just reads back zero
+  everywhere. Works fine on desktop (Windows/D3D12), which is exactly why this class of bug
+  is dangerous - it produces zero signal in desktop-only testing, same as the WGSL indexing
+  gotcha above. Root-caused by isolating it in a standalone test page
+  (`copyExternalImageToTexture` vs `writeTexture`, same decoded pixels, side by side) since
+  there was no error to trace from.
+  - Fix: decode the `ImageBitmap` to raw RGBA bytes via a 2D canvas (`drawImage` +
+    `getImageData`), then upload with `device.queue.writeTexture(...)` instead. See
+    `src/litbox/texture_cache.ts`'s `loadImageTexture`.
+  - `writeTexture` doesn't need `GPUTextureUsage.RENDER_ATTACHMENT` on the destination
+    texture; `copyExternalImageToTexture` does (Chrome enforces this - it's implemented as
+    an internal blit). Drop the flag when migrating a texture off the old path.
+  - Any future image-upload code path needs the same real-mobile-hardware confirmation
+    before being trusted - this bug and the WGSL one above are both invisible without it.
