@@ -131,17 +131,32 @@ export class TextureCache {
         }
     }
 
+    // Deliberately not copyExternalImageToTexture: confirmed on a Pixel 10 Pro XL (Imagination
+    // PowerVR GPU, Chrome for Android) that it silently leaves the destination texture
+    // black/empty - no validation error, no exception, nothing to catch it - while writeTexture
+    // with the same decoded pixels works correctly. See the class doc comment on
+    // LitboxSceneRenderer for this project's other confirmed mobile-driver-only rendering bug.
     private async loadImageTexture(url: string): Promise<GPUTexture> {
         const response = await fetch(url);
         const blob = await response.blob();
         const bitmap = await createImageBitmap(blob);
 
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context2d = canvas.getContext('2d')!;
+        context2d.drawImage(bitmap, 0, 0);
+        const pixels = context2d.getImageData(0, 0, bitmap.width, bitmap.height).data;
+
         const texture = this.device.createTexture({
             size: [bitmap.width, bitmap.height],
             format: 'rgba8unorm',
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         });
-        this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [bitmap.width, bitmap.height]);
+        this.device.queue.writeTexture(
+            { texture },
+            pixels,
+            { bytesPerRow: bitmap.width * 4, rowsPerImage: bitmap.height },
+            [bitmap.width, bitmap.height],
+        );
         return texture;
     }
 
