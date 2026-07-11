@@ -3,14 +3,17 @@ import type {
     AnyLight,
     DirectionalLight,
     LaserLight,
+    LightKind,
     PointLight,
     Scene,
     Spotlight,
 } from './scene.ts';
 import type { SceneGraph } from './scene_graph.ts';
+import { Entry, PackedUniformArray } from './packed_uniform_array.ts';
+import type { TransformResources } from './transform_resources.ts';
 
 // erasableSyntaxOnly forbids `enum` - use a plain lookup instead.
-const LIGHT_KIND: Record<'point' | 'spot' | 'laser' | 'directional' | 'ambient', number> = {
+const LIGHT_KIND: Record<LightKind, number> = {
     point: 0,
     spot: 1,
     laser: 2,
@@ -18,37 +21,32 @@ const LIGHT_KIND: Record<'point' | 'spot' | 'laser' | 'directional' | 'ambient',
     ambient: 4,
 };
 
-// Must match the LightTransform/LightProperties struct strides in
-// simulation-consuming WGSL shaders (once written).
-const LIGHT_TRANSFORM_STRIDE_BYTES = 32;
-const LIGHT_PROPERTIES_STRIDE_BYTES = 32;
+// Must match the LightProperties struct stride in simulation-consuming WGSL shaders (once written).
+const LIGHT_PROPERTIES_STRIDE_BYTES = 48;
 
-type Entry = AnyLight & { kind: number; pinch: number };
+interface LightRecord {
+    light: AnyLight;
+    kind: number;
+    propertiesEntry: Entry;
+}
 
 /**
- * Consolidated storage for all 5 light types. Lights have no draw behavior
- * of their own (pure simulation input), so rather than 5 near-empty manager
- * classes this builds two flattened GPU storage buffers (one unified
- * transform struct and one unified properties struct per light) for the
- * future simulation pass to consume, plus per-kind CPU-side accessors for
- * anything that needs typed fields.
+ * Consolidated storage for all 5 light types. Lights have no draw behavior of their own (pure
+ * simulation input), so rather than 5 near-empty manager classes this builds one packed
+ * properties array (color, kind, intensity, bounces, pinch, plus a transformIndex pointing into
+ * the shared TransformResources array - see its class doc) for a future simulation pass to bind
+ * directly as a storage buffer. No index buffer, no bind group: lights are consumed in bulk by
+ * whatever future simulation shader iterates the whole array, not drawn per-instance.
  *
- * Transform and properties are deliberately separate buffers: a light's
- * worldPosition/direction only change when its owning SceneObject's transform
- * does (see LitboxScene's transform dynamic/dirty marking, which cascades to
- * every light owned anywhere in the affected subtree), while color/intensity/
- * bounces/pinch change only when the light itself is marked dynamic/dirty -
- * two independent update schedules that would otherwise force an unrelated
- * rewrite of one when only the other changed.
+ * Position/direction are deliberately not stored here at all (unlike the old per-manager
+ * transform buffer this replaces): a light's worldPosition/direction are derived by that future
+ * shader from `transforms[properties[i].transformIndex]`, the same shared array
+ * sprites/raytraced objects use, so a light sharing its owner with e.g. a sprite shares one
+ * transform update between them.
  */
 export class LightResources {
-    private device: GPUDevice;
-    private transformBuffer: GPUBuffer;
-    private propertiesBuffer: GPUBuffer;
-    private count = 0;
-
-    private flatEntries: Entry[] = [];
-    private ownerIndex = new Map<number, number[]>();
+    private array: PackedUniformArray<LightRecord>;
+    private records = new Map<AnyLight, LightRecord>();
 
     private pointLights: PointLight[] = [];
     private spotlights: Spotlight[] = [];
@@ -57,21 +55,19 @@ export class LightResources {
     private ambientLights: AmbientLight[] = [];
 
     constructor(device: GPUDevice) {
-        this.device = device;
-        this.transformBuffer = this.createBuffer(1, LIGHT_TRANSFORM_STRIDE_BYTES);
-        this.propertiesBuffer = this.createBuffer(1, LIGHT_PROPERTIES_STRIDE_BYTES);
+        this.array = new PackedUniformArray<LightRecord>(device, LIGHT_PROPERTIES_STRIDE_BYTES);
     }
 
-    public getTransformBuffer(): GPUBuffer {
-        return this.transformBuffer;
+    public getBuffer(): GPUBuffer {
+        return this.array.getBuffer();
     }
 
-    public getPropertiesBuffer(): GPUBuffer {
-        return this.propertiesBuffer;
+    public onBufferReplaced(cb: () => void): void {
+        this.array.onBufferReplaced(cb);
     }
 
     public getCount(): number {
-        return this.count;
+        return this.array.getCount();
     }
 
     public getPointLights(): readonly PointLight[] {
@@ -94,120 +90,96 @@ export class LightResources {
         return this.ambientLights;
     }
 
-    public updateFromScene(scene: Scene, sceneGraph: SceneGraph): void {
+    public updateFromScene(scene: Scene, sceneGraph: SceneGraph, transformResources: TransformResources): void {
+        for (const light of [...this.records.keys()]) {
+            this.removeLight(light, transformResources);
+        }
+
         this.pointLights = scene.pointLights;
         this.spotlights = scene.spotlights;
         this.laserLights = scene.laserLights;
         this.directionalLights = scene.directionalLights;
         this.ambientLights = scene.ambientLights;
 
-        this.flatEntries = [
-            ...this.pointLights.map(l => ({ ...l, kind: LIGHT_KIND.point, pinch: 0 })),
-            ...this.spotlights.map(l => ({ ...l, kind: LIGHT_KIND.spot, pinch: l.pinch })),
-            ...this.laserLights.map(l => ({ ...l, kind: LIGHT_KIND.laser, pinch: 0 })),
-            ...this.directionalLights.map(l => ({ ...l, kind: LIGHT_KIND.directional, pinch: 0 })),
-            ...this.ambientLights.map(l => ({ ...l, kind: LIGHT_KIND.ambient, pinch: 0 })),
-        ];
+        for (const light of this.pointLights) this.addLight('point', light, sceneGraph, transformResources);
+        for (const light of this.spotlights) this.addLight('spot', light, sceneGraph, transformResources);
+        for (const light of this.laserLights) this.addLight('laser', light, sceneGraph, transformResources);
+        for (const light of this.directionalLights) this.addLight('directional', light, sceneGraph, transformResources);
+        for (const light of this.ambientLights) this.addLight('ambient', light, sceneGraph, transformResources);
+    }
 
-        this.ownerIndex = new Map();
-        this.flatEntries.forEach((entry, i) => {
-            const indices = this.ownerIndex.get(entry.ownerId);
-            if (indices) {
-                indices.push(i);
-            } else {
-                this.ownerIndex.set(entry.ownerId, [i]);
-            }
-        });
+    /**
+     * Resolves and uploads a single newly-created light, appending it without touching any
+     * existing light's entry - the targeted counterpart (for a structural create op) to
+     * updateFromScene's full rebuild.
+     */
+    public addLight(kind: LightKind, light: AnyLight, sceneGraph: SceneGraph, transformResources: TransformResources): void {
+        const transformEntry = transformResources.ensureEntry(light.ownerId, sceneGraph);
+        const kindValue = LIGHT_KIND[kind];
+        const propertiesEntry = this.array.insertStatic(
+            (view, byteOffset) => writeProperties(view, byteOffset, light, kindValue, transformEntry.index),
+        );
+        this.records.set(light, { light, kind: kindValue, propertiesEntry });
+    }
 
-        this.count = this.flatEntries.length;
-        const elementCount = Math.max(1, this.flatEntries.length);
-        if (this.transformBuffer.size < elementCount * LIGHT_TRANSFORM_STRIDE_BYTES) {
-            this.transformBuffer.destroy();
-            this.transformBuffer = this.createBuffer(elementCount, LIGHT_TRANSFORM_STRIDE_BYTES);
-        }
-        if (this.propertiesBuffer.size < elementCount * LIGHT_PROPERTIES_STRIDE_BYTES) {
-            this.propertiesBuffer.destroy();
-            this.propertiesBuffer = this.createBuffer(elementCount, LIGHT_PROPERTIES_STRIDE_BYTES);
-        }
-
-        if (this.flatEntries.length === 0) {
+    /**
+     * Removes exactly one light's entry (matched by reference) and releases its transform
+     * reference. The targeted counterpart (for a destroyLight structural op) to
+     * updateFromScene's full rebuild. No-op if `light` isn't tracked.
+     */
+    public removeLight(light: AnyLight, transformResources: TransformResources): void {
+        const record = this.records.get(light);
+        if (!record) {
             return;
         }
-
-        const transformData = new ArrayBuffer(this.flatEntries.length * LIGHT_TRANSFORM_STRIDE_BYTES);
-        const transformView = new DataView(transformData);
-        const propertiesData = new ArrayBuffer(this.flatEntries.length * LIGHT_PROPERTIES_STRIDE_BYTES);
-        const propertiesView = new DataView(propertiesData);
-
-        this.flatEntries.forEach((entry, i) => {
-            this.writeTransformInto(transformView, i * LIGHT_TRANSFORM_STRIDE_BYTES, entry, sceneGraph);
-            this.writePropertiesInto(propertiesView, i * LIGHT_PROPERTIES_STRIDE_BYTES, entry);
-        });
-
-        this.device.queue.writeBuffer(this.transformBuffer, 0, transformData);
-        this.device.queue.writeBuffer(this.propertiesBuffer, 0, propertiesData);
+        this.array.remove(record.propertiesEntry);
+        this.records.delete(light);
+        transformResources.releaseEntry(light.ownerId);
     }
 
-    /** Targeted re-upload of the transform data for every light owned by `ownerId`. No-ops if the owner has no lights. */
-    public refreshTransform(ownerId: number, sceneGraph: SceneGraph): void {
-        const indices = this.ownerIndex.get(ownerId);
-        if (!indices) {
+    /** Targeted re-upload of the properties for `light`. No-op if untracked. */
+    public refreshProperties(light: AnyLight, transformResources: TransformResources): void {
+        const record = this.records.get(light);
+        if (!record) {
             return;
         }
-        for (const i of indices) {
-            const scratch = new ArrayBuffer(LIGHT_TRANSFORM_STRIDE_BYTES);
-            this.writeTransformInto(new DataView(scratch), 0, this.flatEntries[i], sceneGraph);
-            this.device.queue.writeBuffer(this.transformBuffer, i * LIGHT_TRANSFORM_STRIDE_BYTES, scratch);
-        }
+        const transformEntry = transformResources.getEntry(light.ownerId);
+        const transformIndex = transformEntry ? transformEntry.index : 0;
+        this.array.writeEntry(
+            record.propertiesEntry,
+            (view, byteOffset) => writeProperties(view, byteOffset, light, record.kind, transformIndex),
+        );
     }
 
-    /** Targeted re-upload of the properties data for every light owned by `ownerId`. No-ops if the owner has no lights. */
-    public refreshProperties(ownerId: number): void {
-        const indices = this.ownerIndex.get(ownerId);
-        if (!indices) {
+    /** Moves `light`'s properties entry into the dynamic region. No-op if untracked, or if already dynamic. */
+    public markDynamic(light: AnyLight): void {
+        const record = this.records.get(light);
+        if (!record) {
             return;
         }
-        for (const i of indices) {
-            const scratch = new ArrayBuffer(LIGHT_PROPERTIES_STRIDE_BYTES);
-            this.writePropertiesInto(new DataView(scratch), 0, this.flatEntries[i]);
-            this.device.queue.writeBuffer(this.propertiesBuffer, i * LIGHT_PROPERTIES_STRIDE_BYTES, scratch);
-        }
+        this.array.markDynamic(record.propertiesEntry);
     }
 
-    private writeTransformInto(view: DataView, base: number, entry: Entry, sceneGraph: SceneGraph): void {
-        const world = sceneGraph.getWorldTransform(entry.ownerId);
-        const obj = sceneGraph.getObject(entry.ownerId);
-        const rotationRadians = ((obj?.rotation ?? 0) * Math.PI) / 180;
-
-        // worldPosition: vec4 (xyz + pad)
-        view.setFloat32(base + 0, world[12], true);
-        view.setFloat32(base + 4, world[13], true);
-        view.setFloat32(base + 8, world[14], true);
-        view.setFloat32(base + 12, 0, true);
-        // direction: vec4 (xyz + pad), derived from owner rotation
-        view.setFloat32(base + 16, Math.cos(rotationRadians), true);
-        view.setFloat32(base + 20, Math.sin(rotationRadians), true);
-        view.setFloat32(base + 24, 0, true);
-        view.setFloat32(base + 28, 0, true);
+    public flush(): void {
+        this.array.flush();
     }
+}
 
-    private writePropertiesInto(view: DataView, base: number, entry: Entry): void {
-        // color: vec4
-        view.setFloat32(base + 0, entry.color.r, true);
-        view.setFloat32(base + 4, entry.color.g, true);
-        view.setFloat32(base + 8, entry.color.b, true);
-        view.setFloat32(base + 12, entry.color.a, true);
-        // kind, intensity, bounces, pinch
-        view.setUint32(base + 16, entry.kind, true);
-        view.setFloat32(base + 20, entry.intensity, true);
-        view.setFloat32(base + 24, entry.bounces, true);
-        view.setFloat32(base + 28, entry.pinch, true);
-    }
+function isSpotlight(light: AnyLight): light is Spotlight {
+    return 'pinch' in light;
+}
 
-    private createBuffer(elementCount: number, strideBytes: number): GPUBuffer {
-        return this.device.createBuffer({
-            size: elementCount * strideBytes,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        });
-    }
+function writeProperties(view: DataView, byteOffset: number, light: AnyLight, kind: number, transformIndex: number): void {
+    // color: vec4
+    view.setFloat32(byteOffset + 0, light.color.r, true);
+    view.setFloat32(byteOffset + 4, light.color.g, true);
+    view.setFloat32(byteOffset + 8, light.color.b, true);
+    view.setFloat32(byteOffset + 12, light.color.a, true);
+    // transformIndex, kind, intensity, bounces, pinch
+    view.setUint32(byteOffset + 16, transformIndex, true);
+    view.setUint32(byteOffset + 20, kind, true);
+    view.setFloat32(byteOffset + 24, light.intensity, true);
+    view.setFloat32(byteOffset + 28, light.bounces, true);
+    view.setFloat32(byteOffset + 32, isSpotlight(light) ? light.pinch : 0, true);
+    // Bytes 36-47 are unused padding (WGSL rounds the struct up to a 16-byte multiple).
 }

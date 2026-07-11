@@ -29,6 +29,7 @@ function makeSprite(ownerId: number): SceneSprite {
     return {
         ownerId,
         layer: 0,
+        sortOrder: 0,
         opacity: 1,
         image: '',
         colorMod: WHITE,
@@ -165,6 +166,16 @@ describe('LitboxScene dynamic/dirty marking', () => {
         scene.clearFrameDirtyFlags();
         expect(scene.getDynamicFrameState().transforms).toHaveLength(0);
     });
+
+    it('persistentTransforms includes dynamic entries but excludes dirty-only entries', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const dynamicObj = scene.makeTransformDynamic('Root');
+        scene.markTransformDirty('Left Wall');
+
+        const state = scene.getDynamicFrameState();
+        expect(state.transforms).toHaveLength(2); // dynamic ∪ dirty
+        expect(state.persistentTransforms).toEqual([dynamicObj]); // dirty-only entry excluded
+    });
 });
 
 describe('LitboxScene.createObject', () => {
@@ -278,11 +289,11 @@ describe('LitboxScene create<Light>', () => {
         expect(scene.data.ambientLights.some(l => l.ownerId === obj.id)).toBe(true);
     });
 
-    it('records a pending create op carrying both the object and the light', () => {
+    it('records a pending create op carrying the object, the light, and its kind', () => {
         const scene = new TestScene(makeFixtureScene());
         const obj = scene.createPointLight({ name: 'New Light' });
         const light = scene.data.pointLights.find(l => l.ownerId === obj.id);
-        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'create', object: obj, light }]);
+        expect(scene.getPendingStructuralOps()).toEqual([{ type: 'create', object: obj, light, lightKind: 'point' }]);
     });
 });
 
