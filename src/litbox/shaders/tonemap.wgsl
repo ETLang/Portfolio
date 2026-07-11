@@ -1,10 +1,36 @@
 // Final pass: HDR frame buffer -> swapchain. Fullscreen triangle (this pass, unlike the
-// simulation composite, genuinely is screen-aligned). Applies exposure; the precise
-// tonemap operator is a placeholder (simple exposure-scaled clamp) - refined later.
+// simulation composite, genuinely is screen-aligned). Applies a UE5-style filmic tonemap:
+// smoothstep(blackPoint, whitePoint, log10(x) + exposure).
 
 struct TonemapUniform {
     exposure: f32,
 }
+
+struct ToneMappingShape {
+    exposure: f32,
+    whitePoint: vec3<f32>,
+    blackPoint: vec3<f32>,
+}
+
+fn toneMapDefaultShape() -> ToneMappingShape {
+    var shape: ToneMappingShape;
+    shape.exposure = 0.0;
+    shape.whitePoint = vec3<f32>(2.0);
+    shape.blackPoint = vec3<f32>(-4.0);
+    return shape;
+}
+
+// WGSL has no log10 builtin; derive it from log2.
+fn log10(x: vec3<f32>) -> vec3<f32> {
+    return log2(x) / log2(10.0);
+}
+
+// Analogous to UE5's standard tone mapping. Good general-purpose curve, but it makes
+// things kinda feel like UE5...
+fn toneMapUE5(x: vec3<f32>, shape: ToneMappingShape) -> vec3<f32> {
+    return smoothstep(shape.blackPoint, shape.whitePoint, log10(x) + shape.exposure);
+}
+
 @group(0) @binding(0) var<uniform> tonemapUniform: TonemapUniform;
 @group(0) @binding(1) var hdrTex: texture_2d<f32>;
 @group(0) @binding(2) var hdrSampler: sampler;
@@ -43,7 +69,9 @@ fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 @fragment
 fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let hdr = textureSample(hdrTex, hdrSampler, in.uv).rgb * exp2(tonemapUniform.exposure);
-    let mapped = clamp(hdr, vec3<f32>(0.0), vec3<f32>(1.0));
+    let hdr = textureSample(hdrTex, hdrSampler, in.uv).rgb;
+    var shape = toneMapDefaultShape();
+    shape.exposure = tonemapUniform.exposure;
+    let mapped = toneMapUE5(hdr, shape);
     return vec4<f32>(mapped, 1.0);
 }

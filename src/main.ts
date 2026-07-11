@@ -77,6 +77,7 @@ const viewContent = {
             <h3>Litbox Config</h3>
             <p>Rays/Pixel: <input type="range" min="1" max="100" value="50" class="slider"></p>
             <p>Bounce Depth: <input type="range" min="1" max="10" value="5" class="slider"></p>
+            <p>Exposure: <input type="range" id="exposure-slider" min="-4" max="4" step="0.1" value="0" class="slider"></p>
         `,
     },
     fractals: {
@@ -136,6 +137,13 @@ sidebarPane.addEventListener('click', async (e: MouseEvent) => {
         e.preventDefault();
         // This is a link to an internal "activity", so switch views instead of navigating.
         await updateView('about');
+    }
+});
+
+sidebarPane.addEventListener('input', (e: Event) => {
+    const target = e.target as HTMLElement;
+    if (target.id === 'exposure-slider' && litboxRenderer) {
+        litboxRenderer.exposureOverride = parseFloat((target as HTMLInputElement).value);
     }
 });
 

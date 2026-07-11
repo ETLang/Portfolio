@@ -4,9 +4,9 @@ import tonemapShaderCode from './shaders/tonemap.wgsl?raw';
  * Final pass: HDR frame texture -> swapchain. This is the one pass that is
  * genuinely fullscreen/screen-aligned (unlike the simulation composite),
  * so it draws a fullscreen quad (2 triangles - see tonemap.wgsl for why not
- * a single oversized triangle). Applies exposure now; the precise tonemap
- * operator is a placeholder (simple exposure-scaled clamp) to be refined
- * later.
+ * a single oversized triangle). Applies a UE5-style filmic tonemap curve;
+ * exposure is added in log10 space (not an exp2 pre-multiply), so its
+ * effective scale differs from a plain exposure stop.
  */
 export class TonemapResources {
     private device: GPUDevice;
