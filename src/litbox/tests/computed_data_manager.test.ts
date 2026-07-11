@@ -155,4 +155,75 @@ describe('ComputedDataManager', () => {
             expect(after).not.toBe(pooled);
         });
     });
+
+    describe('idle sweep', () => {
+        it('purgeStale destroys and evicts a released resource once it has been idle longer than maxIdleMs', () => {
+            const device = createFakeGpuDevice();
+            let clock = 0;
+            const manager = new ComputedDataManager(device as unknown as GPUDevice, 5000, () => clock);
+
+            const texture = manager.acquireTexture(16, 16, 'rgba8unorm', GPUTextureUsage.TEXTURE_BINDING);
+            const buffer = manager.acquireBuffer(32, GPUBufferUsage.STORAGE);
+            manager.releaseTexture(texture);
+            manager.releaseBuffer(buffer);
+
+            clock = 4999;
+            manager.purgeStale();
+            expect((texture.texture as unknown as FakeGpuTexture).destroyed).toBe(false);
+            expect((buffer.buffer as unknown as FakeGpuBuffer).destroyed).toBe(false);
+
+            clock = 5001;
+            manager.purgeStale();
+            expect((texture.texture as unknown as FakeGpuTexture).destroyed).toBe(true);
+            expect((buffer.buffer as unknown as FakeGpuBuffer).destroyed).toBe(true);
+
+            const newTexture = manager.acquireTexture(16, 16, 'rgba8unorm', GPUTextureUsage.TEXTURE_BINDING);
+            const newBuffer = manager.acquireBuffer(32, GPUBufferUsage.STORAGE);
+            expect(newTexture).not.toBe(texture);
+            expect(newBuffer).not.toBe(buffer);
+        });
+
+        it('does not purge a resource that is still within its idle window', () => {
+            const device = createFakeGpuDevice();
+            let clock = 0;
+            const manager = new ComputedDataManager(device as unknown as GPUDevice, 5000, () => clock);
+
+            const texture = manager.acquireTexture(16, 16, 'rgba8unorm', GPUTextureUsage.TEXTURE_BINDING);
+            manager.releaseTexture(texture);
+
+            clock = 1000;
+            manager.purgeStale();
+
+            const reused = manager.acquireTexture(16, 16, 'rgba8unorm', GPUTextureUsage.TEXTURE_BINDING);
+            expect(reused).toBe(texture);
+        });
+
+        it('never destroys a resource that is currently acquired (not released)', () => {
+            const device = createFakeGpuDevice();
+            let clock = 0;
+            const manager = new ComputedDataManager(device as unknown as GPUDevice, 5000, () => clock);
+
+            const texture = manager.acquireTexture(16, 16, 'rgba8unorm', GPUTextureUsage.TEXTURE_BINDING);
+
+            clock = 1_000_000;
+            manager.purgeStale();
+
+            expect((texture.texture as unknown as FakeGpuTexture).destroyed).toBe(false);
+        });
+
+        it('sweeps opportunistically during acquire/release, throttled to at most once per second', () => {
+            const device = createFakeGpuDevice();
+            let clock = 0;
+            const manager = new ComputedDataManager(device as unknown as GPUDevice, 5000, () => clock);
+
+            const stale = manager.acquireTexture(16, 16, 'rgba8unorm', GPUTextureUsage.TEXTURE_BINDING);
+            manager.releaseTexture(stale);
+
+            clock = 5001;
+            // First activity after the throttle window triggers the sweep automatically.
+            manager.acquireBuffer(32, GPUBufferUsage.STORAGE);
+
+            expect((stale.texture as unknown as FakeGpuTexture).destroyed).toBe(true);
+        });
+    });
 });

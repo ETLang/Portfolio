@@ -11,9 +11,15 @@
  * *Resources classes own their resources directly and aren't expected to route through this).
  *
  * Release does not destroy the underlying GPU object - it's handed back for a future
- * acquire() with a matching descriptor. Only purge() actually calls destroy(). Callers must
- * treat a released ComputedTexture/ComputedBuffer (and any view obtained from it) as invalid
- * immediately after releasing it - null out any reference you're holding.
+ * acquire() with a matching descriptor. Only purge() and the idle sweep (see purgeStale())
+ * actually call destroy(). Callers must treat a released ComputedTexture/ComputedBuffer (and
+ * any view obtained from it) as invalid immediately after releasing it - null out any
+ * reference you're holding.
+ *
+ * Released resources that sit unused for more than maxIdleMs (5 seconds by default) are
+ * destroyed automatically. This sweep piggybacks on acquire/release calls rather than running
+ * on a timer, so it only actually runs (and only at most once per second) when the manager is
+ * in active use - a manager that goes quiet simply stops sweeping until activity resumes.
  */
 
 function textureKey(width: number, height: number, format: GPUTextureFormat, usage: GPUTextureUsageFlags, mipLevelCount: number): string {
@@ -27,6 +33,18 @@ function bufferKey(size: number, usage: GPUBufferUsageFlags): string {
 /** WebGPU requires certain buffer operations' sizes to be a multiple of 4 bytes; round up defensively for every pooled buffer. */
 function align4(size: number): number {
     return Math.ceil(size / 4) * 4;
+}
+
+/** Resources released and left unused for longer than this are destroyed by the idle sweep. */
+const DEFAULT_MAX_IDLE_MS = 5000;
+
+/** The idle sweep is opportunistic (piggybacked on acquire/release calls), so throttle it to run at most this often rather than on every call. */
+const MIN_SWEEP_INTERVAL_MS = 1000;
+
+/** A pooled resource plus the timestamp it was released at, used by the idle sweep to find resources that have sat unused too long. */
+interface PoolEntry<T> {
+    resource: T;
+    releasedAt: number;
 }
 
 /** A pooled 2D GPUTexture plus its default full view and any per-mip views taken from it. */
@@ -77,17 +95,25 @@ export class ComputedBuffer {
 
 export class ComputedDataManager {
     private device: GPUDevice;
-    private texturePool = new Map<string, ComputedTexture[]>();
-    private bufferPool = new Map<string, ComputedBuffer[]>();
+    private texturePool = new Map<string, PoolEntry<ComputedTexture>[]>();
+    private bufferPool = new Map<string, PoolEntry<ComputedBuffer>[]>();
+    private maxIdleMs: number;
+    private now: () => number;
+    private lastSweepAt = 0;
 
-    constructor(device: GPUDevice) {
+    /** `now` defaults to performance.now() and is only overridden in tests, to drive the idle sweep without relying on real elapsed time. */
+    constructor(device: GPUDevice, maxIdleMs = DEFAULT_MAX_IDLE_MS, now: () => number = () => performance.now()) {
         this.device = device;
+        this.maxIdleMs = maxIdleMs;
+        this.now = now;
     }
 
     /** Acquires a pooled 2D texture matching this exact descriptor, reusing a previously-released one if one is available. */
     public acquireTexture(width: number, height: number, format: GPUTextureFormat, usage: GPUTextureUsageFlags, mipLevelCount = 1): ComputedTexture {
+        this.sweepIfDue(this.now());
+
         const key = textureKey(width, height, format, usage, mipLevelCount);
-        const reused = this.texturePool.get(key)?.pop();
+        const reused = this.texturePool.get(key)?.pop()?.resource;
         if (reused) {
             return reused;
         }
@@ -103,20 +129,25 @@ export class ComputedDataManager {
 
     /** Returns `pooled` to the pool for a future acquireTexture() with a matching descriptor. Do not use `pooled` (or any view taken from it) again afterward. */
     public releaseTexture(pooled: ComputedTexture): void {
+        const now = this.now();
+        this.sweepIfDue(now);
+
         const key = textureKey(pooled.width, pooled.height, pooled.format, pooled.usage, pooled.mipLevelCount);
         let pool = this.texturePool.get(key);
         if (!pool) {
             pool = [];
             this.texturePool.set(key, pool);
         }
-        pool.push(pooled);
+        pool.push({ resource: pooled, releasedAt: now });
     }
 
     /** Acquires a pooled buffer of at least `size` bytes with the given usage flags, reusing a previously-released one if one is available. Its contents are whatever was last written to it - callers needing a specific initial value should use acquireBufferWithData or write it themselves. */
     public acquireBuffer(size: number, usage: GPUBufferUsageFlags): ComputedBuffer {
+        this.sweepIfDue(this.now());
+
         const alignedSize = align4(size);
         const key = bufferKey(alignedSize, usage);
-        const reused = this.bufferPool.get(key)?.pop();
+        const reused = this.bufferPool.get(key)?.pop()?.resource;
         if (reused) {
             return reused;
         }
@@ -134,27 +165,62 @@ export class ComputedDataManager {
 
     /** Returns `pooled` to the pool for a future acquireBuffer()/acquireBufferWithData() with a matching size/usage. Do not use `pooled` again afterward. */
     public releaseBuffer(pooled: ComputedBuffer): void {
+        const now = this.now();
+        this.sweepIfDue(now);
+
         const key = bufferKey(pooled.size, pooled.usage);
         let pool = this.bufferPool.get(key);
         if (!pool) {
             pool = [];
             this.bufferPool.set(key, pool);
         }
-        pool.push(pooled);
+        pool.push({ resource: pooled, releasedAt: now });
+    }
+
+    /** Runs purgeStale() if it hasn't run in the last MIN_SWEEP_INTERVAL_MS - called opportunistically from acquire/release so idle resources get reclaimed without a dedicated timer. */
+    private sweepIfDue(now: number): void {
+        if (now - this.lastSweepAt < MIN_SWEEP_INTERVAL_MS) {
+            return;
+        }
+        this.lastSweepAt = now;
+        this.purgeStale(now);
+    }
+
+    /** Destroys and evicts every pooled resource that has been released for longer than maxIdleMs (defaults to the value passed to the constructor). Normally triggered automatically; exposed so callers can force an immediate sweep, e.g. in tests. */
+    public purgeStale(now: number = this.now(), maxIdleMs: number = this.maxIdleMs): void {
+        for (const pool of this.texturePool.values()) {
+            this.evictStale(pool, now, maxIdleMs, (entry) => entry.resource.texture.destroy());
+        }
+        for (const pool of this.bufferPool.values()) {
+            this.evictStale(pool, now, maxIdleMs, (entry) => entry.resource.buffer.destroy());
+        }
+    }
+
+    private evictStale<T>(pool: PoolEntry<T>[], now: number, maxIdleMs: number, destroy: (entry: PoolEntry<T>) => void): void {
+        let writeIndex = 0;
+        for (let readIndex = 0; readIndex < pool.length; readIndex++) {
+            const entry = pool[readIndex];
+            if (now - entry.releasedAt > maxIdleMs) {
+                destroy(entry);
+            } else {
+                pool[writeIndex++] = entry;
+            }
+        }
+        pool.length = writeIndex;
     }
 
     /** Destroys every pooled (released, not currently acquired) resource and empties the pools - e.g. on device loss or teardown. */
     public purge(): void {
         for (const pool of this.texturePool.values()) {
-            for (const pooled of pool) {
-                pooled.texture.destroy();
+            for (const entry of pool) {
+                entry.resource.texture.destroy();
             }
         }
         this.texturePool.clear();
 
         for (const pool of this.bufferPool.values()) {
-            for (const pooled of pool) {
-                pooled.buffer.destroy();
+            for (const entry of pool) {
+                entry.resource.buffer.destroy();
             }
         }
         this.bufferPool.clear();
