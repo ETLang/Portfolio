@@ -278,7 +278,12 @@ export class LitboxSceneRenderer {
      *
      * Only one refreshTransform call per owner is needed regardless of how many
      * sprite/light/raytraced components it owns: transform data lives in one shared array (see
-     * TransformResources), not duplicated per component.
+     * TransformResources), not duplicated per component. Also refreshes each sprite owner's
+     * active-in-hierarchy cull flag alongside its transform, since SceneGraph invalidates and
+     * re-derives both together (invalidateSubtree) - an owner's active state can change
+     * (SceneObject.active toggled directly) without its transform changing, but this cascade is
+     * the only thing that picks either up, matching this project's dynamic/dirty-marking
+     * convention (see SpriteResources.refreshActiveState).
      */
     private refreshTransformCascade(rootId: number): number[] {
         if (!this.sceneGraph) {
@@ -289,6 +294,7 @@ export class LitboxSceneRenderer {
         const affectedIds = [rootId, ...sceneGraph.getDescendantIds(rootId)];
         for (const ownerId of affectedIds) {
             this.transformResources.refreshTransform(ownerId, sceneGraph);
+            this.spriteResources.refreshActiveState(ownerId, sceneGraph);
             this.raytracedResources.refreshEntry(ownerId, sceneGraph);
         }
         return affectedIds;

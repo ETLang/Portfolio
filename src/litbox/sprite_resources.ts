@@ -41,10 +41,11 @@ interface ResolvedSprite {
  *
  * Draw order is a correctness requirement, not a performance knob: this renderer draws
  * back-to-front with no depth buffer, so sprites must be visited in ascending (layer,
- * sortOrder) order for overlapping transparency to blend correctly. draw() issues one draw
- * call per visible sprite, in that order (no texture-batching yet - see the project's
- * uniform-array packing plan for the batched-instanced-draw follow-up, which only changes how
- * many draw calls are issued, never their order).
+ * sortOrder) order for overlapping transparency to blend correctly. draw() minimizes draw
+ * calls by coalescing each maximal run of consecutive, visible, same-texture sprites in that
+ * order into a single instanced draw - see draw() and rebuildDrawOrder's doc comments. This
+ * never reorders sprites relative to each other, so blending is unaffected by how many draw
+ * calls batching happens to produce.
  */
 export class SpriteResources {
     private device: GPUDevice;
@@ -165,6 +166,15 @@ export class SpriteResources {
         this.rebuildDrawOrder();
     }
 
+    /**
+     * Draws every visible (active, layerFilter-passing) sprite, walking the draw-ordered list
+     * once and issuing one instanced draw call per maximal run of consecutive, visible entries
+     * that share a texture - a run breaks on a texture change *or* on a non-visible entry in
+     * between (an inactive sprite, or one on the wrong side of layerFilter), since a single
+     * instanced draw can't skip an instance in the middle of its [firstInstance, firstInstance
+     * + instanceCount) range. This never changes draw order, only how many draw calls express
+     * it - see rebuildDrawOrder for why same-texture entries tend to already be adjacent.
+     */
     public draw(passEncoder: GPURenderPassEncoder, layerFilter: (layer: number) => boolean): void {
         if (!this.pipeline || !this.lightmapBindGroup) {
             return;
@@ -181,20 +191,33 @@ export class SpriteResources {
         passEncoder.setBindGroup(1, this.sharedBindGroup);
         passEncoder.setBindGroup(3, this.lightmapBindGroup);
 
+        let runStart = -1;
+        let runTexture: GPUTexture | null = null;
+        const flushRun = (endExclusive: number): void => {
+            if (runStart === -1) {
+                return;
+            }
+            const textureBindGroup = this.textureBindGroups.get(runTexture!);
+            if (textureBindGroup) {
+                passEncoder.setBindGroup(2, textureBindGroup);
+                passEncoder.draw(QUAD_VERTEX_COUNT, endExclusive - runStart, 0, runStart);
+            }
+            runStart = -1;
+            runTexture = null;
+        };
+
         for (let i = 0; i < this.sprites.length; i++) {
             const resolved = this.sprites[i];
-            if (!resolved.isActive || !layerFilter(resolved.layer)) {
-                continue;
+            const visible = resolved.isActive && layerFilter(resolved.layer);
+            if (!visible || resolved.texture !== runTexture) {
+                flushRun(i);
             }
-            const textureBindGroup = this.textureBindGroups.get(resolved.texture);
-            if (!textureBindGroup) {
-                continue; // defensive - resolveSprite/refreshTexture always ensure one exists
+            if (visible && runStart === -1) {
+                runStart = i;
+                runTexture = resolved.texture;
             }
-            passEncoder.setBindGroup(2, textureBindGroup);
-            // No batching yet (instanceCount 1): i is this sprite's fixed position in the
-            // draw-ordered index buffer - see rebuildDrawOrder.
-            passEncoder.draw(QUAD_VERTEX_COUNT, 1, 0, i);
         }
+        flushRun(this.sprites.length);
     }
 
     /**
@@ -270,6 +293,23 @@ export class SpriteResources {
         }
     }
 
+    /**
+     * CPU-only refresh of the active-in-hierarchy cull flag for every sprite owned by
+     * `ownerId`. No GPU write: isActive is consulted directly by draw()'s visibility check,
+     * never uploaded. Paired with TransformResources.refreshTransform in the renderer's
+     * transform cascade, since SceneGraph invalidates and re-derives both together (see
+     * SceneGraph.invalidateSubtree) - an owner's active state can change without its transform
+     * changing (e.g. toggling SceneObject.active), but both are only picked up on the same
+     * cascade, matching this project's existing dynamic/dirty-marking convention.
+     */
+    public refreshActiveState(ownerId: number, sceneGraph: SceneGraph): void {
+        for (const resolved of this.sprites) {
+            if (resolved.ownerId === ownerId) {
+                resolved.isActive = sceneGraph.isActiveInHierarchy(ownerId);
+            }
+        }
+    }
+
     /** Moves `sprite`'s properties entry into the dynamic region. No-op if untracked, or if already dynamic. */
     public markDynamic(sprite: SceneSprite): void {
         const resolved = this.sprites.find(r => r.sprite === sprite);
@@ -340,14 +380,17 @@ export class SpriteResources {
      * full clear-and-reinsert, since arbitrary reordering isn't something insertStatic/remove
      * support (and don't need to: this array holds one small 16-byte struct per sprite and this
      * only runs on structural change or a resolveSprite's initial insert, never per frame).
-     * Sprites with equal (layer, sortOrder) keep their prior relative order (Array.sort is
-     * stable) - fine, since that relative order is unobserved by design.
+     * Within each maximal run of sprites sharing the same (layer, sortOrder) - whose relative
+     * order is unobserved by design, see compareDrawOrder - entries are then locally regrouped
+     * by texture, so draw()'s run-length batching gets more (and longer) same-texture runs to
+     * coalesce, at zero cost to draw-order correctness.
      */
     private rebuildDrawOrder(): void {
         for (const entry of this.indexEntries) {
             this.indexArray.remove(entry);
         }
         this.sprites.sort(compareDrawOrder);
+        clusterByTextureWithinTiedGroups(this.sprites);
         this.indexEntries = this.sprites.map(resolved =>
             this.indexArray.insertStatic((view, byteOffset) => writeIndexData(view, byteOffset, resolved)));
     }
@@ -406,6 +449,47 @@ export class SpriteResources {
  */
 export function compareDrawOrder(a: { layer: number; sortOrder: number }, b: { layer: number; sortOrder: number }): number {
     return (a.layer - b.layer) || (a.sortOrder - b.sortOrder);
+}
+
+/**
+ * Within each maximal run of `items` sharing the same (layer, sortOrder) - already adjacent
+ * after an ascending compareDrawOrder sort - regroups that run by texture (first-seen texture
+ * first, stable within each texture bucket), mutating `items` in place. A run of length 1 (or
+ * already-uniform texture) is left untouched. See rebuildDrawOrder's doc comment for why this
+ * is always safe: relative order within a tied group is unobserved by design. Structurally
+ * typed (like compareDrawOrder) and exported so this ordering logic can be unit-tested
+ * directly with lightweight mocks, without needing real GPUTexture identity - the only thing
+ * that varies across an otherwise-identical run in a test environment without a fetch stub.
+ */
+export function clusterByTextureWithinTiedGroups<T extends { layer: number; sortOrder: number; texture: unknown }>(items: T[]): void {
+    let start = 0;
+    while (start < items.length) {
+        let end = start + 1;
+        while (end < items.length && compareDrawOrder(items[start], items[end]) === 0) {
+            end++;
+        }
+
+        if (end - start > 1) {
+            const byTexture = new Map<unknown, T[]>();
+            for (let i = start; i < end; i++) {
+                const item = items[i];
+                const bucket = byTexture.get(item.texture);
+                if (bucket) {
+                    bucket.push(item);
+                } else {
+                    byTexture.set(item.texture, [item]);
+                }
+            }
+            let i = start;
+            for (const bucket of byTexture.values()) {
+                for (const item of bucket) {
+                    items[i++] = item;
+                }
+            }
+        }
+
+        start = end;
+    }
 }
 
 function writeIndexData(view: DataView, byteOffset: number, resolved: ResolvedSprite): void {

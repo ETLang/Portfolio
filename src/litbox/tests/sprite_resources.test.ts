@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareDrawOrder, SpriteResources } from '../sprite_resources.ts';
+import { clusterByTextureWithinTiedGroups, compareDrawOrder, SpriteResources } from '../sprite_resources.ts';
 import { SceneGraph } from '../scene_graph.ts';
 import { TextureCache } from '../texture_cache.ts';
 import { SimulationResources } from '../simulation.ts';
@@ -86,6 +86,25 @@ async function setup(sprites?: SceneSprite[]): Promise<Fixture> {
 function flushAll(fixture: Fixture): void {
     fixture.spriteResources.flush();
     fixture.transformResources.flush();
+}
+
+interface RecordedDraw {
+    instanceCount: number;
+    firstInstance: number;
+}
+
+/** A minimal GPURenderPassEncoder stand-in that just records each draw() call's (instanceCount, firstInstance), for asserting on SpriteResources' run-batching behavior. */
+function makeRecordingPassEncoder(): { encoder: GPURenderPassEncoder; draws: RecordedDraw[] } {
+    const draws: RecordedDraw[] = [];
+    const encoder = {
+        setPipeline: () => {},
+        setVertexBuffer: () => {},
+        setBindGroup: () => {},
+        draw: (_vertexCount: number, instanceCount: number, _firstVertex: number, firstInstance: number) => {
+            draws.push({ instanceCount, firstInstance });
+        },
+    } as unknown as GPURenderPassEncoder;
+    return { encoder, draws };
 }
 
 describe('SpriteResources', () => {
@@ -228,25 +247,66 @@ describe('SpriteResources', () => {
         const fixture = await setup([back, front, middleFirst, middleSecond]);
 
         const seenLayers: number[] = [];
-        const firstInstances: number[] = [];
-        const passEncoder = {
-            setPipeline: () => {},
-            setVertexBuffer: () => {},
-            setBindGroup: () => {},
-            draw: (_vertexCount: number, _instanceCount: number, _firstVertex: number, firstInstance: number) => {
-                firstInstances.push(firstInstance);
-            },
-        } as unknown as GPURenderPassEncoder;
+        const passEncoder = makeRecordingPassEncoder();
 
-        fixture.spriteResources.draw(passEncoder, (layer) => {
+        fixture.spriteResources.draw(passEncoder.encoder, (layer) => {
             seenLayers.push(layer);
             return true;
         });
 
         expect(seenLayers).toEqual([-1, 0, 0, 1]); // front, then the two layer-0 sprites, then back
-        // firstInstance values are draw-order positions - must come out strictly ascending
-        // (0,1,2,3) since draw() walks the already-sorted list in order.
-        expect(firstInstances).toEqual([0, 1, 2, 3]);
+    });
+
+    it('draw() batches a run of consecutive, visible, same-texture sprites into a single instanced draw call', async () => {
+        // All 4 resolve to the same fallback texture in this test harness (no fetch stub) -
+        // exactly the case draw()'s run-length batching should collapse into one call.
+        const fixture = await setup([makeSprite(1, 0, 0), makeSprite(2, 0, 1), makeSprite(1, 0, 2), makeSprite(2, 0, 3)]);
+        const passEncoder = makeRecordingPassEncoder();
+
+        fixture.spriteResources.draw(passEncoder.encoder, () => true);
+
+        expect(passEncoder.draws).toEqual([{ instanceCount: 4, firstInstance: 0 }]);
+    });
+
+    it('draw() splits an otherwise-same-texture run around an inactive sprite (an instanced draw cannot skip a middle instance)', async () => {
+        const objects = [
+            makeObject(1, 0), makeObject(2, 0), makeObject(3, 0), makeObject(4, 0),
+        ];
+        objects[2].active = false; // the 3rd sprite in draw order (ownerId 3) is inactive
+        const sprites = [makeSprite(1, 0, 0), makeSprite(2, 0, 1), makeSprite(3, 0, 2), makeSprite(4, 0, 3)];
+        const scene: Scene = { ...makeScene(sprites), objects };
+
+        const device = createFakeGpuDevice();
+        const gpuDevice = device as unknown as GPUDevice;
+        const textureCache = new TextureCache(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice);
+        const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
+        simulationResources.initialize(cameraBindGroupLayout);
+        const spriteResources = new SpriteResources(gpuDevice);
+        spriteResources.initialize(cameraBindGroupLayout, 'rgba16float');
+        const transformResources = new TransformResources(gpuDevice);
+        const sceneGraph = new SceneGraph(scene);
+        textureCache.loadScene('', scene.textureAtlasKeys);
+        await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources, transformResources);
+
+        const passEncoder = makeRecordingPassEncoder();
+        spriteResources.draw(passEncoder.encoder, () => true);
+
+        // ownerId 3's sprite (position 2) is excluded entirely; positions [0,2) and [3,4) are
+        // two separate runs, since a single instanced draw can't skip the gap between them.
+        expect(passEncoder.draws).toEqual([
+            { instanceCount: 2, firstInstance: 0 },
+            { instanceCount: 1, firstInstance: 3 },
+        ]);
+    });
+
+    it('draw() breaks a run at a layerFilter boundary', async () => {
+        const fixture = await setup([makeSprite(1, -1, 0), makeSprite(2, 1, 0)]);
+        const passEncoder = makeRecordingPassEncoder();
+
+        fixture.spriteResources.draw(passEncoder.encoder, (layer) => layer <= 0);
+
+        expect(passEncoder.draws).toEqual([{ instanceCount: 1, firstInstance: 0 }]);
     });
 });
 
@@ -262,5 +322,46 @@ describe('compareDrawOrder', () => {
 
     it('returns 0 for equal (layer, sortOrder) - relative order is unobserved by design', () => {
         expect(compareDrawOrder({ layer: 2, sortOrder: 3 }, { layer: 2, sortOrder: 3 })).toBe(0);
+    });
+});
+
+interface FakeItem {
+    layer: number;
+    sortOrder: number;
+    texture: string;
+    id: string;
+}
+
+function item(id: string, layer: number, sortOrder: number, texture: string): FakeItem {
+    return { id, layer, sortOrder, texture };
+}
+
+describe('clusterByTextureWithinTiedGroups', () => {
+    it('regroups an interleaved tied run so same-texture entries become adjacent', () => {
+        const items = [item('a', 0, 0, 'A'), item('b', 0, 0, 'B'), item('c', 0, 0, 'A'), item('d', 0, 0, 'B')];
+        clusterByTextureWithinTiedGroups(items);
+        expect(items.map(i => i.id)).toEqual(['a', 'c', 'b', 'd']); // A's grouped first (first-seen), B's second
+    });
+
+    it('leaves a run already grouped by texture untouched', () => {
+        const items = [item('a', 0, 0, 'A'), item('b', 0, 0, 'A'), item('c', 0, 0, 'B')];
+        clusterByTextureWithinTiedGroups(items);
+        expect(items.map(i => i.id)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('does not reorder across a (layer, sortOrder) boundary', () => {
+        const items = [item('a', 0, 0, 'A'), item('b', 1, 0, 'B'), item('c', 1, 0, 'A')];
+        clusterByTextureWithinTiedGroups(items);
+        // 'a' is its own group (different layer) and must stay first; only the layer-1 group
+        // (b, c) is eligible to reorder, and it's already interleaved-free (length 2, distinct
+        // textures) so nothing moves regardless.
+        expect(items[0].id).toBe('a');
+        expect(items.map(i => i.id).slice(1)).toEqual(['b', 'c']);
+    });
+
+    it('is a no-op for a run of length 1', () => {
+        const items = [item('a', 0, 0, 'A')];
+        clusterByTextureWithinTiedGroups(items);
+        expect(items.map(i => i.id)).toEqual(['a']);
     });
 });
