@@ -53,6 +53,7 @@ export interface RaytracedObject {
 export interface SceneSprite {
     ownerId: number;
     layer: number; // negative = renders before additive simulation. Positive = renders after
+    sortOrder: number; // within-layer draw order, ascending. Equal values: relative order is unspecified.
     opacity: number;
     image: string;
     colorMod: Color; // modulates the image color to produce the final albedo
@@ -100,6 +101,9 @@ export interface AmbientLight {
 }
 
 export type AnyLight = PointLight | Spotlight | LaserLight | DirectionalLight | AmbientLight;
+
+/** Which of the 5 light arrays a given AnyLight came from - not recoverable from the object's own shape alone (point/laser/directional are structurally identical). */
+export type LightKind = 'point' | 'spot' | 'laser' | 'directional' | 'ambient';
 
 /**
  * A 3x2 affine transform applied to the UV coordinates used to sample a texture that has
@@ -178,7 +182,7 @@ export function parseScene(json: string): Scene {
         objects: data.objects ?? [],
         cameras: data.cameras ?? [],
         raytraced: data.raytraced ?? [],
-        sprites: data.sprites ?? [],
+        sprites: (data.sprites ?? []).map(sprite => ({ ...sprite, sortOrder: sprite.sortOrder ?? 0 })),
         pointLights: data.pointLights ?? [],
         spotlights: data.spotlights ?? [],
         laserLights: data.laserLights ?? [],

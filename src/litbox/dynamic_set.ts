@@ -25,6 +25,17 @@ export class DynamicSet<T> {
         return [...this.flags.keys()];
     }
 
+    /** Entries with the persistent 'dynamic' flag only (excludes one-shot 'dirty'). Snapshot, not a live view. */
+    public dynamicOnly(): T[] {
+        const result: T[] = [];
+        for (const [item, flag] of this.flags) {
+            if (flag === 'dynamic') {
+                result.push(item);
+            }
+        }
+        return result;
+    }
+
     /** Removes an entry entirely, regardless of its current flag. For entries that no longer exist (e.g. a destroyed object). */
     public delete(item: T): void {
         this.flags.delete(item);

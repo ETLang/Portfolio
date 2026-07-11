@@ -60,6 +60,15 @@ describe('DynamicSet', () => {
         expect(set.activeThisFrame()).toEqual(['a']);
     });
 
+    it('dynamicOnly returns persistent entries but excludes one-shot dirty entries', () => {
+        const set = new DynamicSet<string>();
+        set.markDynamic('a');
+        set.markDirty('b');
+        expect(set.dynamicOnly()).toEqual(['a']);
+        set.clearDirty();
+        expect(set.dynamicOnly()).toEqual(['a']);
+    });
+
     it('uses object identity as the key, not structural equality', () => {
         const set = new DynamicSet<{ id: number }>();
         const a = { id: 1 };

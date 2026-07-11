@@ -9,6 +9,7 @@ import { SimulationResources } from './litbox/simulation.ts';
 import { SpriteResources } from './litbox/sprite_resources.ts';
 import { TonemapResources } from './litbox/tonemap.ts';
 import { RingBufferedUniform } from './litbox/ring_buffered_uniform.ts';
+import { TransformResources } from './litbox/transform_resources.ts';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // viewProjection (mat4) + simInverseWorldTransform (mat4) + debugMode (f32, padded to 16
@@ -54,6 +55,7 @@ export class LitboxSceneRenderer {
 
     private sceneGraph: SceneGraph | null = null;
     private textureCache!: TextureCache;
+    private transformResources!: TransformResources;
     private lightResources!: LightResources;
     private raytracedResources!: RaytracedResources;
     private simulationResources!: SimulationResources;
@@ -162,6 +164,7 @@ export class LitboxSceneRenderer {
 
     private createSharedResources(): void {
         this.textureCache = new TextureCache(this.device);
+        this.transformResources = new TransformResources(this.device);
         this.lightResources = new LightResources(this.device);
         this.raytracedResources = new RaytracedResources();
         this.simulationResources = new SimulationResources(this.device);
@@ -200,10 +203,17 @@ export class LitboxSceneRenderer {
         this.sceneGraph = new SceneGraph(scene);
         this.textureCache.loadScene(this.activeScene.baseUrl, scene.textureAtlasKeys);
 
-        this.lightResources.updateFromScene(scene, this.sceneGraph);
+        this.lightResources.updateFromScene(scene, this.sceneGraph, this.transformResources);
         await this.raytracedResources.updateFromScene(scene, this.sceneGraph, this.textureCache);
         this.simulationResources.updateFromScene(scene, this.sceneGraph);
-        await this.spriteResources.updateFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources);
+        await this.spriteResources.updateFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
+
+        // rebuildFromScene runs outside the per-frame render() loop (from start()/setScene()),
+        // so nothing else will flush these until the next render() call - without this, the
+        // very first frame after a scene load would draw against unwritten GPU buffers.
+        this.transformResources.flush();
+        this.lightResources.flush();
+        this.spriteResources.flush();
     }
 
     /**
@@ -225,25 +235,29 @@ export class LitboxSceneRenderer {
             if (op.type === 'create') {
                 sceneGraph.addObject(op.object);
                 if (op.sprite) {
-                    void this.spriteResources.addSprite(op.sprite, sceneGraph, this.textureCache);
+                    void this.spriteResources.addSprite(op.sprite, sceneGraph, this.textureCache, this.transformResources);
                 }
                 if (op.raytraced) {
                     void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
                 }
-                if (op.light) {
-                    this.lightResources.updateFromScene(scene, sceneGraph);
+                if (op.light && op.lightKind) {
+                    this.lightResources.addLight(op.lightKind, op.light, sceneGraph, this.transformResources);
                 }
             } else if (op.type === 'destroy') {
                 const removed = sceneGraph.removeObject(op.rootId);
-                this.lightResources.updateFromScene(scene, sceneGraph);
+                // A whole-subtree destroy can remove an arbitrary number of lights at once
+                // (unlike destroyLight's single light) - a full rebuild against the
+                // already-filtered scene.data light arrays is simpler and matches this
+                // renderer's pre-existing behavior for this case.
+                this.lightResources.updateFromScene(scene, sceneGraph, this.transformResources);
                 void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
-                this.spriteResources.removeByOwnerIds(new Set(removed));
+                this.spriteResources.removeByOwnerIds(new Set(removed), this.transformResources);
             } else if (op.type === 'destroySprite') {
-                this.spriteResources.removeSprite(op.sprite);
+                this.spriteResources.removeSprite(op.sprite, this.transformResources);
             } else if (op.type === 'destroyRaytraced') {
                 void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
             } else if (op.type === 'destroyLight') {
-                this.lightResources.updateFromScene(scene, sceneGraph);
+                this.lightResources.removeLight(op.light, this.transformResources);
             } else {
                 sceneGraph.setParent(op.id, op.newParentId);
                 this.refreshTransformCascade(op.id);
@@ -261,6 +275,15 @@ export class LitboxSceneRenderer {
      * data for each affected owner. Shared by applyDynamicSceneUpdates (per dynamic/dirty
      * transform) and applyPendingStructuralOps (for a reparent, which only changes transforms -
      * no owned sprite/light/raytraced data changes, so no other GPU-resource code is needed).
+     *
+     * Only one refreshTransform call per owner is needed regardless of how many
+     * sprite/light/raytraced components it owns: transform data lives in one shared array (see
+     * TransformResources), not duplicated per component. Also refreshes each sprite owner's
+     * active-in-hierarchy cull flag alongside its transform, since SceneGraph invalidates and
+     * re-derives both together (invalidateSubtree) - an owner's active state can change
+     * (SceneObject.active toggled directly) without its transform changing, but this cascade is
+     * the only thing that picks either up, matching this project's dynamic/dirty-marking
+     * convention (see SpriteResources.refreshActiveState).
      */
     private refreshTransformCascade(rootId: number): number[] {
         if (!this.sceneGraph) {
@@ -270,8 +293,8 @@ export class LitboxSceneRenderer {
         sceneGraph.invalidateSubtree(rootId);
         const affectedIds = [rootId, ...sceneGraph.getDescendantIds(rootId)];
         for (const ownerId of affectedIds) {
-            this.lightResources.refreshTransform(ownerId, sceneGraph);
-            this.spriteResources.refreshTransform(ownerId, sceneGraph);
+            this.transformResources.refreshTransform(ownerId, sceneGraph);
+            this.spriteResources.refreshActiveState(ownerId, sceneGraph);
             this.raytracedResources.refreshEntry(ownerId, sceneGraph);
         }
         return affectedIds;
@@ -281,7 +304,14 @@ export class LitboxSceneRenderer {
      * Consults the active scene's dynamic/dirty flags (see LitboxScene) and pushes
      * targeted GPU updates for exactly the affected entries, instead of re-uploading
      * everything (wasteful) or nothing (broken for animation/interaction). Runs before
-     * any GPU pass is recorded since every write here is a bare queue.writeBuffer.
+     * any GPU pass is recorded.
+     *
+     * Two independent things happen here: entries persistently marked dynamic (not
+     * one-shot dirty) get their packed-array entry moved into that array's dynamic region
+     * (markDynamic - idempotent, safe to call every frame even for an already-dynamic entry);
+     * separately, every dynamic-or-dirty entry gets its GPU data actually refreshed
+     * (writeEntry/refreshTransform/refreshProperties), staged into each array's CPU mirror.
+     * Nothing reaches the GPU until the flush() calls at the end.
      *
      * Transform changes cascade to the whole descendant subtree (world transforms are
      * hierarchical), but only ever touch each entry's transform-derived GPU data -
@@ -294,6 +324,19 @@ export class LitboxSceneRenderer {
         }
 
         const frameState = this.activeScene.getDynamicFrameState();
+
+        for (const obj of frameState.persistentTransforms) {
+            this.transformResources.markDynamic(obj.id);
+        }
+        for (const light of frameState.persistentLights) {
+            this.lightResources.markDynamic(light);
+        }
+        for (const sprite of frameState.persistentSprites) {
+            this.spriteResources.markDynamic(sprite);
+        }
+        // frameState.persistentRaytraced: no packed array to reposition yet - see
+        // RaytracedResources' class doc.
+
         const transformAffectedIds = new Set<number>();
         for (const obj of frameState.transforms) {
             for (const affectedId of this.refreshTransformCascade(obj.id)) {
@@ -302,10 +345,10 @@ export class LitboxSceneRenderer {
         }
 
         for (const light of frameState.lights) {
-            this.lightResources.refreshProperties(light.ownerId);
+            this.lightResources.refreshProperties(light, this.transformResources);
         }
         for (const sprite of frameState.sprites) {
-            this.spriteResources.refreshProperties(sprite.ownerId);
+            this.spriteResources.refreshProperties(sprite);
         }
         // frameState.raytraced entries deliberately have no per-entry properties update here:
         // RaytracedResources has no GPU buffer yet (see its refreshEntry TODO), so a raytraced
@@ -316,6 +359,12 @@ export class LitboxSceneRenderer {
         if (simOwnerId !== null && transformAffectedIds.has(simOwnerId)) {
             this.simulationResources.refreshWorldTransform(this.sceneGraph);
         }
+
+        // One flush per array per frame, after every mutation above (structural ops earlier
+        // this same frame included) and before any GPU pass is recorded - see PackedUniformArray.flush().
+        this.transformResources.flush();
+        this.lightResources.flush();
+        this.spriteResources.flush();
 
         this.activeScene.clearFrameDirtyFlags();
     }

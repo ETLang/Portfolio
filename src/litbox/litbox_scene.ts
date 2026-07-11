@@ -5,6 +5,7 @@ import {
     type Color,
     type DirectionalLight,
     type LaserLight,
+    type LightKind,
     type PointLight,
     type RaytracedObject,
     type Scene,
@@ -32,6 +33,7 @@ export interface CreateObjectOptions {
 /** CreateObjectOptions plus the subset of SceneSprite fields worth overriding per call; the rest default to a plain, fully-opaque, unshaded white square. */
 export interface CreateSpriteOptions extends CreateObjectOptions {
     layer?: number;
+    sortOrder?: number;
     opacity?: number;
     image?: string;
     colorMod?: Color;
@@ -73,9 +75,11 @@ export interface CreateSpotlightOptions extends CreateLightOptions {
  * as the dynamic/dirty transform flags below, since LitboxScene never touches SceneGraph directly.
  * `sprite`/`raytraced`/`light` are only present when the object was created via the matching
  * create* method, so the renderer knows to also upload that data alongside the new object.
+ * `lightKind` accompanies `light` - which of the 5 light arrays it belongs to isn't recoverable
+ * from the light object's own shape alone (point/laser/directional are structurally identical).
  */
 type StructuralOp =
-    | { type: 'create'; object: SceneObject; sprite?: SceneSprite; raytraced?: RaytracedObject; light?: AnyLight }
+    | { type: 'create'; object: SceneObject; sprite?: SceneSprite; raytraced?: RaytracedObject; light?: AnyLight; lightKind?: LightKind }
     | { type: 'destroy'; rootId: number }
     | { type: 'destroySprite'; sprite: SceneSprite }
     | { type: 'destroyRaytraced'; raytraced: RaytracedObject }
@@ -236,6 +240,7 @@ export abstract class LitboxScene {
         const sprite: SceneSprite = {
             ownerId: obj.id,
             layer: options.layer ?? 0,
+            sortOrder: options.sortOrder ?? 0,
             opacity: options.opacity ?? 1,
             image: options.image ?? '',
             colorMod: options.colorMod ?? { r: 1, g: 1, b: 1, a: 1 },
@@ -276,7 +281,7 @@ export abstract class LitboxScene {
         const obj = this.buildObject(options);
         const light: PointLight = this.lightDefaults(obj, options);
         this.data.pointLights.push(light);
-        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light, lightKind: 'point' });
         return obj;
     }
 
@@ -285,7 +290,7 @@ export abstract class LitboxScene {
         const obj = this.buildObject(options);
         const light: Spotlight = { ...this.lightDefaults(obj, options), pinch: options.pinch ?? 0.5 };
         this.data.spotlights.push(light);
-        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light, lightKind: 'spot' });
         return obj;
     }
 
@@ -294,7 +299,7 @@ export abstract class LitboxScene {
         const obj = this.buildObject(options);
         const light: LaserLight = this.lightDefaults(obj, options);
         this.data.laserLights.push(light);
-        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light, lightKind: 'laser' });
         return obj;
     }
 
@@ -303,7 +308,7 @@ export abstract class LitboxScene {
         const obj = this.buildObject(options);
         const light: DirectionalLight = this.lightDefaults(obj, options);
         this.data.directionalLights.push(light);
-        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light, lightKind: 'directional' });
         return obj;
     }
 
@@ -312,7 +317,7 @@ export abstract class LitboxScene {
         const obj = this.buildObject(options);
         const light: AmbientLight = this.lightDefaults(obj, options);
         this.data.ambientLights.push(light);
-        this.pendingStructuralOps.push({ type: 'create', object: obj, light });
+        this.pendingStructuralOps.push({ type: 'create', object: obj, light, lightKind: 'ambient' });
         return obj;
     }
 
@@ -469,18 +474,32 @@ export abstract class LitboxScene {
         this.pendingStructuralOps = [];
     }
 
-    /** @internal Consumed once per frame by LitboxSceneRenderer. */
+    /**
+     * @internal Consumed once per frame by LitboxSceneRenderer. `transforms`/`lights`/
+     * `sprites`/`raytraced` are the full dynamic-∪-dirty set (what needs a GPU data refresh
+     * this frame); `persistent*` is the 'dynamic'-only subset (what should be moved into a
+     * packed array's dynamic region, if not already there - a one-shot 'dirty' entry gets its
+     * data refreshed but is never repositioned).
+     */
     public getDynamicFrameState(): {
         transforms: readonly SceneObject[];
         lights: readonly AnyLight[];
         sprites: readonly SceneSprite[];
         raytraced: readonly RaytracedObject[];
+        persistentTransforms: readonly SceneObject[];
+        persistentLights: readonly AnyLight[];
+        persistentSprites: readonly SceneSprite[];
+        persistentRaytraced: readonly RaytracedObject[];
     } {
         return {
             transforms: this.transformFlags.activeThisFrame(),
             lights: this.lightFlags.activeThisFrame(),
             sprites: this.spriteFlags.activeThisFrame(),
             raytraced: this.raytracedFlags.activeThisFrame(),
+            persistentTransforms: this.transformFlags.dynamicOnly(),
+            persistentLights: this.lightFlags.dynamicOnly(),
+            persistentSprites: this.spriteFlags.dynamicOnly(),
+            persistentRaytraced: this.raytracedFlags.dynamicOnly(),
         };
     }
 
