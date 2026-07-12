@@ -5,10 +5,9 @@ import type { SimulationResources } from './simulation.ts';
 import type { TransformResources } from './transform_resources.ts';
 import { Entry, PackedUniformArray } from './packed_uniform_array.ts';
 import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } from './quad_mesh.ts';
+import { resolvePrimitiveShapeId } from './primitive_shape.ts';
+import { clusterByTextureWithinTiedGroups } from './draw_order.ts';
 import spriteShaderCode from './shaders/sprite.wgsl?raw';
-
-// erasableSyntaxOnly forbids `enum` - matches shapeId encoding in sprite.wgsl.
-const PRIMITIVE_SHAPE_ID: Record<string, number> = { '': 0, rect: 1, ellipse: 2 };
 
 // Must match the SpriteIndex/SpriteProperties/SpriteAtlasTransform struct layouts in sprite.wgsl.
 const SPRITE_INDEX_STRIDE_BYTES = 16;
@@ -129,7 +128,13 @@ export class SpriteResources {
         });
     }
 
-    public async updateFromScene(
+    /**
+     * Full teardown-and-rebuild from `scene`. Called only on an actual scene load/swap (see
+     * LitboxSceneRenderer.rebuildFromScene, its only caller) - never per-frame, and never for a
+     * single sprite's create/destroy/property change, which go through addSprite/removeSprite/
+     * refreshProperties instead.
+     */
+    public async loadFromScene(
         scene: Scene,
         sceneGraph: SceneGraph,
         textureCache: TextureCache,
@@ -137,7 +142,7 @@ export class SpriteResources {
         transformResources: TransformResources,
     ): Promise<void> {
         if (!this.sharedBindGroupLayout || !this.lightmapBindGroupLayout) {
-            throw new Error('SpriteResources.initialize() must be called before updateFromScene().');
+            throw new Error('SpriteResources.initialize() must be called before loadFromScene().');
         }
         this.textureCache = textureCache;
         this.registerTransformResources(transformResources);
@@ -223,7 +228,7 @@ export class SpriteResources {
     /**
      * Resolves and uploads a single newly-created sprite, appending it to the draw list without
      * touching any existing sprite's entries or texture - the targeted counterpart (for a
-     * structural create op) to updateFromScene's full rebuild.
+     * structural create op) to loadFromScene's full rebuild.
      */
     public async addSprite(sprite: SceneSprite, sceneGraph: SceneGraph, textureCache: TextureCache, transformResources: TransformResources): Promise<void> {
         if (!this.sharedBindGroupLayout) {
@@ -255,7 +260,7 @@ export class SpriteResources {
 
     /**
      * Removes every sprite owned by an id in `ownerIds`, releasing their transform references.
-     * Unlike updateFromScene, this never touches any surviving sprite's entries or texture -
+     * Unlike loadFromScene, this never touches any surviving sprite's entries or texture -
      * the targeted counterpart for structural destroy ops.
      */
     public removeByOwnerIds(ownerIds: Set<number>, transformResources: TransformResources): void {
@@ -390,7 +395,7 @@ export class SpriteResources {
             this.indexArray.remove(entry);
         }
         this.sprites.sort(compareDrawOrder);
-        clusterByTextureWithinTiedGroups(this.sprites);
+        clusterByTextureWithinTiedGroups(this.sprites, compareDrawOrder);
         this.indexEntries = this.sprites.map(resolved =>
             this.indexArray.insertStatic((view, byteOffset) => writeIndexData(view, byteOffset, resolved)));
     }
@@ -431,12 +436,7 @@ export class SpriteResources {
     }
 
     private resolveShapeId(sprite: SceneSprite): number {
-        let shapeId = PRIMITIVE_SHAPE_ID[sprite.primitiveShape];
-        if (shapeId === undefined) {
-            console.warn(`Litbox: unrecognized primitiveShape "${sprite.primitiveShape}" on sprite owner ${sprite.ownerId}; treating as unspecified.`);
-            shapeId = PRIMITIVE_SHAPE_ID[''];
-        }
-        return shapeId;
+        return resolvePrimitiveShapeId(sprite.primitiveShape, sprite.ownerId);
     }
 }
 
@@ -449,47 +449,6 @@ export class SpriteResources {
  */
 export function compareDrawOrder(a: { layer: number; sortOrder: number }, b: { layer: number; sortOrder: number }): number {
     return (a.layer - b.layer) || (a.sortOrder - b.sortOrder);
-}
-
-/**
- * Within each maximal run of `items` sharing the same (layer, sortOrder) - already adjacent
- * after an ascending compareDrawOrder sort - regroups that run by texture (first-seen texture
- * first, stable within each texture bucket), mutating `items` in place. A run of length 1 (or
- * already-uniform texture) is left untouched. See rebuildDrawOrder's doc comment for why this
- * is always safe: relative order within a tied group is unobserved by design. Structurally
- * typed (like compareDrawOrder) and exported so this ordering logic can be unit-tested
- * directly with lightweight mocks, without needing real GPUTexture identity - the only thing
- * that varies across an otherwise-identical run in a test environment without a fetch stub.
- */
-export function clusterByTextureWithinTiedGroups<T extends { layer: number; sortOrder: number; texture: unknown }>(items: T[]): void {
-    let start = 0;
-    while (start < items.length) {
-        let end = start + 1;
-        while (end < items.length && compareDrawOrder(items[start], items[end]) === 0) {
-            end++;
-        }
-
-        if (end - start > 1) {
-            const byTexture = new Map<unknown, T[]>();
-            for (let i = start; i < end; i++) {
-                const item = items[i];
-                const bucket = byTexture.get(item.texture);
-                if (bucket) {
-                    bucket.push(item);
-                } else {
-                    byTexture.set(item.texture, [item]);
-                }
-            }
-            let i = start;
-            for (const bucket of byTexture.values()) {
-                for (const item of bucket) {
-                    items[i++] = item;
-                }
-            }
-        }
-
-        start = end;
-    }
 }
 
 function writeIndexData(view: DataView, byteOffset: number, resolved: ResolvedSprite): void {

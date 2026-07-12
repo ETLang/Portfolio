@@ -565,6 +565,7 @@
     "raytraced": [
         {
             "ownerId": -34872,
+            "sortOrder": 0,
             "logDensity": -0.12999999523162843,
             "roughness": 0.8460000157356262,
             "heightScale": 1.0,
@@ -581,6 +582,7 @@
         },
         {
             "ownerId": -38826,
+            "sortOrder": 0,
             "logDensity": -0.12999999523162843,
             "roughness": 0.8460000157356262,
             "heightScale": 1.0,
@@ -597,6 +599,7 @@
         },
         {
             "ownerId": 43000,
+            "sortOrder": 0,
             "logDensity": -2.4700000286102297,
             "roughness": 1.0,
             "heightScale": 1.0,
@@ -613,6 +616,7 @@
         },
         {
             "ownerId": -45180,
+            "sortOrder": 0,
             "logDensity": -0.27000001072883608,
             "roughness": 0.0,
             "heightScale": 1.0,
@@ -629,6 +633,7 @@
         },
         {
             "ownerId": -48940,
+            "sortOrder": 0,
             "logDensity": 0.0,
             "roughness": 0.0,
             "heightScale": 1.0,
@@ -645,6 +650,7 @@
         },
         {
             "ownerId": -38326,
+            "sortOrder": 0,
             "logDensity": -0.12999999523162843,
             "roughness": 0.8460000157356262,
             "heightScale": 1.0,
@@ -661,6 +667,7 @@
         },
         {
             "ownerId": -45576,
+            "sortOrder": 0,
             "logDensity": -0.3700000047683716,
             "roughness": 0.0,
             "heightScale": 1.0,
@@ -677,6 +684,7 @@
         },
         {
             "ownerId": -12756,
+            "sortOrder": 0,
             "logDensity": -0.12999999523162843,
             "roughness": 0.8460000157356262,
             "heightScale": 1.0,
@@ -693,6 +701,7 @@
         },
         {
             "ownerId": -36510,
+            "sortOrder": 0,
             "logDensity": -0.12999999523162843,
             "roughness": 0.8460000157356262,
             "heightScale": 1.0,

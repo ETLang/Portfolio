@@ -106,7 +106,12 @@ export class SimulationResources {
         this.device.queue.writeBuffer(this.compositeUniformBuffer, 0, worldTransformData.buffer, worldTransformData.byteOffset, worldTransformData.byteLength);
     }
 
-    public updateFromScene(scene: Scene, sceneGraph: SceneGraph): void {
+    /**
+     * Full teardown-and-rebuild of the lightmap from `scene`. Called only on an actual scene
+     * load/swap (see LitboxSceneRenderer.rebuildFromScene, its only caller) - never per-frame; a
+     * transform-only change instead goes through refreshWorldTransform.
+     */
+    public loadFromScene(scene: Scene, sceneGraph: SceneGraph): void {
         this.lightmapTexture?.destroy();
         this.lightmapTexture = null;
         this.lightmapView = null;

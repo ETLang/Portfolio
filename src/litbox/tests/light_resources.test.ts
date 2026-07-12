@@ -45,10 +45,10 @@ function setup(): { device: FakeGpuDevice; resources: LightResources; transformR
 }
 
 describe('LightResources', () => {
-    it('updateFromScene stages one properties entry per light, uploaded on flush', () => {
+    it('loadFromScene stages one properties entry per light, uploaded on flush', () => {
         const { device, resources, transformResources, scene, sceneGraph } = setup();
 
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
         expect(resources.getCount()).toBe(2);
         expect(device.writeCalls).toHaveLength(0); // nothing reaches the GPU before flush()
 
@@ -59,7 +59,7 @@ describe('LightResources', () => {
 
     it('refreshProperties rewrites only that light\'s entry', () => {
         const { device, resources, transformResources, scene, sceneGraph } = setup();
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
         resources.flush();
         transformResources.flush();
         device.writeCalls = [];
@@ -75,7 +75,7 @@ describe('LightResources', () => {
 
     it('refreshProperties reads a spotlight\'s pinch fresh from the live reference', () => {
         const { device, resources, transformResources, scene, sceneGraph } = setup();
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
         resources.flush();
         transformResources.flush();
         device.writeCalls = [];
@@ -91,7 +91,7 @@ describe('LightResources', () => {
 
     it('addLight appends a new light without touching existing entries', () => {
         const { device, resources, transformResources, scene, sceneGraph } = setup();
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
         resources.flush();
         transformResources.flush();
         device.writeCalls = [];
@@ -111,7 +111,7 @@ describe('LightResources', () => {
 
     it('removeLight removes exactly one light and releases its transform reference', () => {
         const { device, resources, transformResources, scene, sceneGraph } = setup();
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
         resources.flush();
         transformResources.flush();
 
@@ -129,7 +129,7 @@ describe('LightResources', () => {
 
     it('removeLight is a no-op for an untracked light', () => {
         const { resources, transformResources, scene, sceneGraph } = setup();
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
 
         const unknown: PointLight = { ownerId: 999, color: { r: 1, g: 1, b: 1, a: 1 }, intensity: 1, bounces: 1 };
         expect(() => resources.removeLight(unknown, transformResources)).not.toThrow();
@@ -138,7 +138,7 @@ describe('LightResources', () => {
 
     it('markDynamic relocates a light\'s entry without losing its data', () => {
         const { device, resources, transformResources, scene, sceneGraph } = setup();
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
 
         const pointLight = scene.pointLights[0];
         resources.markDynamic(pointLight);
@@ -159,7 +159,7 @@ describe('LightResources', () => {
 
     it('refreshProperties and markDynamic no-op for an untracked light', () => {
         const { device, resources, transformResources, scene, sceneGraph } = setup();
-        resources.updateFromScene(scene, sceneGraph, transformResources);
+        resources.loadFromScene(scene, sceneGraph, transformResources);
         resources.flush();
         transformResources.flush();
         device.writeCalls = [];

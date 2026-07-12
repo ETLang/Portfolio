@@ -46,6 +46,7 @@ export interface CreateSpriteOptions extends CreateObjectOptions {
 
 /** CreateObjectOptions plus the subset of RaytracedObject fields worth overriding per call; the rest default to a plain, unshaded white primitive. */
 export interface CreateRaytracedOptions extends CreateObjectOptions {
+    sortOrder?: number;
     logDensity?: number;
     roughness?: number;
     heightScale?: number;
@@ -261,6 +262,7 @@ export abstract class LitboxScene {
         const obj = this.buildObject(options);
         const raytraced: RaytracedObject = {
             ownerId: obj.id,
+            sortOrder: options.sortOrder ?? 0,
             logDensity: options.logDensity ?? 0,
             roughness: options.roughness ?? 0.5,
             heightScale: options.heightScale ?? 1,
