@@ -1,5 +1,12 @@
 # Project notes for Claude Code
 
+## Unity project gotchas
+
+- The Unity Litbox project contains a significant amount of vestigial code that was
+  used for past experiments that didn't work out. Not all of it has been removed, 
+  so do not assume that merely because the Unity version does something, that the
+  WebGPU version must also do the same thing. 
+
 ## WGSL / shader gotchas
 
 - **Never dynamically index a function-local WGSL array literal**
