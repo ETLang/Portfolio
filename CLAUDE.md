@@ -99,3 +99,11 @@ op.execute(encoder);
 - **Samplers are internal to the operation, never caller-configurable.** An operation creates
   whatever sampler(s) it needs (a fixed filter/wrap mode, inherent to what the shader does)
   itself, at construction - never accepts one through `updateInputs`.
+- **Compile-time switches (WGSL sections enabled/disabled at compile time, e.g. via
+  `override` constants) go through their own method, `updateSwitches(...)`** - same
+  bespoke-named-parameters shape as `updateInputs`/`updateOutputs`, never a generic flags
+  bag. Unlike uniforms/inputs/outputs, a switch change invalidates the compute *pipeline*
+  itself, not just a bind group, since it can change which shader code actually gets
+  compiled/specialized - so `updateSwitches` marks its own `pipelineDirty` flag, checked and
+  rebuilt by `execute()` before dispatch, the same lazy-rebuild pattern used for the three
+  bind groups.
