@@ -10,6 +10,8 @@ import { SpriteResources } from './litbox/sprite_resources.ts';
 import { TonemapResources } from './litbox/tonemap.ts';
 import { RingBufferedUniform } from './litbox/ring_buffered_uniform.ts';
 import { TransformResources } from './litbox/transform_resources.ts';
+import { ComputedDataManager } from './litbox/computed_data_manager.ts';
+import { DebugViewBlitResources, DEBUG_VIEW_MODE, type DebugView } from './litbox/debug_view.ts';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // viewProjection (mat4) + simInverseWorldTransform (mat4) + debugMode (f32, padded to 16
@@ -57,10 +59,14 @@ export class LitboxSceneRenderer {
     private textureCache!: TextureCache;
     private transformResources!: TransformResources;
     private lightResources!: LightResources;
+    private computedDataManager!: ComputedDataManager;
     private raytracedResources!: RaytracedResources;
     private simulationResources!: SimulationResources;
     private spriteResources!: SpriteResources;
     private tonemapResources!: TonemapResources;
+    private debugViewBlitResources!: DebugViewBlitResources;
+    /** Named debug views (see debugView), populated once in createSharedResources - see debug_view.ts's DebugView doc for why each entry is a closure, not a captured GPUTextureView. */
+    private debugViews = new Map<string, DebugView>();
 
     private activeScene: LitboxScene | null = null;
     private lastFrameTimeMs: number | null = null;
@@ -71,6 +77,29 @@ export class LitboxSceneRenderer {
      * layering are correct independent of per-sprite opacity, image, and shape data.
      */
     public debugSolidColor = false;
+
+    /**
+     * When set (to a key registered in debugViews - currently 'albedo', 'density', 'normal',
+     * 'roughness', all contributed by the raytraced G-Buffer, see createSharedResources), replaces
+     * the entire normal render (simulation/sprites/tonemap) with a direct blit of that view's
+     * source texture to the swapchain, transformed for actual legibility (see debug_view.wgsl) -
+     * a diagnostic aid for verifying render-target contents before anything downstream consumes
+     * them. The G-Buffer itself is still rendered every frame regardless
+     * (raytracedResources.renderGBuffer runs unconditionally), so a G-Buffer-sourced view reflects
+     * live scene changes. Set to null to return to normal rendering. An unknown key is treated the
+     * same as null (silently falls through to normal rendering) rather than throwing, since this
+     * is diagnostic-only.
+     */
+    public debugView: string | null = null;
+
+    /**
+     * Divisor applied before clamping to a displayable [0,1] range in whichever active debugView
+     * mode consumes it (currently only the G-Buffer's 'density' view - see debug_view_blit.wgsl;
+     * other modes ignore this). The "typical" value range depends entirely on the active scene and
+     * which view is selected, neither of which is knowable in advance - tune this live rather than
+     * guessing a fixed constant.
+     */
+    public debugViewScale = 0.5;
 
     /**
      * Exposure fed to the tonemap pass (see tonemap.wgsl). Seeded from the active camera's
@@ -177,10 +206,12 @@ export class LitboxSceneRenderer {
         this.textureCache = new TextureCache(this.device);
         this.transformResources = new TransformResources(this.device);
         this.lightResources = new LightResources(this.device);
-        this.raytracedResources = new RaytracedResources();
+        this.computedDataManager = new ComputedDataManager(this.device);
+        this.raytracedResources = new RaytracedResources(this.device, this.computedDataManager);
         this.simulationResources = new SimulationResources(this.device);
         this.spriteResources = new SpriteResources(this.device);
         this.tonemapResources = new TonemapResources(this.device, this.presentationFormat);
+        this.debugViewBlitResources = new DebugViewBlitResources(this.device, this.presentationFormat);
 
         // Shared by the sprite and simulation-composite pipelines. Ring-buffered because
         // it's the only per-frame-rewritten uniform in this renderer (everything else is
@@ -191,7 +222,17 @@ export class LitboxSceneRenderer {
         this.cameraUniform = new RingBufferedUniform(this.device, this.cameraBindGroupLayout, CAMERA_UNIFORM_SIZE_BYTES, FRAMES_IN_FLIGHT);
 
         this.simulationResources.initialize(this.cameraBindGroupLayout);
+        this.raytracedResources.initialize();
         this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
+
+        // Named debug views this renderer can blit in place of the normal render (see
+        // debugView) - currently all 4 come from the raytraced G-Buffer, but this map is the
+        // generic extension point: any future *Resources class that owns a debug-worthy texture
+        // just needs another entry here, no other renderer-level plumbing.
+        this.debugViews.set('albedo', { getSourceView: () => this.raytracedResources.getAlbedoView(), mode: DEBUG_VIEW_MODE.PASSTHROUGH });
+        this.debugViews.set('density', { getSourceView: () => this.raytracedResources.getDensityView(), mode: DEBUG_VIEW_MODE.DENSITY });
+        this.debugViews.set('normal', { getSourceView: () => this.raytracedResources.getNormalRoughnessView(), mode: DEBUG_VIEW_MODE.NORMAL_REMAP });
+        this.debugViews.set('roughness', { getSourceView: () => this.raytracedResources.getNormalRoughnessView(), mode: DEBUG_VIEW_MODE.ALPHA_AS_LUMINANCE });
 
         this.createHdrFrameTexture();
     }
@@ -219,16 +260,17 @@ export class LitboxSceneRenderer {
         // scene's active camera's id and be mistaken for "the same camera, no change".
         this.lastActiveCameraOwnerId = null;
 
-        this.lightResources.updateFromScene(scene, this.sceneGraph, this.transformResources);
-        await this.raytracedResources.updateFromScene(scene, this.sceneGraph, this.textureCache);
-        this.simulationResources.updateFromScene(scene, this.sceneGraph);
-        await this.spriteResources.updateFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
+        this.lightResources.loadFromScene(scene, this.sceneGraph, this.transformResources);
+        this.simulationResources.loadFromScene(scene, this.sceneGraph);
+        await this.raytracedResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
+        await this.spriteResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
 
         // rebuildFromScene runs outside the per-frame render() loop (from start()/setScene()),
         // so nothing else will flush these until the next render() call - without this, the
         // very first frame after a scene load would draw against unwritten GPU buffers.
         this.transformResources.flush();
         this.lightResources.flush();
+        this.raytracedResources.flush();
         this.spriteResources.flush();
     }
 
@@ -254,7 +296,7 @@ export class LitboxSceneRenderer {
                     void this.spriteResources.addSprite(op.sprite, sceneGraph, this.textureCache, this.transformResources);
                 }
                 if (op.raytraced) {
-                    void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+                    void this.raytracedResources.addRaytraced(op.raytraced, sceneGraph, this.textureCache, this.transformResources);
                 }
                 if (op.light && op.lightKind) {
                     this.lightResources.addLight(op.lightKind, op.light, sceneGraph, this.transformResources);
@@ -265,13 +307,13 @@ export class LitboxSceneRenderer {
                 // (unlike destroyLight's single light) - a full rebuild against the
                 // already-filtered scene.data light arrays is simpler and matches this
                 // renderer's pre-existing behavior for this case.
-                this.lightResources.updateFromScene(scene, sceneGraph, this.transformResources);
-                void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+                this.lightResources.loadFromScene(scene, sceneGraph, this.transformResources);
+                this.raytracedResources.removeByOwnerIds(new Set(removed), this.transformResources);
                 this.spriteResources.removeByOwnerIds(new Set(removed), this.transformResources);
             } else if (op.type === 'destroySprite') {
                 this.spriteResources.removeSprite(op.sprite, this.transformResources);
             } else if (op.type === 'destroyRaytraced') {
-                void this.raytracedResources.updateFromScene(scene, sceneGraph, this.textureCache);
+                this.raytracedResources.removeRaytraced(op.raytraced, this.transformResources);
             } else if (op.type === 'destroyLight') {
                 this.lightResources.removeLight(op.light, this.transformResources);
             } else {
@@ -311,7 +353,7 @@ export class LitboxSceneRenderer {
         for (const ownerId of affectedIds) {
             this.transformResources.refreshTransform(ownerId, sceneGraph);
             this.spriteResources.refreshActiveState(ownerId, sceneGraph);
-            this.raytracedResources.refreshEntry(ownerId, sceneGraph);
+            this.raytracedResources.refreshActiveState(ownerId, sceneGraph);
         }
         return affectedIds;
     }
@@ -350,8 +392,9 @@ export class LitboxSceneRenderer {
         for (const sprite of frameState.persistentSprites) {
             this.spriteResources.markDynamic(sprite);
         }
-        // frameState.persistentRaytraced: no packed array to reposition yet - see
-        // RaytracedResources' class doc.
+        for (const raytraced of frameState.persistentRaytraced) {
+            this.raytracedResources.markDynamic(raytraced);
+        }
 
         const transformAffectedIds = new Set<number>();
         for (const obj of frameState.transforms) {
@@ -366,20 +409,21 @@ export class LitboxSceneRenderer {
         for (const sprite of frameState.sprites) {
             this.spriteResources.refreshProperties(sprite);
         }
-        // frameState.raytraced entries deliberately have no per-entry properties update here:
-        // RaytracedResources has no GPU buffer yet (see its refreshEntry TODO), so a raytraced
-        // entry marked dynamic/dirty in isolation (owner transform unchanged) has nothing to
-        // upload to - it's tracked purely for API symmetry until the simulation pass exists.
+        for (const raytraced of frameState.raytraced) {
+            this.raytracedResources.refreshProperties(raytraced);
+        }
 
         const simOwnerId = this.simulationResources.getOwnerId();
         if (simOwnerId !== null && transformAffectedIds.has(simOwnerId)) {
             this.simulationResources.refreshWorldTransform(this.sceneGraph);
+            this.raytracedResources.refreshViewProjection(this.sceneGraph);
         }
 
         // One flush per array per frame, after every mutation above (structural ops earlier
         // this same frame included) and before any GPU pass is recorded - see PackedUniformArray.flush().
         this.transformResources.flush();
         this.lightResources.flush();
+        this.raytracedResources.flush();
         this.spriteResources.flush();
 
         this.activeScene.clearFrameDirtyFlags();
@@ -485,12 +529,36 @@ export class LitboxSceneRenderer {
         try {
             const encoder = this.device.createCommandEncoder();
 
-            // Step 1: run the (stubbed) simulation.
+            // Step 1: render the G-Buffer (albedo/alpha, density, normal/roughness) for
+            // raytraced objects. Runs unconditionally (even in debug-view mode below) so the
+            // G-Buffer stays live against scene changes.
+            this.raytracedResources.renderGBuffer(encoder);
+
+            // Step 2: run the (stubbed) simulation.
             this.simulationResources.run(encoder);
+
+            if (this.debugView) {
+                const view = this.debugViews.get(this.debugView);
+                const sourceView = view?.getSourceView() ?? null;
+                if (view && sourceView) {
+                    const debugPass = encoder.beginRenderPass({
+                        colorAttachments: [{
+                            view: this.context.getCurrentTexture().createView(),
+                            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                            loadOp: 'clear',
+                            storeOp: 'store',
+                        }],
+                    });
+                    this.debugViewBlitResources.apply(debugPass, sourceView, view.mode, this.debugViewScale);
+                    debugPass.end();
+                    this.device.queue.submit([encoder.finish()]);
+                    return;
+                }
+            }
 
             const exposure = this.writeCameraUniform(this.getActiveCamera());
 
-            // Steps 2-5: sprites + additive simulation composite into the offscreen HDR frame buffer.
+            // Steps 3-6: sprites + additive simulation composite into the offscreen HDR frame buffer.
             // No depth/stencil attachment - It's safe to presume the vast majority of objects have
             // transparency, so just draw them back to front.
             const hdrPass = encoder.beginRenderPass({
@@ -507,7 +575,7 @@ export class LitboxSceneRenderer {
             this.spriteResources.draw(hdrPass, layer => layer >= 1);
             hdrPass.end();
 
-            // Step 6: tonemap the HDR frame buffer to the swapchain.
+            // Step 7: tonemap the HDR frame buffer to the swapchain.
             const tonemapPass = encoder.beginRenderPass({
                 colorAttachments: [{
                     view: this.context.getCurrentTexture().createView(),

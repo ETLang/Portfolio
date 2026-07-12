@@ -40,6 +40,7 @@ export interface SceneCamera {
 
 export interface RaytracedObject {
     ownerId: number;
+    sortOrder: number; // draw order within the G-Buffer pass, ascending. Equal values: relative order is unspecified.
     logDensity: number;
     roughness: number;
     heightScale: number;
@@ -181,7 +182,7 @@ export function parseScene(json: string): Scene {
         simulations: data.simulations ?? [],
         objects: data.objects ?? [],
         cameras: data.cameras ?? [],
-        raytraced: data.raytraced ?? [],
+        raytraced: (data.raytraced ?? []).map(r => ({ ...r, sortOrder: r.sortOrder ?? 0 })),
         sprites: (data.sprites ?? []).map(sprite => ({ ...sprite, sortOrder: sprite.sortOrder ?? 0 })),
         pointLights: data.pointLights ?? [],
         spotlights: data.spotlights ?? [],

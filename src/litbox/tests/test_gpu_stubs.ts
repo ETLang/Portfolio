@@ -54,6 +54,7 @@ export class FakeGpuBuffer {
 
 export class FakeGpuTexture {
     public descriptor: { size: number[]; format: string; usage: number };
+    public destroyed = false;
 
     constructor(descriptor: { size: number[]; format: string; usage: number }) {
         this.descriptor = descriptor;
@@ -63,7 +64,9 @@ export class FakeGpuTexture {
         return {};
     }
 
-    public destroy(): void {}
+    public destroy(): void {
+        this.destroyed = true;
+    }
 }
 
 export interface WriteTextureCall {

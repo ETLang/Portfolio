@@ -90,7 +90,13 @@ export class LightResources {
         return this.ambientLights;
     }
 
-    public updateFromScene(scene: Scene, sceneGraph: SceneGraph, transformResources: TransformResources): void {
+    /**
+     * Full teardown-and-rebuild from `scene`. Called only on an actual scene load/swap (see
+     * LitboxSceneRenderer.rebuildFromScene, its only caller) - never per-frame, and never for a
+     * single object's create/destroy/property change, which go through addLight/removeLight/
+     * refreshProperties instead.
+     */
+    public loadFromScene(scene: Scene, sceneGraph: SceneGraph, transformResources: TransformResources): void {
         for (const light of [...this.records.keys()]) {
             this.removeLight(light, transformResources);
         }
@@ -111,7 +117,7 @@ export class LightResources {
     /**
      * Resolves and uploads a single newly-created light, appending it without touching any
      * existing light's entry - the targeted counterpart (for a structural create op) to
-     * updateFromScene's full rebuild.
+     * loadFromScene's full rebuild.
      */
     public addLight(kind: LightKind, light: AnyLight, sceneGraph: SceneGraph, transformResources: TransformResources): void {
         const transformEntry = transformResources.ensureEntry(light.ownerId, sceneGraph);
@@ -125,7 +131,7 @@ export class LightResources {
     /**
      * Removes exactly one light's entry (matched by reference) and releases its transform
      * reference. The targeted counterpart (for a destroyLight structural op) to
-     * updateFromScene's full rebuild. No-op if `light` isn't tracked.
+     * loadFromScene's full rebuild. No-op if `light` isn't tracked.
      */
     public removeLight(light: AnyLight, transformResources: TransformResources): void {
         const record = this.records.get(light);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { clusterByTextureWithinTiedGroups, compareDrawOrder, SpriteResources } from '../sprite_resources.ts';
+import { compareDrawOrder, SpriteResources } from '../sprite_resources.ts';
+import { clusterByTextureWithinTiedGroups } from '../draw_order.ts';
 import { SceneGraph } from '../scene_graph.ts';
 import { TextureCache } from '../texture_cache.ts';
 import { SimulationResources } from '../simulation.ts';
@@ -78,7 +79,7 @@ async function setup(sprites?: SceneSprite[]): Promise<Fixture> {
     const scene = makeScene(sprites);
     const sceneGraph = new SceneGraph(scene);
     textureCache.loadScene('', scene.textureAtlasKeys);
-    await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources, transformResources);
+    await spriteResources.loadFromScene(scene, sceneGraph, textureCache, simulationResources, transformResources);
 
     return { device, spriteResources, transformResources, scene, sceneGraph, textureCache };
 }
@@ -108,7 +109,7 @@ function makeRecordingPassEncoder(): { encoder: GPURenderPassEncoder; draws: Rec
 }
 
 describe('SpriteResources', () => {
-    it('stages properties, atlas, transform, and index data for every sprite on updateFromScene, uploaded on flush', async () => {
+    it('stages properties, atlas, transform, and index data for every sprite on loadFromScene, uploaded on flush', async () => {
         const fixture = await setup();
         expect(fixture.device.writeCalls).toHaveLength(0); // nothing reaches the GPU before flush()
 
@@ -287,7 +288,7 @@ describe('SpriteResources', () => {
         const transformResources = new TransformResources(gpuDevice);
         const sceneGraph = new SceneGraph(scene);
         textureCache.loadScene('', scene.textureAtlasKeys);
-        await spriteResources.updateFromScene(scene, sceneGraph, textureCache, simulationResources, transformResources);
+        await spriteResources.loadFromScene(scene, sceneGraph, textureCache, simulationResources, transformResources);
 
         const passEncoder = makeRecordingPassEncoder();
         spriteResources.draw(passEncoder.encoder, () => true);
@@ -339,19 +340,19 @@ function item(id: string, layer: number, sortOrder: number, texture: string): Fa
 describe('clusterByTextureWithinTiedGroups', () => {
     it('regroups an interleaved tied run so same-texture entries become adjacent', () => {
         const items = [item('a', 0, 0, 'A'), item('b', 0, 0, 'B'), item('c', 0, 0, 'A'), item('d', 0, 0, 'B')];
-        clusterByTextureWithinTiedGroups(items);
+        clusterByTextureWithinTiedGroups(items, compareDrawOrder);
         expect(items.map(i => i.id)).toEqual(['a', 'c', 'b', 'd']); // A's grouped first (first-seen), B's second
     });
 
     it('leaves a run already grouped by texture untouched', () => {
         const items = [item('a', 0, 0, 'A'), item('b', 0, 0, 'A'), item('c', 0, 0, 'B')];
-        clusterByTextureWithinTiedGroups(items);
+        clusterByTextureWithinTiedGroups(items, compareDrawOrder);
         expect(items.map(i => i.id)).toEqual(['a', 'b', 'c']);
     });
 
     it('does not reorder across a (layer, sortOrder) boundary', () => {
         const items = [item('a', 0, 0, 'A'), item('b', 1, 0, 'B'), item('c', 1, 0, 'A')];
-        clusterByTextureWithinTiedGroups(items);
+        clusterByTextureWithinTiedGroups(items, compareDrawOrder);
         // 'a' is its own group (different layer) and must stay first; only the layer-1 group
         // (b, c) is eligible to reorder, and it's already interleaved-free (length 2, distinct
         // textures) so nothing moves regardless.
@@ -361,7 +362,7 @@ describe('clusterByTextureWithinTiedGroups', () => {
 
     it('is a no-op for a run of length 1', () => {
         const items = [item('a', 0, 0, 'A')];
-        clusterByTextureWithinTiedGroups(items);
+        clusterByTextureWithinTiedGroups(items, compareDrawOrder);
         expect(items.map(i => i.id)).toEqual(['a']);
     });
 });
