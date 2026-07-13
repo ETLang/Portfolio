@@ -584,7 +584,9 @@ export class LitboxSceneRenderer {
                     storeOp: 'store',
                 }],
             });
-            this.tonemapResources.apply(tonemapPass, this.hdrFrameTextureView, exposure);
+            this.tonemapResources.updateUniforms({ exposure });
+            this.tonemapResources.updateInputs(this.hdrFrameTextureView);
+            this.tonemapResources.execute(tonemapPass);
             tonemapPass.end();
 
             this.device.queue.submit([encoder.finish()]);
