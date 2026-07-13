@@ -74,9 +74,8 @@ describe('deriveEffectiveSimulation', () => {
 });
 
 describe('computeMaxIntegrationSteps', () => {
-    it('is 2x the domain diagonal (two full marches per bounce - search phase then refine phase)', () => {
-        // 512x512 diagonal ~= 724.08, so 2x that ~= 1448.15.
-        expect(computeMaxIntegrationSteps(512, 512)).toBeCloseTo(2 * Math.hypot(512, 512));
+    it('is the domain diagonal (search and refine phases each get their own independent step budget, not a combined one)', () => {
+        expect(computeMaxIntegrationSteps(512, 512)).toBeCloseTo(Math.hypot(512, 512));
     });
 
     it('scales down with resolution, so a halved simulation gets roughly half the step budget', () => {

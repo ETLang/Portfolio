@@ -371,11 +371,14 @@ fn integrate(photon: ptr<function, Ray>, bounces: u32, integrator: ptr<function,
         integratorBeginTraversal(integrator);
         var continueRunning = true;
         // MAX_INTEGRATION_STEPS is a compile-time switch (ForwardMonteCarloOperation.
-        // updateSwitches), not a runtime uniform - a per-bounce step cap on this ray-march search/
-        // refine loop before it gives up (Unity's original hardcoded this at 2000). Lower caps cut
-        // per-thread worst-case work directly, which matters most for divergent SIMT execution:
-        // every thread in a workgroup pays for whichever thread takes the most steps this bounce -
-        // see CLAUDE.md/mobile-perf-tuning notes.
+        // updateSwitches), not a runtime uniform - a step cap on this one search-or-refine phase
+        // before it gives up (Unity's original hardcoded this at 2000; see
+        // simulation.ts's computeMaxIntegrationSteps for the current one-domain-diagonal
+        // derivation - this loop's uEscape-bounded overshoot condition can't legitimately need more
+        // steps than that, since uEscape is a ray-vs-box exit distance). Lower caps cut per-thread
+        // worst-case work directly, which matters most for divergent SIMT execution: every thread
+        // in a workgroup pays for whichever thread takes the most steps - see CLAUDE.md/
+        // mobile-perf-tuning notes.
         for (var steps = 0; steps < MAX_INTEGRATION_STEPS; steps++) {
             ctx.transmissibilityNext = vec2<f32>(1.0, 1.0) - textureSampleLevel(density, linearSampler, ctx.testUV, 0.0).xy / DENSITY_SCALE;
             ctx.uHitNext = ctx.uHitCurrent + 1.0;

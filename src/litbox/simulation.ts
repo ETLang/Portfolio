@@ -57,14 +57,16 @@ export function getSimulationDeviceProfile(platform: Platform, gpuRandomAccessFr
 }
 
 /**
- * Per-bounce ray-march step cap: two full domain-diagonal marches (search phase then refine
- * phase - see forward_monte_carlo.wgsl's integrate() and CLAUDE.md/mobile-perf-tuning notes for
- * the derivation). Always derived from whatever width/height are actually in play (not a stored
- * field) so it automatically tracks resolutionScale - a fixed constant would either waste budget
- * (too high for a scaled-down domain) or truncate legitimate refine-phase searches (too low).
+ * Per-bounce-phase ray-march step cap: one domain-diagonal march. forward_monte_carlo.wgsl's
+ * integrate() runs its search phase and refine phase as two *separate* invocations of the same
+ * steps-for-loop (each resets steps to 0), each independently bounded by that phase's own uEscape
+ * (a ray-vs-box exit distance) - so a single diagonal covers either phase's worst case, not both
+ * combined. Always derived from whatever width/height are actually in play (not a stored field)
+ * so it automatically tracks resolutionScale - a fixed constant would either waste budget (too
+ * high for a scaled-down domain) or truncate a legitimate search/refine phase (too low).
  */
 export function computeMaxIntegrationSteps(width: number, height: number): number {
-    return 2 * Math.sqrt(width * width + height * height);
+    return Math.sqrt(width * width + height * height);
 }
 
 /** Applies `profile` to a scene's raw simulation config - pure, doesn't mutate `simulation`. */

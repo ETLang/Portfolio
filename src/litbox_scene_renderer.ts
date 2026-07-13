@@ -124,6 +124,14 @@ export class LitboxSceneRenderer {
      */
     public exposureOverride: number | null = null;
 
+    /**
+     * When false, the tonemap pass (see tonemap.wgsl) is bypassed and the raw HDR frame
+     * buffer is written straight to the swapchain instead - useful for inspecting the
+     * simulation's actual output range without the filmic curve masking it. Values will
+     * clip to whatever range the presentation format allows.
+     */
+    public tonemapEnabled = true;
+
     /** Owner id of the camera exposureOverride was last synced to - see syncExposureToActiveCamera. */
     private lastActiveCameraOwnerId: number | null = null;
 
@@ -656,7 +664,7 @@ export class LitboxSceneRenderer {
                     storeOp: 'store',
                 }],
             });
-            this.tonemapResources.updateUniforms({ exposure });
+            this.tonemapResources.updateUniforms({ exposure, enabled: this.tonemapEnabled });
             this.tonemapResources.updateInputs(this.hdrFrameTextureView);
             this.tonemapResources.execute(tonemapPass);
             tonemapPass.end();

@@ -4,6 +4,8 @@ import { preprocessShader } from './shaders/shader_preprocessor.ts';
 export interface TonemapUniforms {
     /** Added in log10 space before the filmic curve - see tonemap.wgsl for why its effective scale differs from a plain exposure stop. */
     exposure: number;
+    /** When false, the filmic curve is bypassed entirely and the raw HDR value is written straight to the swapchain (clipping to whatever the presentation format's range allows). */
+    enabled: boolean;
 }
 
 /**
@@ -28,6 +30,7 @@ export class TonemapResources {
     private sampler: GPUSampler;
 
     private lastExposure: number | null = null;
+    private lastEnabled: boolean | null = null;
     private hdrView: GPUTextureView | null = null;
     private bindGroup: GPUBindGroup | null = null;
     private bindGroupDirty = true;
@@ -54,18 +57,19 @@ export class TonemapResources {
         });
 
         this.uniformBuffer = device.createBuffer({
-            size: 4,
+            size: 8,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
     }
 
-    /** A no-op if `uniforms` describes the same exposure already written. */
+    /** A no-op if `uniforms` describes the same exposure/enabled state already written. */
     public updateUniforms(uniforms: TonemapUniforms): void {
-        if (this.lastExposure === uniforms.exposure) {
+        if (this.lastExposure === uniforms.exposure && this.lastEnabled === uniforms.enabled) {
             return;
         }
         this.lastExposure = uniforms.exposure;
-        this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([uniforms.exposure]));
+        this.lastEnabled = uniforms.enabled;
+        this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([uniforms.exposure, uniforms.enabled ? 1.0 : 0.0]));
     }
 
     /** A no-op if `hdrView` is the same view already bound. */

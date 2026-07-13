@@ -86,6 +86,7 @@ const viewContent = {
             <p>Rays/Pixel: <input type="range" min="1" max="100" value="50" class="slider"></p>
             <p>Bounce Depth: <input type="range" min="1" max="10" value="5" class="slider"></p>
             <p>Exposure: <input type="range" id="exposure-slider" min="-4" max="4" step="0.1" value="0" class="slider"></p>
+            <p><label><input type="checkbox" id="tonemap-toggle" checked> Tone mapping</label></p>
         `,
     },
     fractals: {
@@ -152,6 +153,13 @@ sidebarPane.addEventListener('input', (e: Event) => {
     const target = e.target as HTMLElement;
     if (target.id === 'exposure-slider' && litboxRenderer) {
         litboxRenderer.exposureOverride = parseFloat((target as HTMLInputElement).value);
+    }
+});
+
+sidebarPane.addEventListener('change', (e: Event) => {
+    const target = e.target as HTMLElement;
+    if (target.id === 'tonemap-toggle' && litboxRenderer) {
+        litboxRenderer.tonemapEnabled = (target as HTMLInputElement).checked;
     }
 });
 
