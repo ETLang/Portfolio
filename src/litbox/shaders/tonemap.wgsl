@@ -1,6 +1,8 @@
-// Final pass: HDR frame buffer -> swapchain. Fullscreen triangle (this pass, unlike the
-// simulation composite, genuinely is screen-aligned). Applies a UE5-style filmic tonemap:
+// Final pass: HDR frame buffer -> swapchain. Fullscreen quad (this pass, unlike the simulation
+// composite, genuinely is screen-aligned). Applies a UE5-style filmic tonemap:
 // smoothstep(blackPoint, whitePoint, log10(x) + exposure).
+
+#include "LitboxCommon.wgsl"
 
 struct TonemapUniform {
     exposure: f32,
@@ -42,28 +44,10 @@ struct VertexOutput {
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-    // Deliberately not array-indexed: some mobile GPU drivers (confirmed on a Pixel 10
-    // Pro, both Chrome and Brave) silently corrupt geometry when a fullscreen-quad's
-    // positions come from a WGSL array indexed by vertex_index. Branching instead of
-    // indexing works around it.
-    var pos: vec2<f32>;
-    if (vertexIndex == 0u) {
-        pos = vec2<f32>(-1.0, -1.0);
-    } else if (vertexIndex == 1u) {
-        pos = vec2<f32>(1.0, -1.0);
-    } else if (vertexIndex == 2u) {
-        pos = vec2<f32>(-1.0, 1.0);
-    } else if (vertexIndex == 3u) {
-        pos = vec2<f32>(-1.0, 1.0);
-    } else if (vertexIndex == 4u) {
-        pos = vec2<f32>(1.0, -1.0);
-    } else {
-        pos = vec2<f32>(1.0, 1.0);
-    }
-
+    let pos = fullscreenQuadPosition(vertexIndex);
     var out: VertexOutput;
     out.position = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = vec2<f32>(pos.x * 0.5 + 0.5, 0.5 - pos.y * 0.5);
+    out.uv = clipSpaceToUv(pos);
     return out;
 }
 

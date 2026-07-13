@@ -24,8 +24,7 @@
 // for exact per-texel inspection (nearest-neighbor, no interpolation) - appropriate for a debug
 // view regardless of which source's format is bound.
 
-// Must match DENSITY_SCALE in raytraced_gbuffer.wgsl and raytraced_resources.ts exactly.
-const DENSITY_SCALE: f32 = 8192.0;
+#include "LitboxCommon.wgsl"
 
 struct DebugViewUniform {
     mode: u32,
@@ -46,26 +45,10 @@ struct VertexOutput {
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-    // Deliberately not array-indexed - see tonemap.wgsl's vertex_main for why (confirmed silent
-    // geometry corruption on some mobile GPU drivers).
-    var pos: vec2<f32>;
-    if (vertexIndex == 0u) {
-        pos = vec2<f32>(-1.0, -1.0);
-    } else if (vertexIndex == 1u) {
-        pos = vec2<f32>(1.0, -1.0);
-    } else if (vertexIndex == 2u) {
-        pos = vec2<f32>(-1.0, 1.0);
-    } else if (vertexIndex == 3u) {
-        pos = vec2<f32>(-1.0, 1.0);
-    } else if (vertexIndex == 4u) {
-        pos = vec2<f32>(1.0, -1.0);
-    } else {
-        pos = vec2<f32>(1.0, 1.0);
-    }
-
+    let pos = fullscreenQuadPosition(vertexIndex);
     var out: VertexOutput;
     out.position = vec4<f32>(pos, 0.0, 1.0);
-    out.uv = vec2<f32>(pos.x * 0.5 + 0.5, 0.5 - pos.y * 0.5);
+    out.uv = clipSpaceToUv(pos);
     return out;
 }
 

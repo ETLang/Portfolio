@@ -1,5 +1,6 @@
 import { ComputeOperation } from './compute_operation.ts';
 import shaderCode from './shaders/convert_photon_irradiance_to_hdr.wgsl?raw';
+import { preprocessShader } from './shaders/shader_preprocessor.ts';
 
 export interface ConvertPhotonIrradianceToHdrUniforms {
     /** (width * height) / 4294967295 - converts the raw atomic accumulator back into a float range. See the wgsl file for the full explanation. */
@@ -16,7 +17,7 @@ export class ConvertPhotonIrradianceToHdrOperation extends ComputeOperation {
     private lastHdrScale: number | null = null;
 
     constructor(device: GPUDevice) {
-        super(device, shaderCode, 'main');
+        super(device, preprocessShader(shaderCode), 'main');
         this.uniformBuffer = device.createBuffer({
             size: 4,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,

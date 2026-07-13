@@ -15,9 +15,9 @@
   value read from a buffer, etc.). Confirmed on a Pixel 10 Pro (both Chrome and Brave,
   so it's the shared Android GPU driver, not a browser feature) that this can silently
   corrupt geometry/output, with **zero** validation error, exception, or device loss to
-  catch it. See `src/litbox/shaders/tonemap.wgsl`'s `vertex_main` for the workaround
-  (branching instead of indexing) and `src/litbox_scene_renderer.ts`'s class doc comment
-  for more context.
+  catch it. See `src/litbox/shaders/LitboxCommon.wgsl`'s `fullscreenQuadPosition` for the
+  workaround (branching instead of indexing) and `src/litbox_scene_renderer.ts`'s class doc
+  comment for more context.
   - Applies to vertex, fragment, and compute shaders alike - the bug is in how the
     driver lowers the indexing instruction, not specific to one shader stage.
   - Prefer buffer-backed data (storage buffer, uniform buffer, or `var<workgroup>` for
@@ -27,6 +27,25 @@
     is the safe fallback.
   - Any new shader trick like this needs to be confirmed on real mobile hardware, not
     just desktop - this class of bug produces no signal in desktop-only testing.
+
+- WGSL has no native `#include`, `#define`, or `#ifdef`. This project emulates a minimal
+  C-style subset of all three in `src/litbox/shaders/shader_preprocessor.ts`'s
+  `preprocessShader(source, defines?)`, run on every shader's raw `?raw` import before the
+  result reaches `createShaderModule` - see any of `tonemap.ts`, `debug_view.ts`,
+  `raytraced_resources.ts`, `sprite_resources.ts`, `simulation.ts`,
+  `convert_photon_irradiance_to_hdr.ts` for the pattern. See the file header for the exact
+  supported directive set (`#include`, `#define`/`#undef`, `#ifdef`/`#ifndef`/`#else`/`#endif` -
+  no `#elif`, no `#if <expression>`) and its limits (single-pass, non-recursive macro
+  substitution; `#include` is deduped per-file automatically rather than via opt-in guards).
+  Any `.wgsl` file in `src/litbox/shaders/` should open with `#include "LitboxCommon.wgsl"`
+  even if it doesn't yet use anything from it, so a future shared declaration doesn't require
+  retrofitting every file. `LitboxCommon.wgsl` currently holds `DENSITY_SCALE` and the
+  `fullscreenQuadPosition`/`clipSpaceToUv` helpers - it's the single WGSL-side source of
+  truth for both (though `DENSITY_SCALE` still needs a separate, manually kept-in-sync copy on
+  the TS side, `RaytracedResources.DENSITY_SCALE`, since WGSL and TS can't share a literal
+  across that language boundary). `preprocessShader`'s `defines` parameter is also how
+  `ComputeOperation.updateSwitches(...)` should be implemented once it's built - see
+  "Compute-shader operation architecture" below.
 
 ## WebGPU JS-API gotchas (mobile)
 
@@ -106,11 +125,15 @@ op.execute(encoder);
 - **Samplers are internal to the operation, never caller-configurable.** An operation creates
   whatever sampler(s) it needs (a fixed filter/wrap mode, inherent to what the shader does)
   itself, at construction - never accepts one through `updateInputs`.
-- **Compile-time switches (WGSL sections enabled/disabled at compile time, e.g. via
-  `override` constants) go through their own method, `updateSwitches(...)`** - same
-  bespoke-named-parameters shape as `updateInputs`/`updateOutputs`, never a generic flags
-  bag. Unlike uniforms/inputs/outputs, a switch change invalidates the compute *pipeline*
-  itself, not just a bind group, since it can change which shader code actually gets
-  compiled/specialized - so `updateSwitches` marks its own `pipelineDirty` flag, checked and
-  rebuilt by `execute()` before dispatch, the same lazy-rebuild pattern used for the three
-  bind groups.
+- **Compile-time switches (WGSL sections enabled/disabled at compile time) go through their
+  own method, `updateSwitches(...)`** - same bespoke-named-parameters shape as
+  `updateInputs`/`updateOutputs`, never a generic flags bag. Implement it via
+  `shader_preprocessor.ts`'s `#define`/`#ifdef` support: translate the typed switch parameters
+  into a `ShaderDefines` object and re-run `preprocessShader(rawShaderSource, defines)` to get
+  the shader text for this particular switch combination (not WGSL `override` constants -
+  those can only gate runtime branches with `if`, they can't omit code from compilation the way
+  `#ifdef` can, e.g. dropping an entire unused binding or entry point). Unlike uniforms/inputs/
+  outputs, a switch change invalidates the compute *pipeline* itself, not just a bind group,
+  since it changes which shader code actually gets compiled - so `updateSwitches` marks its own
+  `pipelineDirty` flag, checked and rebuilt by `execute()` before dispatch, the same lazy-rebuild
+  pattern used for the three bind groups.

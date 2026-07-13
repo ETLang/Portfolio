@@ -3,6 +3,8 @@
 // screen-aligned). Samples the lightmap's base mip only; no exposure is applied here -
 // exposure is a final tonemapping concern (see tonemap.wgsl).
 
+#include "LitboxCommon.wgsl"
+
 struct CameraUniform {
     viewProjection: mat4x4<f32>,
     simInverseWorldTransform: mat4x4<f32>,

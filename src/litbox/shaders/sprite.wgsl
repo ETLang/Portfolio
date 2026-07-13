@@ -31,6 +31,8 @@
 // storage-buffer reads keyed by a runtime index are a completely different, battle-tested
 // driver code path.
 
+#include "LitboxCommon.wgsl"
+
 struct CameraUniform {
     viewProjection: mat4x4<f32>,
     simInverseWorldTransform: mat4x4<f32>,

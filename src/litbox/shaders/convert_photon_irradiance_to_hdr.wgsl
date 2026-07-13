@@ -12,6 +12,8 @@
 // albedo/density are read with textureLoad (a direct texel fetch), not textureSample - the photon
 // buffer and G-Buffer share resolution 1:1, exactly matching how Unity's ConvertToHDR indexes
 // g_albedo/g_density directly by id.xy with no filtering.
+#include "LitboxCommon.wgsl"
+
 struct Uniforms {
     // Converts the raw fixed-point atomic accumulator back into a sane float range - see
     // ConvertPhotonIrradianceToHdrOperation for the exact formula (matches Unity's g_hdr_scale).
@@ -25,11 +27,6 @@ struct Uniforms {
 @group(1) @binding(2) var density: texture_2d<f32>;
 
 @group(2) @binding(0) var output: texture_storage_2d<rgba16float, write>;
-
-// Must match DENSITY_SCALE in raytraced_resources.ts exactly - already copy-pasted in
-// raytraced_gbuffer.wgsl and debug_view_blit.wgsl (no shared source of truth today), so this is a
-// 4th copy, consistent with existing precedent.
-const DENSITY_SCALE: f32 = 8192.0;
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {

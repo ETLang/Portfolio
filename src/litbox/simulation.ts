@@ -6,6 +6,7 @@ import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } fro
 import { ComputedDataManager, ComputedTexture, ComputedBuffer } from './computed_data_manager.ts';
 import { ConvertPhotonIrradianceToHdrOperation } from './convert_photon_irradiance_to_hdr.ts';
 import compositeShaderCode from './shaders/simulation_composite.wgsl?raw';
+import { preprocessShader } from './shaders/shader_preprocessor.ts';
 
 const LIGHTMAP_FORMAT: GPUTextureFormat = 'rgba16float';
 
@@ -58,7 +59,7 @@ export class SimulationResources {
             ],
         });
 
-        const shaderModule = this.device.createShaderModule({ code: compositeShaderCode });
+        const shaderModule = this.device.createShaderModule({ code: preprocessShader(compositeShaderCode) });
         this.pipeline = this.device.createRenderPipeline({
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [cameraBindGroupLayout, this.compositeBindGroupLayout] }),
             vertex: {

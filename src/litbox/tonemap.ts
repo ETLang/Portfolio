@@ -1,4 +1,5 @@
 import tonemapShaderCode from './shaders/tonemap.wgsl?raw';
+import { preprocessShader } from './shaders/shader_preprocessor.ts';
 
 export interface TonemapUniforms {
     /** Added in log10 space before the filmic curve - see tonemap.wgsl for why its effective scale differs from a plain exposure stop. */
@@ -44,7 +45,7 @@ export class TonemapResources {
             ],
         });
 
-        const shaderModule = device.createShaderModule({ code: tonemapShaderCode });
+        const shaderModule = device.createShaderModule({ code: preprocessShader(tonemapShaderCode) });
         this.pipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
             vertex: { module: shaderModule, entryPoint: 'vertex_main' },

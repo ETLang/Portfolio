@@ -8,6 +8,7 @@ import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } fro
 import { resolvePrimitiveShapeId } from './primitive_shape.ts';
 import { clusterByTextureWithinTiedGroups } from './draw_order.ts';
 import spriteShaderCode from './shaders/sprite.wgsl?raw';
+import { preprocessShader } from './shaders/shader_preprocessor.ts';
 
 // Must match the SpriteIndex/SpriteProperties/SpriteAtlasTransform struct layouts in sprite.wgsl.
 const SPRITE_INDEX_STRIDE_BYTES = 16;
@@ -103,7 +104,7 @@ export class SpriteResources {
             ],
         });
 
-        const shaderModule = this.device.createShaderModule({ code: spriteShaderCode });
+        const shaderModule = this.device.createShaderModule({ code: preprocessShader(spriteShaderCode) });
         this.pipeline = this.device.createRenderPipeline({
             layout: this.device.createPipelineLayout({
                 bindGroupLayouts: [cameraBindGroupLayout, this.sharedBindGroupLayout, this.textureBindGroupLayout, this.lightmapBindGroupLayout],
