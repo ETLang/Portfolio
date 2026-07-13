@@ -13,6 +13,7 @@ import { RingBufferedUniform } from './litbox/ring_buffered_uniform.ts';
 import { TransformResources } from './litbox/transform_resources.ts';
 import { ComputedDataManager } from './litbox/computed_data_manager.ts';
 import { DebugViewBlitResources, DEBUG_VIEW_MODE, type DebugView } from './litbox/debug_view.ts';
+import { RollingRateCounter, computeRateFromDelta } from './litbox/performance_metrics.ts';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // viewProjection (mat4) + simInverseWorldTransform (mat4) + debugMode (f32, padded to 16
@@ -72,6 +73,17 @@ export class LitboxSceneRenderer {
 
     private activeScene: LitboxScene | null = null;
     private lastFrameTimeMs: number | null = null;
+
+    /** Rendered-frames-per-second, averaged over a rolling window - see getFps(). */
+    private fpsCounter = new RollingRateCounter(500);
+
+    /** Photon-writes/s tracking (see getPhotonWritesPerSecond()): polled independently of the
+     * render loop, on its own timer, since SimulationResources.getWriteCount() is an async GPU
+     * readback (mapAsync) that shouldn't gate every frame. */
+    private photonWritesPerSecond = 0;
+    private lastPhotonWriteCount: bigint | null = null;
+    private lastPhotonWriteTimeMs: number | null = null;
+    private static readonly PHOTON_METRICS_POLL_INTERVAL_MS = 500;
 
     /**
      * Diagnostic aid: when true, sprites render as flat, fully-opaque, shape-colored
@@ -135,6 +147,8 @@ export class LitboxSceneRenderer {
 
         this.render = this.render.bind(this);
         requestAnimationFrame(this.render);
+
+        void this.pollPhotonWriteRate();
     }
 
     /** Stages (or swaps in) a scene. Safe to call before or after start(). */
@@ -158,6 +172,40 @@ export class LitboxSceneRenderer {
     /** The procedural, static LUTs (see lut_resources.ts) - not yet consumed by any pass; exposed for whatever simulation pass eventually needs them. */
     public getLutResources(): LutResources {
         return this.lutResources;
+    }
+
+    /** Rendered frames/s, averaged over a rolling ~500ms window - see fpsCounter. 0 before the first window closes. */
+    public getFps(): number {
+        return this.fpsCounter.getRate();
+    }
+
+    /** Photon-writes/s, averaged over the ~500ms window between consecutive pollPhotonWriteRate() reads. 0 while there's no active simulation. */
+    public getPhotonWritesPerSecond(): number {
+        return this.photonWritesPerSecond;
+    }
+
+    /**
+     * Self-rescheduling poll loop (started once from start()) that turns SimulationResources'
+     * lifetime photon-writes counter into a per-second rate by diffing consecutive reads - exactly
+     * the pattern its getWriteCount() doc comment calls for. Deliberately independent of the render
+     * loop: getWriteCount() awaits an async GPU readback, which would otherwise stall frame timing.
+     */
+    private async pollPhotonWriteRate(): Promise<void> {
+        if (this.simulationResources.hasSimulation()) {
+            const count = await this.simulationResources.getWriteCount();
+            const nowMs = performance.now();
+            if (this.lastPhotonWriteCount !== null && this.lastPhotonWriteTimeMs !== null) {
+                const deltaCount = Number(count - this.lastPhotonWriteCount);
+                this.photonWritesPerSecond = computeRateFromDelta(deltaCount, nowMs - this.lastPhotonWriteTimeMs);
+            }
+            this.lastPhotonWriteCount = count;
+            this.lastPhotonWriteTimeMs = nowMs;
+        } else {
+            this.photonWritesPerSecond = 0;
+            this.lastPhotonWriteCount = null;
+            this.lastPhotonWriteTimeMs = null;
+        }
+        setTimeout(() => void this.pollPhotonWriteRate(), LitboxSceneRenderer.PHOTON_METRICS_POLL_INTERVAL_MS);
     }
 
     private async initWebGPU(): Promise<boolean> {
@@ -525,6 +573,7 @@ export class LitboxSceneRenderer {
 
         const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
         this.lastFrameTimeMs = timeMs;
+        this.fpsCounter.tick(timeMs);
         this.activeScene?.onFrame(deltaTimeSeconds);
         this.applyPendingStructuralOps();
         this.applyDynamicSceneUpdates();

@@ -55,6 +55,33 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 
+.perf-metrics {
+  display: flex;
+  gap: 20px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8em;
+}
+
+.perf-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.perf-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.perf-value {
+  color: var(--accent-color);
+  font-weight: 600;
+  min-width: 3ch;
+  text-align: right;
+}
+
 .activity-bar {
   grid-area: activity;
   background-color: var(--activity-bar-bg);
@@ -488,15 +515,36 @@ canvas {
 
   .app-container {
     grid-template-columns: 1fr;
-    grid-template-rows: 40vh 1fr 60px; /* Canvas, Sidebar, Nav */
+    grid-template-rows: 18px 40vh 1fr 60px; /* Metrics bar, Canvas, Sidebar, Nav */
     grid-template-areas:
+      "header"
       "workspace"
       "sidebar"
       "activity";
   }
 
-  .title-bar, .status-bar {
-    display: none; /* Hide desktop-specific bars */
+  .status-bar {
+    display: none; /* Hide the desktop-specific footer */
+  }
+
+  /* Keep the title bar, but shrink it to a slim metrics-only strip - the "Litbox" title
+     itself isn't worth the space on a phone screen. */
+  .title-bar {
+    padding: 0 8px;
+    justify-content: flex-end;
+  }
+
+  .title-bar .title {
+    display: none;
+  }
+
+  .perf-metrics {
+    gap: 10px;
+    font-size: 0.6rem;
+  }
+
+  .perf-value {
+    min-width: 0;
   }
 
   .workspace-viewport {
@@ -533,8 +581,9 @@ canvas {
   /* --- ABOUT PAGE --- */
   .app-container[data-active-view="about"] {
     grid-template-columns: 1fr;
-    grid-template-rows: 1fr 60px; /* Canvas, Nav */
+    grid-template-rows: 18px 1fr 60px; /* Metrics bar, Canvas, Nav */
     grid-template-areas:
+      "header"
       "workspace"
       "activity";
   }

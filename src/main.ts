@@ -5,6 +5,7 @@ import { LitboxSceneRenderer } from './litbox_scene_renderer.ts';
 import { CornellSquareScene } from './litbox/scenes/cornell_square_scene.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
+import { formatRate } from './litbox/performance_metrics.ts';
 import introMdText from './intro.md?raw';
 
 // Import markdown files as URLs. Vite will handle resolving these paths correctly
@@ -205,6 +206,23 @@ if (canvas) {
 } else {
     console.error("Canvas element not found!");
 }
+
+// --- PERFORMANCE METRICS DISPLAY ---
+const perfFpsEl = document.getElementById('perf-fps');
+const perfPhotonsEl = document.getElementById('perf-photons');
+const PERF_DISPLAY_UPDATE_INTERVAL_MS = 250;
+
+setInterval(() => {
+    if (!litboxRenderer) {
+        return;
+    }
+    if (perfFpsEl) {
+        perfFpsEl.textContent = formatRate(litboxRenderer.getFps());
+    }
+    if (perfPhotonsEl) {
+        perfPhotonsEl.textContent = formatRate(litboxRenderer.getPhotonWritesPerSecond());
+    }
+}, PERF_DISPLAY_UPDATE_INTERVAL_MS);
 
 // --- CONTACT MODAL ---
 const contactLink = document.getElementById('contact-link');
