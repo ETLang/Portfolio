@@ -48,16 +48,16 @@ describe('forward_monte_carlo pure per-light math', () => {
     });
 
     describe('computeWorldToTargetPixels', () => {
-        it('maps the simulation\'s local [-0.5,0.5]^2 rect to [0,width] x [0,height] pixel space under an identity world transform', () => {
+        it('maps the simulation\'s local [-0.5,0.5]^2 rect to [0,width] x [0,height] pixel space under an identity world transform, flipping Y so world "up" lands at pixel row 0', () => {
             const worldToTargetPixels = computeWorldToTargetPixels(mat4.create(), 100, 200);
 
-            const min = transformPoint(worldToTargetPixels, [-0.5, -0.5, 0]);
-            const max = transformPoint(worldToTargetPixels, [0.5, 0.5, 0]);
+            const bottomLeft = transformPoint(worldToTargetPixels, [-0.5, -0.5, 0]);
+            const topRight = transformPoint(worldToTargetPixels, [0.5, 0.5, 0]);
 
-            expect(min[0]).toBeCloseTo(0);
-            expect(min[1]).toBeCloseTo(0);
-            expect(max[0]).toBeCloseTo(100);
-            expect(max[1]).toBeCloseTo(200);
+            expect(bottomLeft[0]).toBeCloseTo(0);
+            expect(bottomLeft[1]).toBeCloseTo(200);
+            expect(topRight[0]).toBeCloseTo(100);
+            expect(topRight[1]).toBeCloseTo(0);
         });
     });
 
@@ -71,7 +71,7 @@ describe('forward_monte_carlo pure per-light math', () => {
             const origin = transformPoint(lightToTarget, [0, 0, 0]);
 
             expect(origin[0]).toBeCloseTo(60);
-            expect(origin[1]).toBeCloseTo(140);
+            expect(origin[1]).toBeCloseTo(60);
         });
     });
 
