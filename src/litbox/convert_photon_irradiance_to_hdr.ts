@@ -13,6 +13,7 @@ export interface ConvertPhotonIrradianceToHdrUniforms {
  */
 export class ConvertPhotonIrradianceToHdrOperation extends ComputeOperation {
     private uniformBuffer: GPUBuffer;
+    private lastHdrScale: number | null = null;
 
     constructor(device: GPUDevice) {
         super(device, shaderCode, 'main');
@@ -24,6 +25,10 @@ export class ConvertPhotonIrradianceToHdrOperation extends ComputeOperation {
     }
 
     public updateUniforms(uniforms: ConvertPhotonIrradianceToHdrUniforms): void {
+        if (this.lastHdrScale === uniforms.hdrScale) {
+            return;
+        }
+        this.lastHdrScale = uniforms.hdrScale;
         this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([uniforms.hdrScale]));
     }
 
