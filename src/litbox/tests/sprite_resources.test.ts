@@ -5,6 +5,7 @@ import { SceneGraph } from '../scene_graph.ts';
 import { TextureCache } from '../texture_cache.ts';
 import { SimulationResources } from '../simulation.ts';
 import { TransformResources } from '../transform_resources.ts';
+import { ComputedDataManager } from '../computed_data_manager.ts';
 import { createFakeGpuDevice, type FakeGpuDevice } from './test_gpu_stubs.ts';
 import type { Color, Scene, SceneObject, SceneSprite } from '../scene.ts';
 
@@ -68,7 +69,8 @@ async function setup(sprites?: SceneSprite[]): Promise<Fixture> {
     const device = createFakeGpuDevice();
     const gpuDevice = device as unknown as GPUDevice;
     const textureCache = new TextureCache(gpuDevice);
-    const simulationResources = new SimulationResources(gpuDevice);
+    const computedDataManager = new ComputedDataManager(gpuDevice);
+    const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
     const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
     simulationResources.initialize(cameraBindGroupLayout);
 
@@ -280,7 +282,8 @@ describe('SpriteResources', () => {
         const device = createFakeGpuDevice();
         const gpuDevice = device as unknown as GPUDevice;
         const textureCache = new TextureCache(gpuDevice);
-        const simulationResources = new SimulationResources(gpuDevice);
+        const computedDataManager = new ComputedDataManager(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
         const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
         simulationResources.initialize(cameraBindGroupLayout);
         const spriteResources = new SpriteResources(gpuDevice);

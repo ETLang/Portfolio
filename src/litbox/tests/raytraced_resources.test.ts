@@ -67,10 +67,10 @@ async function setup(raytraced?: RaytracedObject[]): Promise<Fixture> {
     const device = createFakeGpuDevice();
     const gpuDevice = device as unknown as GPUDevice;
     const textureCache = new TextureCache(gpuDevice);
-    const simulationResources = new SimulationResources(gpuDevice);
+    const computedDataManager = new ComputedDataManager(gpuDevice);
+    const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
     const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
     simulationResources.initialize(cameraBindGroupLayout);
-    const computedDataManager = new ComputedDataManager(gpuDevice);
 
     const raytracedResources = new RaytracedResources(gpuDevice, computedDataManager);
     raytracedResources.initialize();
@@ -129,10 +129,10 @@ describe('RaytracedResources.renderGBuffer', () => {
         const device = createFakeGpuDevice();
         const gpuDevice = device as unknown as GPUDevice;
         const textureCache = new TextureCache(gpuDevice);
-        const simulationResources = new SimulationResources(gpuDevice);
+        const computedDataManager = new ComputedDataManager(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
         const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
         simulationResources.initialize(cameraBindGroupLayout);
-        const computedDataManager = new ComputedDataManager(gpuDevice);
         const raytracedResources = new RaytracedResources(gpuDevice, computedDataManager);
         raytracedResources.initialize();
         const transformResources = new TransformResources(gpuDevice);
@@ -158,10 +158,10 @@ describe('RaytracedResources.renderGBuffer', () => {
         const device = createFakeGpuDevice();
         const gpuDevice = device as unknown as GPUDevice;
         const textureCache = new TextureCache(gpuDevice);
-        const simulationResources = new SimulationResources(gpuDevice);
+        const computedDataManager = new ComputedDataManager(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
         const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
         simulationResources.initialize(cameraBindGroupLayout);
-        const computedDataManager = new ComputedDataManager(gpuDevice);
         const raytracedResources = new RaytracedResources(gpuDevice, computedDataManager);
         raytracedResources.initialize();
         const transformResources = new TransformResources(gpuDevice);

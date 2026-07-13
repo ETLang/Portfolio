@@ -208,7 +208,7 @@ export class LitboxSceneRenderer {
         this.lightResources = new LightResources(this.device);
         this.computedDataManager = new ComputedDataManager(this.device);
         this.raytracedResources = new RaytracedResources(this.device, this.computedDataManager);
-        this.simulationResources = new SimulationResources(this.device);
+        this.simulationResources = new SimulationResources(this.device, this.computedDataManager);
         this.spriteResources = new SpriteResources(this.device);
         this.tonemapResources = new TonemapResources(this.device, this.presentationFormat);
         this.debugViewBlitResources = new DebugViewBlitResources(this.device, this.presentationFormat);
@@ -534,8 +534,8 @@ export class LitboxSceneRenderer {
             // G-Buffer stays live against scene changes.
             this.raytracedResources.renderGBuffer(encoder);
 
-            // Step 2: run the (stubbed) simulation.
-            this.simulationResources.run(encoder);
+            // Step 2: run the simulation (convert the photon-receptor buffer into the lightmap).
+            this.simulationResources.run(encoder, this.raytracedResources);
 
             if (this.debugView) {
                 const view = this.debugViews.get(this.debugView);

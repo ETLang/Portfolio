@@ -1,24 +1,31 @@
 import { mat4 } from 'gl-matrix';
 import type { Scene, SceneSimulation } from './scene.ts';
 import type { SceneGraph } from './scene_graph.ts';
+import type { RaytracedResources } from './raytraced_resources.ts';
 import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } from './quad_mesh.ts';
+import { ComputedDataManager, ComputedTexture, ComputedBuffer } from './computed_data_manager.ts';
+import { ConvertPhotonIrradianceToHdrOperation } from './convert_photon_irradiance_to_hdr.ts';
 import compositeShaderCode from './shaders/simulation_composite.wgsl?raw';
 
 const LIGHTMAP_FORMAT: GPUTextureFormat = 'rgba16float';
 
 /**
- * Owns the HDR mipmapped lightmap produced by the (currently stubbed)
- * raytraced light simulation, and the pipeline that additively composites
- * it into the HDR frame buffer as a world-space quad. The real photon
- * integration is deferred - run() just clears the lightmap each frame so
- * downstream consumers (sprites, the composite pass) have well-defined,
- * safely-samplable content across every mip level.
+ * Owns the HDR mipmapped lightmap produced by the light simulation, and the pipeline that
+ * additively composites it into the HDR frame buffer as a world-space quad.
+ *
+ * The photon-tracing pass itself (emission/bounce/accumulation) is still deferred - what run()
+ * does today is the far end of that pipeline: it converts whatever is currently sitting in the
+ * photon-receptor buffer (photonBuffer, an atomic accumulator a future tracer will write into)
+ * into the lightmap's mip 0 via ConvertPhotonIrradianceToHdrOperation, combining it with the
+ * albedo/density G-Buffer. Until the real tracer exists, loadFromScene() fills the buffer with a
+ * deterministic test pattern (see fillTestPhotonPattern) so the conversion has something
+ * non-trivial to work with. Higher mips have no real content yet (no mip-chain generation from
+ * mip 0), so they're just cleared each frame, as the whole lightmap used to be.
  */
 export class SimulationResources {
     private device: GPUDevice;
-    private lightmapTexture: GPUTexture | null = null;
-    private lightmapView: GPUTextureView | null = null;
-    private mipViews: GPUTextureView[] = [];
+    private computedDataManager: ComputedDataManager;
+    private lightmap: ComputedTexture | null = null;
     private sampler: GPUSampler;
 
     private pipeline: GPURenderPipeline | null = null;
@@ -30,10 +37,16 @@ export class SimulationResources {
     private simulation: SceneSimulation | null = null;
     private worldTransform: mat4 = mat4.create();
 
-    constructor(device: GPUDevice) {
+    /** Atomic accumulator a future photon tracer will write into: width*height*3 u32 entries (3 consecutive slots per pixel: R, G, B). */
+    private photonBuffer: ComputedBuffer | null = null;
+    private convertToHdr: ConvertPhotonIrradianceToHdrOperation;
+
+    constructor(device: GPUDevice, computedDataManager: ComputedDataManager) {
         this.device = device;
+        this.computedDataManager = computedDataManager;
         this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
         this.vertexBuffer = getQuadVertexBuffer(device);
+        this.convertToHdr = new ConvertPhotonIrradianceToHdrOperation(device);
     }
 
     public initialize(cameraBindGroupLayout: GPUBindGroupLayout): void {
@@ -75,7 +88,7 @@ export class SimulationResources {
 
     /** The lightmap's full mip chain, for sprites/composite to sample. */
     public getLightmapView(): GPUTextureView | null {
-        return this.lightmapView;
+        return this.lightmap?.view ?? null;
     }
 
     public getSampler(): GPUSampler {
@@ -107,15 +120,19 @@ export class SimulationResources {
     }
 
     /**
-     * Full teardown-and-rebuild of the lightmap from `scene`. Called only on an actual scene
-     * load/swap (see LitboxSceneRenderer.rebuildFromScene, its only caller) - never per-frame; a
-     * transform-only change instead goes through refreshWorldTransform.
+     * Full teardown-and-rebuild of the lightmap (and photon buffer) from `scene`. Called only on
+     * an actual scene load/swap (see LitboxSceneRenderer.rebuildFromScene, its only caller) - never
+     * per-frame; a transform-only change instead goes through refreshWorldTransform.
      */
     public loadFromScene(scene: Scene, sceneGraph: SceneGraph): void {
-        this.lightmapTexture?.destroy();
-        this.lightmapTexture = null;
-        this.lightmapView = null;
-        this.mipViews = [];
+        if (this.lightmap) {
+            this.computedDataManager.releaseTexture(this.lightmap);
+            this.lightmap = null;
+        }
+        if (this.photonBuffer) {
+            this.computedDataManager.releaseBuffer(this.photonBuffer);
+            this.photonBuffer = null;
+        }
         this.simulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
@@ -127,24 +144,28 @@ export class SimulationResources {
 
         this.worldTransform = sceneGraph.getWorldTransform(this.simulation.ownerId);
 
-        const mipLevelCount = Math.floor(Math.log2(Math.max(this.simulation.width, this.simulation.height))) + 1;
-        this.lightmapTexture = this.device.createTexture({
-            size: [this.simulation.width, this.simulation.height],
-            format: LIGHTMAP_FORMAT,
+        const { width, height } = this.simulation;
+        const mipLevelCount = Math.floor(Math.log2(Math.max(width, height))) + 1;
+        this.lightmap = this.computedDataManager.acquireTexture(
+            width,
+            height,
+            LIGHTMAP_FORMAT,
+            GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.STORAGE_BINDING,
             mipLevelCount,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-        });
-        this.lightmapView = this.lightmapTexture.createView();
-        for (let mip = 0; mip < mipLevelCount; mip++) {
-            this.mipViews.push(this.lightmapTexture.createView({ baseMipLevel: mip, mipLevelCount: 1 }));
-        }
+        );
+
+        this.photonBuffer = this.computedDataManager.acquireBuffer(
+            width * height * 3 * 4,
+            GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        );
+        this.fillTestPhotonPattern(width, height);
 
         if (this.compositeBindGroupLayout && this.compositeUniformBuffer) {
             this.compositeBindGroup = this.device.createBindGroup({
                 layout: this.compositeBindGroupLayout,
                 entries: [
                     { binding: 0, resource: { buffer: this.compositeUniformBuffer } },
-                    { binding: 1, resource: this.lightmapView },
+                    { binding: 1, resource: this.lightmap.view },
                     { binding: 2, resource: this.sampler },
                 ],
             });
@@ -153,14 +174,65 @@ export class SimulationResources {
         }
     }
 
-    /** Stub: clears every mip of the lightmap. Real photon integration is deferred. */
-    public run(encoder: GPUCommandEncoder): void {
-        for (const view of this.mipViews) {
+    /**
+     * Temporary stand-in for the not-yet-built photon tracer: writes a deterministic radial energy
+     * falloff directly into the freshly-acquired photon buffer so
+     * ConvertPhotonIrradianceToHdrOperation has something non-zero, and distinguishable per
+     * channel, to convert. Replace once real photon emission/tracing lands.
+     */
+    private fillTestPhotonPattern(width: number, height: number): void {
+        if (!this.photonBuffer) {
+            return;
+        }
+        // Comfortably inside u32 range, with headroom left for the atomic adds a real tracer would
+        // eventually layer on top - not meant to be physically meaningful, just visually distinguishable.
+        const peak = 2 ** 28;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const maxDist = Math.hypot(centerX, centerY);
+        const data = new Uint32Array(width * height * 3);
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const falloff = Math.max(0, 1 - Math.hypot(x - centerX, y - centerY) / maxDist);
+                const base = (y * width + x) * 3;
+                data[base] = Math.round(peak * falloff);
+                data[base + 1] = Math.round(peak * falloff * 0.6);
+                data[base + 2] = Math.round(peak * falloff * 0.3);
+            }
+        }
+        this.device.queue.writeBuffer(this.photonBuffer.buffer, 0, data);
+    }
+
+    /**
+     * Clears the lightmap's higher mips (no mip-chain generation exists yet), then converts the
+     * photon-receptor buffer into mip 0 via ConvertPhotonIrradianceToHdrOperation, sourcing albedo
+     * and density from raytracedResources' G-Buffer (rendered earlier this same frame).
+     */
+    public run(encoder: GPUCommandEncoder, raytracedResources: RaytracedResources): void {
+        if (!this.lightmap) {
+            return;
+        }
+        for (let mip = 1; mip < this.lightmap.mipLevelCount; mip++) {
             const pass = encoder.beginRenderPass({
-                colorAttachments: [{ view, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }],
+                colorAttachments: [{ view: this.lightmap.getMipView(mip), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }],
             });
             pass.end();
         }
+
+        if (!this.simulation || !this.photonBuffer) {
+            return;
+        }
+        const albedoView = raytracedResources.getAlbedoView();
+        const densityView = raytracedResources.getDensityView();
+        if (!albedoView || !densityView) {
+            return;
+        }
+
+        const { width, height } = this.simulation;
+        this.convertToHdr.updateUniforms({ hdrScale: (width * height) / 0xFFFFFFFF });
+        this.convertToHdr.updateInputs(this.photonBuffer.buffer, albedoView, densityView);
+        this.convertToHdr.updateOutputs(this.lightmap.getMipView(0), width, height);
+        this.convertToHdr.execute(encoder);
     }
 
     /** Additively blends the lightmap into the current render pass as a world-space quad. No exposure applied here. */
