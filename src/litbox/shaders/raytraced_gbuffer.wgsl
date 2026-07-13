@@ -11,17 +11,9 @@
 // (sdfNormalMap) but never uses the result (confirmed dead code) - not ported here.
 //
 // The Density target stores *density* (1 - transmittance), not transmittance itself, scaled by
-// DENSITY_SCALE - not a literal Unity port. Rationale (confirmed empirically against
-// float16 on real content, not just theory): transmittance clusters near 1 for typical
-// (low-density) objects, which float16 resolves poorly right at its rounding boundary (a gap as
-// large as 1e-6 below 1.0 can round to exactly 1.0). Reframing as density relocates that same
-// information away from a boundary and into a region where floating point's relative precision
-// actually pays off; DENSITY_SCALE then pushes it further away from float16's degraded subnormal
-// range (values below ~6.1e-5) so it stays in the well-resolved normal range even for very thin
-// objects. Must match RaytracedResources' DENSITY_SCALE exactly (also mirrored in
-// debug_view_blit.wgsl for display) - chosen conservatively (not the theoretical max) to leave
-// overflow headroom for the additive multi-object blend below.
-const DENSITY_SCALE: f32 = 8192.0;
+// DENSITY_SCALE (see LitboxCommon.wgsl for the full rationale and where else it's used) - not a
+// literal Unity port.
+#include "LitboxCommon.wgsl"
 //
 // The 3 render targets have different blend semantics (see RaytracedResources for the exact
 // GPUColorTargetState configs and why): AlbedoAlpha blends "over" (order-dependent), Density

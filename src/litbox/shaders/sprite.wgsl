@@ -31,6 +31,8 @@
 // storage-buffer reads keyed by a runtime index are a completely different, battle-tested
 // driver code path.
 
+#include "LitboxCommon.wgsl"
+
 struct CameraUniform {
     viewProjection: mat4x4<f32>,
     simInverseWorldTransform: mat4x4<f32>,
@@ -149,7 +151,8 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let baseColor = textureSample(mainTex, mainSampler, in.atlasUv);
 
     let simLocal = camera.simInverseWorldTransform * in.worldPos;
-    let lightUV = simLocal.xy + vec2<f32>(0.5, 0.5);
+    var lightUV = simLocal.xy + vec2<f32>(0.5, 0.5);
+    lightUV.y = 1.0f - lightUV.y;
     let lightSample = textureSampleLevel(lightmapTex, lightmapSampler, lightUV, props.simBlur);
 
     let light = lightSample * props.simContribution + props.ambient;

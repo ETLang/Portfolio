@@ -10,6 +10,7 @@ import { resolvePrimitiveShapeId } from './primitive_shape.ts';
 import { clusterByTextureWithinTiedGroups } from './draw_order.ts';
 import { ComputedDataManager, ComputedTexture } from './computed_data_manager.ts';
 import raytracedGBufferShaderCode from './shaders/raytraced_gbuffer.wgsl?raw';
+import { preprocessShader } from './shaders/shader_preprocessor.ts';
 
 // Must match the RaytracedIndex/RaytracedProperties/RaytracedAtlasTransform struct layouts in
 // raytraced_gbuffer.wgsl.
@@ -22,18 +23,16 @@ const GBUFFER_CAMERA_UNIFORM_SIZE_BYTES = 4 * 16 + 16;
 
 const ALBEDO_FORMAT: GPUTextureFormat = 'rgba8unorm';
 const NORMAL_ROUGHNESS_FORMAT: GPUTextureFormat = 'rgba16float';
-// Stores (1-transmittance)*DENSITY_SCALE, not raw transmittance - see raytraced_gbuffer.wgsl's
-// file header for the full rationale (confirmed empirically: linear transmittance clusters right
-// at float16's rounding boundary near 1.0, collapsing indistinctly to exactly 1.0; density
-// reframes the same information away from that boundary). This is what makes plain rgba16float
+// Stores (1-transmittance)*DENSITY_SCALE, not raw transmittance - see LitboxCommon.wgsl's
+// DENSITY_SCALE for the full rationale (confirmed empirically: linear transmittance clusters
+// right at float16's rounding boundary near 1.0, collapsing indistinctly to exactly 1.0; density
+// reframes the same information away from that boundary). This is what makes plain rg16float
 // viable here at all - no float32/'float32-blendable' feature dependency.
-const DENSITY_FORMAT: GPUTextureFormat = 'rgba16float';
-// Must match DENSITY_SCALE in raytraced_gbuffer.wgsl and debug_view_blit.wgsl exactly. Chosen as
-// the largest power-of-two scale (not the theoretical max, 2^15) that still leaves headroom for
-// several fully-dense objects to stack additively on one pixel (see the class doc) without
-// overflowing float16's ~65504 max representable value. Exported so other TS code that needs to
-// interpret the Density target's raw values (e.g. a future simulation pass, or tests) has one
-// canonical source rather than a second hardcoded copy.
+const DENSITY_FORMAT: GPUTextureFormat = 'rg16float';
+// Must match DENSITY_SCALE in shaders/LitboxCommon.wgsl exactly - WGSL and TS can't share a
+// literal across that language boundary, so this is a necessary second copy. Exported so other TS
+// code that needs to interpret the Density target's raw values (e.g. a future simulation pass, or
+// tests) has one canonical source rather than a second hardcoded copy on the TS side.
 export const DENSITY_SCALE = 8192;
 
 interface ResolvedRaytracedEntry {
@@ -152,7 +151,7 @@ export class RaytracedResources {
             entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } }],
         });
 
-        const shaderModule = this.device.createShaderModule({ code: raytracedGBufferShaderCode });
+        const shaderModule = this.device.createShaderModule({ code: preprocessShader(raytracedGBufferShaderCode) });
         this.pipeline = this.device.createRenderPipeline({
             layout: this.device.createPipelineLayout({
                 bindGroupLayouts: [this.cameraBindGroupLayout, this.sharedBindGroupLayout, this.textureBindGroupLayout],

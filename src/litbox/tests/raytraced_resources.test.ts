@@ -5,6 +5,7 @@ import { TextureCache } from '../texture_cache.ts';
 import { SimulationResources } from '../simulation.ts';
 import { TransformResources } from '../transform_resources.ts';
 import { ComputedDataManager } from '../computed_data_manager.ts';
+import { LutResources } from '../lut_resources.ts';
 import { createFakeGpuDevice, type FakeGpuDevice } from './test_gpu_stubs.ts';
 import type { Color, RaytracedObject, Scene, SceneObject } from '../scene.ts';
 
@@ -67,10 +68,11 @@ async function setup(raytraced?: RaytracedObject[]): Promise<Fixture> {
     const device = createFakeGpuDevice();
     const gpuDevice = device as unknown as GPUDevice;
     const textureCache = new TextureCache(gpuDevice);
-    const simulationResources = new SimulationResources(gpuDevice);
-    const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
-    simulationResources.initialize(cameraBindGroupLayout);
+    const lutResources = new LutResources(gpuDevice, textureCache);
     const computedDataManager = new ComputedDataManager(gpuDevice);
+    const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
+    const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
+    simulationResources.initialize(cameraBindGroupLayout, lutResources);
 
     const raytracedResources = new RaytracedResources(gpuDevice, computedDataManager);
     raytracedResources.initialize();
@@ -129,10 +131,11 @@ describe('RaytracedResources.renderGBuffer', () => {
         const device = createFakeGpuDevice();
         const gpuDevice = device as unknown as GPUDevice;
         const textureCache = new TextureCache(gpuDevice);
-        const simulationResources = new SimulationResources(gpuDevice);
-        const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
-        simulationResources.initialize(cameraBindGroupLayout);
+        const lutResources = new LutResources(gpuDevice, textureCache);
         const computedDataManager = new ComputedDataManager(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
+        const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
+        simulationResources.initialize(cameraBindGroupLayout, lutResources);
         const raytracedResources = new RaytracedResources(gpuDevice, computedDataManager);
         raytracedResources.initialize();
         const transformResources = new TransformResources(gpuDevice);
@@ -158,10 +161,11 @@ describe('RaytracedResources.renderGBuffer', () => {
         const device = createFakeGpuDevice();
         const gpuDevice = device as unknown as GPUDevice;
         const textureCache = new TextureCache(gpuDevice);
-        const simulationResources = new SimulationResources(gpuDevice);
-        const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
-        simulationResources.initialize(cameraBindGroupLayout);
+        const lutResources = new LutResources(gpuDevice, textureCache);
         const computedDataManager = new ComputedDataManager(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
+        const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
+        simulationResources.initialize(cameraBindGroupLayout, lutResources);
         const raytracedResources = new RaytracedResources(gpuDevice, computedDataManager);
         raytracedResources.initialize();
         const transformResources = new TransformResources(gpuDevice);

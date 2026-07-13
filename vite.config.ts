@@ -14,5 +14,8 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
-  plugins: [mkcert()],
+  // mkcert generates/installs a local HTTPS cert - a dev-server-only concern with no
+  // business running under Vitest, where it's just a source of network/filesystem flakiness.
+  // Vitest sets process.env.VITEST, so skip the plugin entirely under test.
+  plugins: process.env.VITEST ? [] : [mkcert()],
 });

@@ -5,6 +5,8 @@ import { SceneGraph } from '../scene_graph.ts';
 import { TextureCache } from '../texture_cache.ts';
 import { SimulationResources } from '../simulation.ts';
 import { TransformResources } from '../transform_resources.ts';
+import { ComputedDataManager } from '../computed_data_manager.ts';
+import { LutResources } from '../lut_resources.ts';
 import { createFakeGpuDevice, type FakeGpuDevice } from './test_gpu_stubs.ts';
 import type { Color, Scene, SceneObject, SceneSprite } from '../scene.ts';
 
@@ -68,9 +70,11 @@ async function setup(sprites?: SceneSprite[]): Promise<Fixture> {
     const device = createFakeGpuDevice();
     const gpuDevice = device as unknown as GPUDevice;
     const textureCache = new TextureCache(gpuDevice);
-    const simulationResources = new SimulationResources(gpuDevice);
+    const lutResources = new LutResources(gpuDevice, textureCache);
+    const computedDataManager = new ComputedDataManager(gpuDevice);
+    const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
     const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
-    simulationResources.initialize(cameraBindGroupLayout);
+    simulationResources.initialize(cameraBindGroupLayout, lutResources);
 
     const spriteResources = new SpriteResources(gpuDevice);
     spriteResources.initialize(cameraBindGroupLayout, 'rgba16float');
@@ -280,9 +284,11 @@ describe('SpriteResources', () => {
         const device = createFakeGpuDevice();
         const gpuDevice = device as unknown as GPUDevice;
         const textureCache = new TextureCache(gpuDevice);
-        const simulationResources = new SimulationResources(gpuDevice);
+        const lutResources = new LutResources(gpuDevice, textureCache);
+        const computedDataManager = new ComputedDataManager(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
         const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
-        simulationResources.initialize(cameraBindGroupLayout);
+        simulationResources.initialize(cameraBindGroupLayout, lutResources);
         const spriteResources = new SpriteResources(gpuDevice);
         spriteResources.initialize(cameraBindGroupLayout, 'rgba16float');
         const transformResources = new TransformResources(gpuDevice);

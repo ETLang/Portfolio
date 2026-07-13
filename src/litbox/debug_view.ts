@@ -1,4 +1,5 @@
 import debugViewBlitShaderCode from './shaders/debug_view_blit.wgsl?raw';
+import { preprocessShader } from './shaders/shader_preprocessor.ts';
 
 /**
  * One named, selectable debug view: a live source texture plus which display mode
@@ -50,7 +51,7 @@ export class DebugViewBlitResources {
             ],
         });
 
-        const shaderModule = device.createShaderModule({ code: debugViewBlitShaderCode });
+        const shaderModule = device.createShaderModule({ code: preprocessShader(debugViewBlitShaderCode) });
         this.pipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
             vertex: { module: shaderModule, entryPoint: 'vertex_main' },

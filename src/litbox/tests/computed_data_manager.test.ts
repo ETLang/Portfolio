@@ -156,6 +156,63 @@ describe('ComputedDataManager', () => {
         });
     });
 
+    describe('random seed buffer', () => {
+        it('creates a new buffer sized to 16 bytes per seed on first acquire', () => {
+            const device = createFakeGpuDevice();
+            const manager = new ComputedDataManager(device as unknown as GPUDevice);
+
+            const seedBuffer = manager.acquireRandomSeedBuffer(64);
+
+            expect(seedBuffer.size).toBe(64 * 16);
+            expect(seedBuffer.buffer.size).toBe(64 * 16);
+            expect(device.writeCalls).toHaveLength(1);
+            expect(device.writeCalls[0].buffer).toBe(seedBuffer.buffer);
+        });
+
+        it('returns the same buffer unchanged when a smaller or equal size is requested (preserves evolving RNG state)', () => {
+            const device = createFakeGpuDevice();
+            const manager = new ComputedDataManager(device as unknown as GPUDevice);
+
+            const first = manager.acquireRandomSeedBuffer(128);
+            const second = manager.acquireRandomSeedBuffer(64);
+            const third = manager.acquireRandomSeedBuffer(128);
+
+            expect(second).toBe(first);
+            expect(third).toBe(first);
+            expect(device.writeCalls).toHaveLength(1);
+        });
+
+        it('destroys and reallocates at the new size when a larger size is requested', () => {
+            const device = createFakeGpuDevice();
+            const manager = new ComputedDataManager(device as unknown as GPUDevice);
+
+            const first = manager.acquireRandomSeedBuffer(64);
+            const second = manager.acquireRandomSeedBuffer(128);
+
+            expect(second).not.toBe(first);
+            expect(second.size).toBe(128 * 16);
+            expect((first.buffer as unknown as FakeGpuBuffer).destroyed).toBe(true);
+            expect(device.writeCalls).toHaveLength(2);
+        });
+
+        it('is unaffected by purgeStale/purge - it is not a pooled scratch resource', () => {
+            const device = createFakeGpuDevice();
+            let clock = 0;
+            const manager = new ComputedDataManager(device as unknown as GPUDevice, 5000, () => clock);
+
+            const seedBuffer = manager.acquireRandomSeedBuffer(64);
+
+            clock = 1_000_000;
+            manager.purgeStale();
+            expect((seedBuffer.buffer as unknown as FakeGpuBuffer).destroyed).toBe(false);
+
+            manager.purge();
+            expect((seedBuffer.buffer as unknown as FakeGpuBuffer).destroyed).toBe(false);
+
+            expect(manager.acquireRandomSeedBuffer(64)).toBe(seedBuffer);
+        });
+    });
+
     describe('idle sweep', () => {
         it('purgeStale destroys and evicts a released resource once it has been idle longer than maxIdleMs', () => {
             const device = createFakeGpuDevice();

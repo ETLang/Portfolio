@@ -3,6 +3,7 @@ import type { SceneCamera, Vector2 } from './litbox/scene.ts';
 import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { SceneGraph } from './litbox/scene_graph.ts';
 import { TextureCache } from './litbox/texture_cache.ts';
+import { LutResources } from './litbox/lut_resources.ts';
 import { LightResources } from './litbox/light_resources.ts';
 import { RaytracedResources } from './litbox/raytraced_resources.ts';
 import { SimulationResources } from './litbox/simulation.ts';
@@ -57,6 +58,7 @@ export class LitboxSceneRenderer {
 
     private sceneGraph: SceneGraph | null = null;
     private textureCache!: TextureCache;
+    private lutResources!: LutResources;
     private transformResources!: TransformResources;
     private lightResources!: LightResources;
     private computedDataManager!: ComputedDataManager;
@@ -153,6 +155,11 @@ export class LitboxSceneRenderer {
         return this.canvas;
     }
 
+    /** The procedural, static LUTs (see lut_resources.ts) - not yet consumed by any pass; exposed for whatever simulation pass eventually needs them. */
+    public getLutResources(): LutResources {
+        return this.lutResources;
+    }
+
     private async initWebGPU(): Promise<boolean> {
         try {
             if (!navigator.gpu) {
@@ -204,11 +211,12 @@ export class LitboxSceneRenderer {
 
     private createSharedResources(): void {
         this.textureCache = new TextureCache(this.device);
+        this.lutResources = new LutResources(this.device, this.textureCache);
         this.transformResources = new TransformResources(this.device);
         this.lightResources = new LightResources(this.device);
         this.computedDataManager = new ComputedDataManager(this.device);
         this.raytracedResources = new RaytracedResources(this.device, this.computedDataManager);
-        this.simulationResources = new SimulationResources(this.device);
+        this.simulationResources = new SimulationResources(this.device, this.computedDataManager);
         this.spriteResources = new SpriteResources(this.device);
         this.tonemapResources = new TonemapResources(this.device, this.presentationFormat);
         this.debugViewBlitResources = new DebugViewBlitResources(this.device, this.presentationFormat);
@@ -221,7 +229,7 @@ export class LitboxSceneRenderer {
         });
         this.cameraUniform = new RingBufferedUniform(this.device, this.cameraBindGroupLayout, CAMERA_UNIFORM_SIZE_BYTES, FRAMES_IN_FLIGHT);
 
-        this.simulationResources.initialize(this.cameraBindGroupLayout);
+        this.simulationResources.initialize(this.cameraBindGroupLayout, this.lutResources);
         this.raytracedResources.initialize();
         this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
 
@@ -534,8 +542,12 @@ export class LitboxSceneRenderer {
             // G-Buffer stays live against scene changes.
             this.raytracedResources.renderGBuffer(encoder);
 
-            // Step 2: run the (stubbed) simulation.
-            this.simulationResources.run(encoder);
+            // Step 2: run the simulation (trace photons, then convert the photon-receptor buffer
+            // into the lightmap). No-op without an active scene graph, same as `!this.simulation`
+            // guards inside SimulationResources.run() itself.
+            if (this.sceneGraph) {
+                this.simulationResources.run(encoder, this.raytracedResources, this.lightResources, this.lutResources, this.sceneGraph);
+            }
 
             if (this.debugView) {
                 const view = this.debugViews.get(this.debugView);
@@ -584,7 +596,9 @@ export class LitboxSceneRenderer {
                     storeOp: 'store',
                 }],
             });
-            this.tonemapResources.apply(tonemapPass, this.hdrFrameTextureView, exposure);
+            this.tonemapResources.updateUniforms({ exposure });
+            this.tonemapResources.updateInputs(this.hdrFrameTextureView);
+            this.tonemapResources.execute(tonemapPass);
             tonemapPass.end();
 
             this.device.queue.submit([encoder.finish()]);

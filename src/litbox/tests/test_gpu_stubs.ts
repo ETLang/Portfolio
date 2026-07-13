@@ -53,10 +53,10 @@ export class FakeGpuBuffer {
 }
 
 export class FakeGpuTexture {
-    public descriptor: { size: number[]; format: string; usage: number };
+    public descriptor: { size: number[]; format: string; usage: number; dimension?: string };
     public destroyed = false;
 
-    constructor(descriptor: { size: number[]; format: string; usage: number }) {
+    constructor(descriptor: { size: number[]; format: string; usage: number; dimension?: string }) {
         this.descriptor = descriptor;
     }
 
@@ -80,7 +80,7 @@ export interface WriteTextureCall {
 export class FakeGpuDevice {
     public writeCalls: WriteBufferCall[] = [];
     public writeTextureCalls: WriteTextureCall[] = [];
-    public createTextureCalls: { size: number[]; format: string; usage: number }[] = [];
+    public createTextureCalls: { size: number[]; format: string; usage: number; dimension?: string }[] = [];
     /** Empty by default - tests opt a fake device into a feature via `device.features.add(name)`. */
     public features = new Set<string>();
 
@@ -108,7 +108,7 @@ export class FakeGpuDevice {
         return new FakeGpuBuffer(descriptor.size);
     }
 
-    public createTexture(descriptor: { size: number[]; format: string; usage: number }): FakeGpuTexture {
+    public createTexture(descriptor: { size: number[]; format: string; usage: number; dimension?: string }): FakeGpuTexture {
         this.createTextureCalls.push(descriptor);
         return new FakeGpuTexture(descriptor);
     }

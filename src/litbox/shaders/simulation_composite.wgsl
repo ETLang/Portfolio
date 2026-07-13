@@ -3,6 +3,8 @@
 // screen-aligned). Samples the lightmap's base mip only; no exposure is applied here -
 // exposure is a final tonemapping concern (see tonemap.wgsl).
 
+#include "LitboxCommon.wgsl"
+
 struct CameraUniform {
     viewProjection: mat4x4<f32>,
     simInverseWorldTransform: mat4x4<f32>,
@@ -26,7 +28,12 @@ fn vertex_main(@location(0) localPos: vec2<f32>) -> VertexOutput {
     var out: VertexOutput;
     let world = quad.worldTransform * vec4<f32>(localPos, 0.0, 1.0);
     out.position = camera.viewProjection * world;
-    out.uv = localPos + vec2<f32>(0.5, 0.5);
+    // localPos is Y-up (local +Y = up, matching this project's world space and the G-Buffer
+    // camera's own unflipped projection - see RaytracedResources.refreshViewProjection), but
+    // WebGPU's texture V axis is fixed Y-down (V=0 = row 0 = NDC y=+1) - so local +Y (top) must
+    // land on the lightmap's row 0, i.e. v=0. This single expression *is* that mapping, not a
+    // naive uv patched afterward.
+    out.uv = vec2<f32>(localPos.x + 0.5, 0.5 - localPos.y);
     return out;
 }
 
