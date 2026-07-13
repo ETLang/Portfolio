@@ -101,6 +101,10 @@ export class ComputedDataManager {
     private now: () => number;
     private lastSweepAt = 0;
 
+    /** The ported BufferManager.GetRandomSeedBuffer buffer/seed count - see acquireRandomSeedBuffer. */
+    private randomSeedBuffer: ComputedBuffer | null = null;
+    private randomSeedCount = 0;
+
     /** `now` defaults to performance.now() and is only overridden in tests, to drive the idle sweep without relying on real elapsed time. */
     constructor(device: GPUDevice, maxIdleMs = DEFAULT_MAX_IDLE_MS, now: () => number = () => performance.now()) {
         this.device = device;
@@ -175,6 +179,39 @@ export class ComputedDataManager {
             this.bufferPool.set(key, pool);
         }
         pool.push({ resource: pooled, releasedAt: now });
+    }
+
+    /**
+     * Ported from Unity's BufferManager.GetRandomSeedBuffer: a single grow-only buffer of
+     * per-thread RNG state (one Random.state vec4<u32>, 16 bytes, per thread), persisted and
+     * evolved in place across dispatches - each dispatch's shader writes its threads' advanced
+     * state back every call, so this is a long-lived resource an owner keeps indefinitely, not
+     * scratch reused via acquireBuffer/releaseBuffer. Deliberately bypasses bufferPool/purgeStale -
+     * there's no release call, and the idle sweep must never destroy it.
+     *
+     * If the current buffer already covers `minSeeds`, it's returned unchanged so its evolving
+     * state is preserved. Otherwise it's destroyed and reallocated at the new size, reseeded
+     * from scratch (any in-flight per-thread state is lost, matching the Unity original).
+     */
+    public acquireRandomSeedBuffer(minSeeds: number): ComputedBuffer {
+        if (this.randomSeedBuffer && this.randomSeedCount >= minSeeds) {
+            return this.randomSeedBuffer;
+        }
+        if (this.randomSeedBuffer) {
+            this.randomSeedBuffer.buffer.destroy();
+        }
+
+        const seeds = new Uint32Array(minSeeds * 4);
+        for (let i = 0; i < seeds.length; i++) {
+            seeds[i] = Math.floor(Math.random() * 1_000_000);
+        }
+        const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+        const buffer = this.device.createBuffer({ size: seeds.byteLength, usage });
+        this.device.queue.writeBuffer(buffer, 0, seeds);
+
+        this.randomSeedBuffer = new ComputedBuffer(buffer, seeds.byteLength, usage);
+        this.randomSeedCount = minSeeds;
+        return this.randomSeedBuffer;
     }
 
     /** Runs purgeStale() if it hasn't run in the last MIN_SWEEP_INTERVAL_MS - called opportunistically from acquire/release so idle resources get reclaimed without a dedicated timer. */

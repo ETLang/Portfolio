@@ -229,7 +229,7 @@ export class LitboxSceneRenderer {
         });
         this.cameraUniform = new RingBufferedUniform(this.device, this.cameraBindGroupLayout, CAMERA_UNIFORM_SIZE_BYTES, FRAMES_IN_FLIGHT);
 
-        this.simulationResources.initialize(this.cameraBindGroupLayout);
+        this.simulationResources.initialize(this.cameraBindGroupLayout, this.lutResources);
         this.raytracedResources.initialize();
         this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
 
@@ -542,8 +542,12 @@ export class LitboxSceneRenderer {
             // G-Buffer stays live against scene changes.
             this.raytracedResources.renderGBuffer(encoder);
 
-            // Step 2: run the simulation (convert the photon-receptor buffer into the lightmap).
-            this.simulationResources.run(encoder, this.raytracedResources);
+            // Step 2: run the simulation (trace photons, then convert the photon-receptor buffer
+            // into the lightmap). No-op without an active scene graph, same as `!this.simulation`
+            // guards inside SimulationResources.run() itself.
+            if (this.sceneGraph) {
+                this.simulationResources.run(encoder, this.raytracedResources, this.lightResources, this.lutResources, this.sceneGraph);
+            }
 
             if (this.debugView) {
                 const view = this.debugViews.get(this.debugView);
