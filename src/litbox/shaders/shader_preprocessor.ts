@@ -1,4 +1,5 @@
 import litboxCommonSource from './LitboxCommon.wgsl?raw';
+import randomSource from './Random.wgsl?raw';
 
 // WGSL/WebGPU has no native #include, #define, or #ifdef; this is a minimal project-local
 // preprocessor emulating a C-style one, resolved here by a single line-oriented pass before the
@@ -30,6 +31,7 @@ import litboxCommonSource from './LitboxCommon.wgsl?raw';
 // report the '#' as invalid WGSL syntax at a callsite far from the actual mistake.
 const KNOWN_INCLUDES: Record<string, string> = {
     'LitboxCommon.wgsl': litboxCommonSource,
+    'Random.wgsl': randomSource,
 };
 
 const INCLUDE_RE = /^#include\s+"([^"]+)"\s*$/;

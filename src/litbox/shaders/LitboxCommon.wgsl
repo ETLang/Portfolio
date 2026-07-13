@@ -1,3 +1,5 @@
+#include "Random.wgsl"
+
 // Density is stored scaled by this factor so that precision is not lost on low-density areas in
 // the FP16 GBuffer. Things that read density from the G Buffer need to divide the raw value by
 // this scale.
