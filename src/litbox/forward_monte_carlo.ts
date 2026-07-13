@@ -20,6 +20,26 @@ const LIGHT_KIND_DEFINE: Record<LightKind, string> = {
 // (vec2, 8-byte aligned) at 88, lightPinch at 96, then two f32 at 104/108 - total 112 bytes).
 const UNIFORMS_SIZE_BYTES = 112;
 
+export interface ForwardMonteCarloSwitches {
+    /**
+     * Unity's BILINEAR_PHOTON_DISTRIBUTION: smooth 4-tap bilinear photon splat (true, the default)
+     * vs. a single-tap nearest write (false) - see forward_monte_carlo.wgsl's writeSample for the
+     * actual tradeoff (visual smoothness vs. 4x fewer scattered global atomicAdds/sample, which
+     * measurably matters on mobile GPUs weak at scattered atomics - see CLAUDE.md).
+     */
+    bilinearPhotonDistribution: boolean;
+    /**
+     * Per-bounce ray-march step cap - see forward_monte_carlo.wgsl's integrate() loop. Unity
+     * hardcoded this at 2000; lowering it bounds each thread's worst-case work per bounce, which
+     * matters most for divergent SIMT execution (every thread in a workgroup pays for whichever
+     * thread takes the most steps) - see CLAUDE.md/mobile-perf-tuning notes.
+     */
+    maxIntegrationSteps: number;
+}
+
+/** Historical Unity-ported value, used only for the constructor's placeholder pre-updateSwitches shader compile - see updateSwitches, always called before the first real dispatch. */
+const DEFAULT_MAX_INTEGRATION_STEPS = 2000;
+
 export interface ForwardMonteCarloUniforms {
     /** world -> simulation-target-pixel-space transform, already combined with this light's own world transform - see SimulationResources. */
     lightToTarget: mat4;
@@ -40,8 +60,9 @@ export interface ForwardMonteCarloUniforms {
  * Port of Unity's ForwardMonteCarlo.compute's Simulate_<LightKind> kernels + SimulationCommon.cginc's
  * shared ray-march integrator - see forward_monte_carlo.wgsl for the actual math. One instance per
  * light kind (the kind is a compile-time #define baked in at construction, never changed
- * afterward - see the class's own doc below), dispatched once per light *instance* by
- * SimulationResources.
+ * afterward - see baseDefines below), dispatched once per light *instance* by SimulationResources.
+ * Unlike lightKind, BILINEAR_PHOTON_DISTRIBUTION *can* change at runtime, via updateSwitches - see
+ * its doc comment and forward_monte_carlo.wgsl's writeSample.
  *
  * Samplers are created here, not caller-configurable, per this project's ComputeOperation
  * convention (CLAUDE.md) - pointSampler/linearSampler mirror Unity's sampler_point_clamp/
@@ -54,22 +75,31 @@ export class ForwardMonteCarloOperation extends ComputeOperation {
     private linearSampler: GPUSampler;
 
     /**
-     * `lightKind` selects which of forward_monte_carlo.wgsl's `#ifdef LIGHT_KIND_*` emitLight()
-     * blocks this instance compiles - fixed for this instance's lifetime. Unlike a switch that
-     * changes at runtime (see CLAUDE.md's updateSwitches/pipelineDirty pattern), this operation
-     * never needs to recompile after construction, so it doesn't implement updateSwitches at all -
-     * SimulationResources simply owns 5 separate instances, one per kind.
+     * `lightKind`'s LIGHT_KIND_* define and the LUT texel-count defines are constant for this
+     * instance's lifetime (never revisited by updateSwitches) - kept here so updateSwitches can
+     * re-run preprocessShader with them plus whatever BILINEAR_PHOTON_DISTRIBUTION state was just
+     * requested, without the caller having to re-supply lightKind/lutResources every switch change.
      */
+    private readonly baseDefines: ShaderDefines;
+
     constructor(device: GPUDevice, lightKind: LightKind, lutResources: LutResources) {
         const [brdfWidth, brdfHeight, brdfDepth] = lutResources.getBrdfResolution();
-        const defines: ShaderDefines = {
+        const baseDefines: ShaderDefines = {
             [LIGHT_KIND_DEFINE[lightKind]]: true,
             TEARDROP_SCATTERING_LUT_TEXEL_COUNT: `${lutResources.getTeardropScatteringSampleCount()}.0`,
             BRDF_LUT_TEXEL_COUNT_X: `${brdfWidth}.0`,
             BRDF_LUT_TEXEL_COUNT_Y: `${brdfHeight}.0`,
             BRDF_LUT_TEXEL_COUNT_Z: `${brdfDepth}.0`,
         };
-        super(device, preprocessShader(shaderCode, defines), 'main');
+        // Matches Unity's BILINEAR_PHOTON_DISTRIBUTION defaulting on; MAX_INTEGRATION_STEPS gets
+        // its historical Unity value here purely so this placeholder compile is valid WGSL - see
+        // updateSwitches, always called (with the caller's real values) before the first dispatch.
+        super(device, preprocessShader(shaderCode, {
+            ...baseDefines,
+            BILINEAR_PHOTON_DISTRIBUTION: true,
+            MAX_INTEGRATION_STEPS: `${DEFAULT_MAX_INTEGRATION_STEPS}`,
+        }), 'main');
+        this.baseDefines = baseDefines;
 
         this.uniformBuffer = device.createBuffer({
             size: UNIFORMS_SIZE_BYTES,
@@ -79,6 +109,18 @@ export class ForwardMonteCarloOperation extends ComputeOperation {
 
         this.pointSampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest', mipmapFilter: 'nearest' });
         this.linearSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'nearest' });
+    }
+
+    /** See CLAUDE.md's updateSwitches/pipelineDirty pattern - a no-op (via setShaderCode) if `switches` matches what's already compiled. */
+    public updateSwitches(switches: ForwardMonteCarloSwitches): void {
+        // steps (forward_monte_carlo.wgsl's integrate()) is i32 - Math.ceil rather than truncating,
+        // so the compiled bound never falls short of the caller's computed step budget.
+        const maxIntegrationSteps = Math.ceil(switches.maxIntegrationSteps);
+        const defines: ShaderDefines = { ...this.baseDefines, MAX_INTEGRATION_STEPS: `${maxIntegrationSteps}` };
+        if (switches.bilinearPhotonDistribution) {
+            defines.BILINEAR_PHOTON_DISTRIBUTION = true;
+        }
+        this.setShaderCode(preprocessShader(shaderCode, defines));
     }
 
     public updateUniforms(uniforms: ForwardMonteCarloUniforms): void {

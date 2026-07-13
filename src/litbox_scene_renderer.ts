@@ -14,6 +14,7 @@ import { TransformResources } from './litbox/transform_resources.ts';
 import { ComputedDataManager } from './litbox/computed_data_manager.ts';
 import { DebugViewBlitResources, DEBUG_VIEW_MODE, type DebugView } from './litbox/debug_view.ts';
 import { RollingRateCounter, computeRateFromDelta } from './litbox/performance_metrics.ts';
+import { analyzeExecutionEnvironment } from './litbox/device_environment.ts';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // viewProjection (mat4) + simInverseWorldTransform (mat4) + debugMode (f32, padded to 16
@@ -174,6 +175,11 @@ export class LitboxSceneRenderer {
         return this.lutResources;
     }
 
+    /** The light simulation (see simulation.ts) - exposed so callers can reach its public tuning knobs, e.g. bilinearPhotonDistribution. */
+    public getSimulationResources(): SimulationResources {
+        return this.simulationResources;
+    }
+
     /** Rendered frames/s, averaged over a rolling ~500ms window - see fpsCounter. 0 before the first window closes. */
     public getFps(): number {
         return this.fpsCounter.getRate();
@@ -221,6 +227,11 @@ export class LitboxSceneRenderer {
                 return false;
             }
             this.adapter = adapter;
+            // Feeds SimulationResources' device-tuning decision (see device_environment.ts's
+            // isRandomAccessFriendlyGpu/getSimulationDeviceProfile) - must happen before any scene
+            // loads, which this does since createSharedResources()/rebuildFromScene() only run
+            // later in start(), after initWebGPU() resolves.
+            analyzeExecutionEnvironment(adapter.info.vendor);
             // BC1-compressed textures (see TextureCache) need this feature enabled on the
             // device to be usable; request it opportunistically since not every GPU/browser
             // supports it (mobile GPUs typically don't) - TextureCache falls back gracefully

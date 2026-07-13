@@ -249,15 +249,18 @@ export class RaytracedResources {
         this.hasGBufferTarget = false;
         this.simulationOwnerId = simulationResources.getOwnerId();
 
-        if (!simulationResources.hasSimulation()) {
+        // Sourced from simulationResources (device-profile-scaled), not scene.simulations[0]
+        // directly (the scene's raw, unscaled config) - this G-Buffer must match the simulation's
+        // actual target resolution exactly, since forward_monte_carlo.wgsl samples both at the
+        // same target pixel coordinates - see SimulationResources.getEffectiveResolution.
+        const resolution = simulationResources.getEffectiveResolution();
+        if (!resolution) {
             return;
         }
-
-        const simulation = scene.simulations[0];
         const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
-        this.albedoGBuffer = this.computedDataManager.acquireTexture(simulation.width, simulation.height, ALBEDO_FORMAT, usage);
-        this.densityGBuffer = this.computedDataManager.acquireTexture(simulation.width, simulation.height, DENSITY_FORMAT, usage);
-        this.normalRoughnessGBuffer = this.computedDataManager.acquireTexture(simulation.width, simulation.height, NORMAL_ROUGHNESS_FORMAT, usage);
+        this.albedoGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, ALBEDO_FORMAT, usage);
+        this.densityGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, DENSITY_FORMAT, usage);
+        this.normalRoughnessGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, NORMAL_ROUGHNESS_FORMAT, usage);
         this.hasGBufferTarget = true;
 
         this.objects = await Promise.all(scene.raytraced.map(entry => this.resolveRaytraced(entry, sceneGraph, textureCache, transformResources)));

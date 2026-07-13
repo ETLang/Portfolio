@@ -320,12 +320,30 @@ fn writePhotonBilinear(location: vec2<f32>, energy: vec3<f32>) {
     writePhotonIndexed(pixelFloor + vec2<i32>(1, 1), energy * pixelFrac.x * pixelFrac.y, true);
 }
 
-// Unity's BILINEAR_PHOTON_DISTRIBUTION defaults on and there's no ask for a toggle here - always
-// bilinear, WritePhoton_Indexed's non-bilinear path isn't ported.
+fn writePhotonNearest(location: vec2<f32>, energy: vec3<f32>) {
+    writePhotonIndexed(vec2<i32>(round(location - vec2<f32>(0.5, 0.5))), energy, false);
+}
+
+// Unity's BILINEAR_PHOTON_DISTRIBUTION - a compile-time switch (see ForwardMonteCarloOperation.
+// updateSwitches), not a runtime uniform: it changes which of writePhotonBilinear (4
+// atomicAdd-triplets/sample, smooth splat) vs. writePhotonNearest (1, blocky) gets compiled in,
+// since the atomic-write count itself is what's being tuned - a measured ~1.5x photons/s win on
+// the Pixel 10 Pro's PowerVR GPU (scattered global atomics are its weak point - see CLAUDE.md/
+// mobile-perf-tuning notes) at the cost of visible splat blockiness on larger screens. Defaults on
+// (this #ifdef is satisfied whenever the caller's ShaderDefines includes it) to match Unity's
+// original default and preserve current desktop quality; expected to flip off on mobile once a
+// tile-friendly realtime denoise pass exists to compensate for the lost smoothing.
+#ifdef BILINEAR_PHOTON_DISTRIBUTION
 fn writeSample(integrator: ptr<function, Integrator>, energy: vec3<f32>, location: vec2<f32>) {
     let outScatterDensity = uniforms.integrationIntervalSquared * (*integrator).transmissibility;
     writePhotonBilinear(location, energy * outScatterDensity);
 }
+#else
+fn writeSample(integrator: ptr<function, Integrator>, energy: vec3<f32>, location: vec2<f32>) {
+    let outScatterDensity = uniforms.integrationIntervalSquared * (*integrator).transmissibility;
+    writePhotonNearest(location, energy * outScatterDensity);
+}
+#endif
 
 // Ported from Integrate() (SimulationCommon.cginc) - the ray-march loop shared by every light
 // kind. lod is always 0 in the Unity source (the quadtree jump optimization is dead - see file
@@ -352,7 +370,13 @@ fn integrate(photon: ptr<function, Ray>, bounces: u32, integrator: ptr<function,
 
         integratorBeginTraversal(integrator);
         var continueRunning = true;
-        for (var steps = 0; steps < 2000; steps++) {
+        // MAX_INTEGRATION_STEPS is a compile-time switch (ForwardMonteCarloOperation.
+        // updateSwitches), not a runtime uniform - a per-bounce step cap on this ray-march search/
+        // refine loop before it gives up (Unity's original hardcoded this at 2000). Lower caps cut
+        // per-thread worst-case work directly, which matters most for divergent SIMT execution:
+        // every thread in a workgroup pays for whichever thread takes the most steps this bounce -
+        // see CLAUDE.md/mobile-perf-tuning notes.
+        for (var steps = 0; steps < MAX_INTEGRATION_STEPS; steps++) {
             ctx.transmissibilityNext = vec2<f32>(1.0, 1.0) - textureSampleLevel(density, linearSampler, ctx.testUV, 0.0).xy / DENSITY_SCALE;
             ctx.uHitNext = ctx.uHitCurrent + 1.0;
             let overshoot = integratorTest(integrator, &ctx);
