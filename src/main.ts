@@ -39,6 +39,13 @@ if (consoleContainer) {
         if (consoleContainerNonNull.children.length > 50) {
             consoleContainerNonNull.removeChild(consoleContainerNonNull.children[0]);
         }
+        // Relay to the Vite dev server's terminal (see vite.config.ts's consoleLogRelay
+        // plugin) so mobile-device console output is visible without a tethered devtools
+        // session. import.meta.env.DEV keeps this out of the deployed GitHub Pages build,
+        // where there's no dev server listening on the other end.
+        if (import.meta.env.DEV) {
+            navigator.sendBeacon('/__consolelog', `[${type}] ${message}`);
+        }
     }
 
     console.log = (...args: any[]) => {
