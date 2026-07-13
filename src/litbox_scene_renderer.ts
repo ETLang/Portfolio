@@ -3,6 +3,7 @@ import type { SceneCamera, Vector2 } from './litbox/scene.ts';
 import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { SceneGraph } from './litbox/scene_graph.ts';
 import { TextureCache } from './litbox/texture_cache.ts';
+import { LutResources } from './litbox/lut_resources.ts';
 import { LightResources } from './litbox/light_resources.ts';
 import { RaytracedResources } from './litbox/raytraced_resources.ts';
 import { SimulationResources } from './litbox/simulation.ts';
@@ -57,6 +58,7 @@ export class LitboxSceneRenderer {
 
     private sceneGraph: SceneGraph | null = null;
     private textureCache!: TextureCache;
+    private lutResources!: LutResources;
     private transformResources!: TransformResources;
     private lightResources!: LightResources;
     private computedDataManager!: ComputedDataManager;
@@ -153,6 +155,11 @@ export class LitboxSceneRenderer {
         return this.canvas;
     }
 
+    /** The procedural, static LUTs (see lut_resources.ts) - not yet consumed by any pass; exposed for whatever simulation pass eventually needs them. */
+    public getLutResources(): LutResources {
+        return this.lutResources;
+    }
+
     private async initWebGPU(): Promise<boolean> {
         try {
             if (!navigator.gpu) {
@@ -204,6 +211,7 @@ export class LitboxSceneRenderer {
 
     private createSharedResources(): void {
         this.textureCache = new TextureCache(this.device);
+        this.lutResources = new LutResources(this.device, this.textureCache);
         this.transformResources = new TransformResources(this.device);
         this.lightResources = new LightResources(this.device);
         this.computedDataManager = new ComputedDataManager(this.device);

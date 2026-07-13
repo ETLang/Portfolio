@@ -32,3 +32,26 @@ fn fullscreenQuadPosition(vertexIndex: u32) -> vec2<f32> {
 fn clipSpaceToUv(pos: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(pos.x * 0.5 + 0.5, 0.5 - pos.y * 0.5);
 }
+
+// LUTs (lookup tables - see lut.ts/lut_resources.ts) are procedural, static textures sampled with
+// a texel-center remap: LUT-space u/v/w in [0,1] must land on the first/last texel's *center*,
+// not the texture edge. `texelCount` must always come from a #define supplied by the consuming
+// shader's own preprocessShader() call (e.g. `TEARDROP_SCATTERING_LUT_TEXEL_COUNT`, sourced from
+// lut.ts's TEARDROP_SCATTERING_LUT_SAMPLES/BRDF_LUT_RESOLUTION) - never hardcode a LUT's
+// resolution directly into a .wgsl file, since it's TS's job to be the single source of truth.
+fn lutUv(u: f32, texelCount: f32) -> f32 {
+    return 0.5 / texelCount + u * (1.0 - 1.0 / texelCount);
+}
+
+fn sampleLut1D(t: texture_2d<f32>, s: sampler, u: f32, texelCount: f32) -> vec4<f32> {
+    return textureSampleLevel(t, s, vec2<f32>(lutUv(u, texelCount), 0.5), 0.0);
+}
+
+fn sampleLut2D(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, texelCounts: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(t, s, vec2<f32>(lutUv(uv.x, texelCounts.x), lutUv(uv.y, texelCounts.y)), 0.0);
+}
+
+fn sampleLut3D(t: texture_3d<f32>, s: sampler, uvw: vec3<f32>, texelCounts: vec3<f32>) -> vec4<f32> {
+    return textureSampleLevel(t, s, vec3<f32>(
+        lutUv(uvw.x, texelCounts.x), lutUv(uvw.y, texelCounts.y), lutUv(uvw.z, texelCounts.z)), 0.0);
+}
