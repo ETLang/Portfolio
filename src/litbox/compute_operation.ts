@@ -12,6 +12,13 @@
  * Pipeline layout is always 'auto' - each subclass's own WGSL @group/@binding declarations are the
  * single source of truth for its bind group layouts, so nothing here (or in a subclass) declares
  * a GPUBindGroupLayout by hand.
+ *
+ * Compile-time switches (#define/#ifdef, see shader_preprocessor.ts) are expected to change
+ * extremely rarely, so a switch change is handled as a full pipeline recompile rather than a
+ * keyed cache of pipelines per switch combination - see setShaderCode below. A subclass's
+ * updateSwitches(...) re-runs preprocessShader(rawShaderSource, defines) itself (translating its
+ * typed switch parameters into a ShaderDefines object) and hands the resulting WGSL text to
+ * setShaderCode.
  */
 export abstract class ComputeOperation {
     protected device: GPUDevice;
@@ -73,6 +80,27 @@ export abstract class ComputeOperation {
         this.dispatchWidth = width;
         this.dispatchHeight = height;
         this.dispatchDepth = depth;
+    }
+
+    /**
+     * Subclasses' updateSwitches(...) call this with the result of re-running
+     * preprocessShader(rawShaderSource, defines) against the subclass's own raw shader text - see
+     * the class doc comment. A no-op if `code` is identical to what's already compiled (the common
+     * case: updateSwitches called again with the same switch combination). Otherwise this is a full
+     * recompile - no keyed pipeline cache - since switches change extremely rarely. Also forces all
+     * three bind groups to rebuild next execute(): a new pipeline's 'auto' bind group layouts are
+     * distinct GPUBindGroupLayout objects even when the bound resources haven't changed, so the old
+     * bind groups are no longer valid against it.
+     */
+    protected setShaderCode(code: string): void {
+        if (code === this.shaderCode) {
+            return;
+        }
+        this.shaderCode = code;
+        this.pipeline = null;
+        this.uniformGroupDirty = true;
+        this.inputGroupDirty = true;
+        this.outputGroupDirty = true;
     }
 
     private ensurePipeline(): GPUComputePipeline {
