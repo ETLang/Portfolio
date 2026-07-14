@@ -6,6 +6,12 @@
 
 struct TonemapUniform {
     exposure: f32,
+    // 0.0/1.0 rather than a bool - uniform buffer members can't be bool in WGSL.
+    enabled: f32,
+    // WGSL implicitly pads the following vec3<f32>s to 16-byte alignment - see tonemap.ts'
+    // updateUniforms for the matching Float32Array layout.
+    whitePointLog: vec3<f32>,
+    blackPointLog: vec3<f32>,
 }
 
 struct ToneMappingShape {
@@ -54,8 +60,13 @@ fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 @fragment
 fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(hdrTex, hdrSampler, in.uv).rgb;
+    if (tonemapUniform.enabled < 0.5) {
+        return vec4<f32>(hdr, 1.0);
+    }
     var shape = toneMapDefaultShape();
     shape.exposure = tonemapUniform.exposure;
+    shape.whitePoint = tonemapUniform.whitePointLog;
+    shape.blackPoint = tonemapUniform.blackPointLog;
     let mapped = toneMapUE5(hdr, shape);
     return vec4<f32>(mapped, 1.0);
 }

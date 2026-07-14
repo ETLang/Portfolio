@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compareRaytracedDrawOrder, RaytracedResources } from '../raytraced_resources.ts';
+import { PRIMITIVE_MESH_REGIONS } from '../primitive_mesh.ts';
 import { SceneGraph } from '../scene_graph.ts';
 import { TextureCache } from '../texture_cache.ts';
 import { SimulationResources } from '../simulation.ts';
@@ -88,19 +89,21 @@ async function setup(raytraced?: RaytracedObject[]): Promise<Fixture> {
 }
 
 interface RecordedDraw {
+    vertexCount: number;
     instanceCount: number;
+    firstVertex: number;
     firstInstance: number;
 }
 
-/** A minimal GPURenderPassEncoder/GPUCommandEncoder stand-in that just records each draw() call's (instanceCount, firstInstance), for asserting on RaytracedResources' run-batching behavior. */
+/** A minimal GPURenderPassEncoder/GPUCommandEncoder stand-in that just records each draw() call's args, for asserting on RaytracedResources' run-batching behavior (including which mesh region/vertex range each run drew from). */
 function makeRecordingEncoder(): { encoder: GPUCommandEncoder; draws: RecordedDraw[] } {
     const draws: RecordedDraw[] = [];
     const passEncoder = {
         setPipeline: () => {},
         setVertexBuffer: () => {},
         setBindGroup: () => {},
-        draw: (_vertexCount: number, instanceCount: number, _firstVertex: number, firstInstance: number) => {
-            draws.push({ instanceCount, firstInstance });
+        draw: (vertexCount: number, instanceCount: number, firstVertex: number, firstInstance: number) => {
+            draws.push({ vertexCount, instanceCount, firstVertex, firstInstance });
         },
         end: () => {},
     };
@@ -119,7 +122,9 @@ describe('RaytracedResources.renderGBuffer', () => {
 
         fixture.raytracedResources.renderGBuffer(recorded.encoder);
 
-        expect(recorded.draws).toEqual([{ instanceCount: 4, firstInstance: 0 }]);
+        expect(recorded.draws).toEqual([
+            { instanceCount: 4, firstInstance: 0, vertexCount: PRIMITIVE_MESH_REGIONS[1].vertexCount, firstVertex: PRIMITIVE_MESH_REGIONS[1].firstVertex },
+        ]);
     });
 
     it('splits an otherwise-same-texture run around an inactive object (an instanced draw cannot skip a middle instance)', async () => {
@@ -150,8 +155,58 @@ describe('RaytracedResources.renderGBuffer', () => {
         // ownerId 3's object (position 2) is excluded entirely; positions [0,2) and [3,4) are two
         // separate runs, since a single instanced draw can't skip the gap between them.
         expect(recorded.draws).toEqual([
-            { instanceCount: 2, firstInstance: 0 },
-            { instanceCount: 1, firstInstance: 3 },
+            { instanceCount: 2, firstInstance: 0, vertexCount: PRIMITIVE_MESH_REGIONS[1].vertexCount, firstVertex: PRIMITIVE_MESH_REGIONS[1].firstVertex },
+            { instanceCount: 1, firstInstance: 3, vertexCount: PRIMITIVE_MESH_REGIONS[1].vertexCount, firstVertex: PRIMITIVE_MESH_REGIONS[1].firstVertex },
+        ]);
+    });
+
+    it('breaks a same-texture run into separate draws when primitiveShape differs (different mesh regions)', async () => {
+        const fixture = await setup([makeRaytraced(1, 0), { ...makeRaytraced(2, 1), primitiveShape: 'ellipse' }]);
+        const recorded = makeRecordingEncoder();
+
+        fixture.raytracedResources.renderGBuffer(recorded.encoder);
+
+        expect(recorded.draws).toEqual([
+            { instanceCount: 1, firstInstance: 0, vertexCount: PRIMITIVE_MESH_REGIONS[1].vertexCount, firstVertex: PRIMITIVE_MESH_REGIONS[1].firstVertex },
+            { instanceCount: 1, firstInstance: 1, vertexCount: PRIMITIVE_MESH_REGIONS[2].vertexCount, firstVertex: PRIMITIVE_MESH_REGIONS[2].firstVertex },
+        ]);
+    });
+
+    it('regroups a tied same-texture run by shape too, coalescing same-shape entries into fewer draw calls', async () => {
+        const objects = [makeObject(100, 0), makeObject(1, 0), makeObject(2, 0), makeObject(3, 0), makeObject(4, 0)];
+        const raytraced = [
+            makeRaytraced(1, 0),
+            { ...makeRaytraced(2, 0), primitiveShape: 'ellipse' },
+            makeRaytraced(3, 0),
+            { ...makeRaytraced(4, 0), primitiveShape: 'ellipse' },
+        ];
+        const scene: Scene = { ...makeScene(raytraced), objects };
+
+        const device = createFakeGpuDevice();
+        const gpuDevice = device as unknown as GPUDevice;
+        const textureCache = new TextureCache(gpuDevice);
+        const lutResources = new LutResources(gpuDevice, textureCache);
+        const computedDataManager = new ComputedDataManager(gpuDevice);
+        const simulationResources = new SimulationResources(gpuDevice, computedDataManager);
+        const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
+        simulationResources.initialize(cameraBindGroupLayout, lutResources);
+        const raytracedResources = new RaytracedResources(gpuDevice, computedDataManager);
+        raytracedResources.initialize();
+        const transformResources = new TransformResources(gpuDevice);
+        const sceneGraph = new SceneGraph(scene);
+        textureCache.loadScene('', scene.textureAtlasKeys);
+        simulationResources.loadFromScene(scene, sceneGraph);
+        await raytracedResources.loadFromScene(scene, sceneGraph, textureCache, simulationResources, transformResources);
+
+        const recorded = makeRecordingEncoder();
+        raytracedResources.renderGBuffer(recorded.encoder);
+
+        // All 4 objects share the same (tied) sortOrder=0 and the same fallback texture, so
+        // rebuildDrawOrder's compound (texture, shapeId) regrouping should cluster the 2 rects
+        // together and the 2 ellipses together, regardless of their original interleaved order.
+        expect(recorded.draws).toEqual([
+            { instanceCount: 2, firstInstance: 0, vertexCount: PRIMITIVE_MESH_REGIONS[1].vertexCount, firstVertex: PRIMITIVE_MESH_REGIONS[1].firstVertex },
+            { instanceCount: 2, firstInstance: 2, vertexCount: PRIMITIVE_MESH_REGIONS[2].vertexCount, firstVertex: PRIMITIVE_MESH_REGIONS[2].firstVertex },
         ]);
     });
 

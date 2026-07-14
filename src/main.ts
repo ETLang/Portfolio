@@ -5,6 +5,7 @@ import { LitboxSceneRenderer } from './litbox_scene_renderer.ts';
 import { CornellSquareScene } from './litbox/scenes/cornell_square_scene.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
+import { formatRate } from './litbox/performance_metrics.ts';
 import introMdText from './intro.md?raw';
 
 // Import markdown files as URLs. Vite will handle resolving these paths correctly
@@ -37,6 +38,13 @@ if (consoleContainer) {
         // Limit the number of messages to prevent performance issues
         if (consoleContainerNonNull.children.length > 50) {
             consoleContainerNonNull.removeChild(consoleContainerNonNull.children[0]);
+        }
+        // Relay to the Vite dev server's terminal (see vite.config.ts's consoleLogRelay
+        // plugin) so mobile-device console output is visible without a tethered devtools
+        // session. import.meta.env.DEV keeps this out of the deployed GitHub Pages build,
+        // where there's no dev server listening on the other end.
+        if (import.meta.env.DEV) {
+            navigator.sendBeacon('/__consolelog', `[${type}] ${message}`);
         }
     }
 
@@ -78,6 +86,7 @@ const viewContent = {
             <p>Rays/Pixel: <input type="range" min="1" max="100" value="50" class="slider"></p>
             <p>Bounce Depth: <input type="range" min="1" max="10" value="5" class="slider"></p>
             <p>Exposure: <input type="range" id="exposure-slider" min="-4" max="4" step="0.1" value="0" class="slider"></p>
+            <p><label><input type="checkbox" id="tonemap-toggle" checked> Tone mapping</label></p>
         `,
     },
     fractals: {
@@ -147,6 +156,13 @@ sidebarPane.addEventListener('input', (e: Event) => {
     }
 });
 
+sidebarPane.addEventListener('change', (e: Event) => {
+    const target = e.target as HTMLElement;
+    if (target.id === 'tonemap-toggle' && litboxRenderer) {
+        litboxRenderer.tonemapEnabled = (target as HTMLInputElement).checked;
+    }
+});
+
 activityBarButtons.forEach(button => {
     button.addEventListener('click', async () => {
         const view = (button as HTMLElement).dataset.view;
@@ -200,11 +216,33 @@ if (canvas) {
     CornellSquareScene.load()
         .then(scene => renderer.setScene(scene))
         .then(() => renderer.start())
-        .then(() => { litboxRenderer = renderer; })
+        .then(() => {
+            litboxRenderer = renderer;
+            // Exposed for manual debugging from the devtools console, e.g.
+            // `litboxRenderer.debugView = 'lightmap'` - see LitboxSceneRenderer.debugView.
+            (window as unknown as { litboxRenderer: LitboxSceneRenderer }).litboxRenderer = renderer;
+        })
         .catch(error => console.error('Failed to start Litbox scene renderer:', error));
 } else {
     console.error("Canvas element not found!");
 }
+
+// --- PERFORMANCE METRICS DISPLAY ---
+const perfFpsEl = document.getElementById('perf-fps');
+const perfPhotonsEl = document.getElementById('perf-photons');
+const PERF_DISPLAY_UPDATE_INTERVAL_MS = 250;
+
+setInterval(() => {
+    if (!litboxRenderer) {
+        return;
+    }
+    if (perfFpsEl) {
+        perfFpsEl.textContent = formatRate(litboxRenderer.getFps());
+    }
+    if (perfPhotonsEl) {
+        perfPhotonsEl.textContent = formatRate(litboxRenderer.getPhotonWritesPerSecond());
+    }
+}, PERF_DISPLAY_UPDATE_INTERVAL_MS);
 
 // --- CONTACT MODAL ---
 const contactLink = document.getElementById('contact-link');

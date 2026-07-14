@@ -19,8 +19,66 @@ import {
 } from './forward_monte_carlo.ts';
 import compositeShaderCode from './shaders/simulation_composite.wgsl?raw';
 import { preprocessShader } from './shaders/shader_preprocessor.ts';
+import { getPlatform, isRandomAccessFriendlyGpu, type Platform } from './device_environment.ts';
+import { srgbToLinear } from './color_space.ts';
 
 const LIGHTMAP_FORMAT: GPUTextureFormat = 'rgba16float';
+
+/**
+ * How a scene's raw SceneSimulation config gets scaled down for a given device - see
+ * deriveEffectiveSimulation and CLAUDE.md/mobile-perf-tuning notes for the reasoning behind each
+ * number. Desktop is always the identity profile (resolutionScale/raysPerFrameScale of 1,
+ * bilinear splat on) - only mobile gets scaled down, and how much depends on whether the GPU is
+ * expected to handle this integrator's scattered/incoherent access pattern well:
+ *
+ * - Mobile, GPU NOT known random-access-friendly (the default assumption for mobile): halve
+ *   resolution (small screen, so the loss is barely visible), quarter raysPerFrame (a lower
+ *   resolution needs proportionally fewer photon writes for similar apparent fidelity - see
+ *   maxIntegrationSteps's own resolution-derived scaling for why the step budget doesn't need an
+ *   independent scale factor), and disable the bilinear photon splat (measured ~1.5x photons/s win
+ *   from cutting scattered global atomicAdds 4x on the Pixel 10 Pro's PowerVR GPU).
+ * - Mobile, GPU known random-access-friendly (e.g. Apple Silicon): still halve resolution (same
+ *   small-screen argument), but only halve raysPerFrame (not quarter) and keep the bilinear splat
+ *   on, since the GPU shouldn't be paying the same atomic-contention tax the default profile is
+ *   working around.
+ */
+export interface SimulationDeviceProfile {
+    resolutionScale: number;
+    raysPerFrameScale: number;
+    bilinearPhotonDistribution: boolean;
+}
+
+export function getSimulationDeviceProfile(platform: Platform, gpuRandomAccessFriendly: boolean): SimulationDeviceProfile {
+    if (platform === 'desktop') {
+        return { resolutionScale: 1, raysPerFrameScale: 1, bilinearPhotonDistribution: true };
+    }
+    return gpuRandomAccessFriendly
+        ? { resolutionScale: 0.5, raysPerFrameScale: 0.5, bilinearPhotonDistribution: true }
+        : { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false };
+}
+
+/**
+ * Per-bounce-phase ray-march step cap: one domain-diagonal march. forward_monte_carlo.wgsl's
+ * integrate() runs its search phase and refine phase as two *separate* invocations of the same
+ * steps-for-loop (each resets steps to 0), each independently bounded by that phase's own uEscape
+ * (a ray-vs-box exit distance) - so a single diagonal covers either phase's worst case, not both
+ * combined. Always derived from whatever width/height are actually in play (not a stored field)
+ * so it automatically tracks resolutionScale - a fixed constant would either waste budget (too
+ * high for a scaled-down domain) or truncate a legitimate search/refine phase (too low).
+ */
+export function computeMaxIntegrationSteps(width: number, height: number): number {
+    return Math.sqrt(width * width + height * height);
+}
+
+/** Applies `profile` to a scene's raw simulation config - pure, doesn't mutate `simulation`. */
+export function deriveEffectiveSimulation(simulation: SceneSimulation, profile: SimulationDeviceProfile): SceneSimulation {
+    return {
+        ...simulation,
+        width: Math.max(1, Math.round(simulation.width * profile.resolutionScale)),
+        height: Math.max(1, Math.round(simulation.height * profile.resolutionScale)),
+        raysPerFrame: Math.max(1, Math.round(simulation.raysPerFrame * profile.raysPerFrameScale)),
+    };
+}
 
 /**
  * Owns the HDR mipmapped lightmap produced by the light simulation, and the pipeline that
@@ -70,6 +128,16 @@ export class SimulationResources {
      */
     private writeCounterBuffer: GPUBuffer;
     private writeCounterStaging: GPUBuffer;
+
+    /**
+     * Unity's BILINEAR_PHOTON_DISTRIBUTION toggle (see ForwardMonteCarloOperation.updateSwitches
+     * and forward_monte_carlo.wgsl's writeSample): smooth bilinear photon splat vs. a single-tap
+     * nearest write that measurably reduces scattered global-atomic pressure on mobile GPUs weak
+     * at that pattern - see CLAUDE.md. Reset from the active SimulationDeviceProfile on every
+     * loadFromScene() call (see getSimulationDeviceProfile); still free to reassign afterward for
+     * a manual override, picked up by every light-kind operation on the next tracePhotons() call.
+     */
+    public bilinearPhotonDistribution = true;
 
     constructor(device: GPUDevice, computedDataManager: ComputedDataManager) {
         this.device = device;
@@ -153,6 +221,16 @@ export class SimulationResources {
         return this.simulation?.ownerId ?? null;
     }
 
+    /**
+     * The simulation's actual (device-profile-scaled) target resolution, or null if there's no
+     * active simulation - see deriveEffectiveSimulation. RaytracedResources' G-Buffer must match
+     * this exactly (not the scene's raw, unscaled SceneSimulation.width/height), since
+     * forward_monte_carlo.wgsl samples both at the same target pixel coordinates.
+     */
+    public getEffectiveResolution(): { width: number; height: number } | null {
+        return this.simulation ? { width: this.simulation.width, height: this.simulation.height } : null;
+    }
+
     /** Targeted re-derivation of the composite uniform's world transform and its (already transform-only) GPU upload. */
     public refreshWorldTransform(sceneGraph: SceneGraph): void {
         if (!this.simulation || !this.compositeUniformBuffer) {
@@ -178,14 +256,25 @@ export class SimulationResources {
             this.photonBuffer = null;
         }
         this.photonBufferClearData = null;
-        this.simulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
+        const rawSimulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
             console.warn(`Litbox: ${scene.simulations.length} simulations present; only the first is rendered.`);
         }
-        if (!this.simulation) {
+        if (!rawSimulation) {
+            this.simulation = null;
             return;
         }
+
+        const deviceProfile = getSimulationDeviceProfile(getPlatform(), isRandomAccessFriendlyGpu());
+        this.simulation = deriveEffectiveSimulation(rawSimulation, deviceProfile);
+        this.bilinearPhotonDistribution = deviceProfile.bilinearPhotonDistribution;
+        // Visible via the on-screen console overlay on mobile - lets a device profile be verified
+        // without attaching devtools (see CDP-over-adb mobile debugging notes: some GPU readback
+        // paths hang under remote debugging, so an in-page log is the more reliable check anyway).
+        console.log(`Litbox: device profile - platform=${getPlatform()} gpuRandomAccessFriendly=${isRandomAccessFriendlyGpu()} `
+            + `resolution=${this.simulation.width}x${this.simulation.height} raysPerFrame=${this.simulation.raysPerFrame} `
+            + `maxIntegrationSteps=${computeMaxIntegrationSteps(this.simulation.width, this.simulation.height)} bilinear=${this.bilinearPhotonDistribution}`);
 
         this.worldTransform = sceneGraph.getWorldTransform(this.simulation.ownerId);
 
@@ -286,6 +375,7 @@ export class SimulationResources {
         this.device.queue.writeBuffer(this.photonBuffer.buffer, 0, this.photonBufferClearData);
 
         const { width, height, raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces } = this.simulation;
+        const maxIntegrationSteps = computeMaxIntegrationSteps(width, height);
 
         interface Entry {
             kind: LightKind;
@@ -308,7 +398,11 @@ export class SimulationResources {
             const { color, intensity } = entry.light;
             // NOT intensity² here - the Unity scene exporter already writes intensity² into the
             // JSON (LitboxDemoSceneExporter.cs), so this project's `intensity` is already squared.
-            const energyRgb: [number, number, number] = [color.r * intensity, color.g * intensity, color.b * intensity];
+            // color.r/g/b converted sRGB->linear (see color_space.ts) to match Unity's
+            // RTLightSource.Energy, which now reads `.color.linear * intensity * intensity` -
+            // this is that same Energy computation, just with the intensity² already folded into
+            // `intensity` upstream.
+            const energyRgb: [number, number, number] = [srgbToLinear(color.r) * intensity, srgbToLinear(color.g) * intensity, srgbToLinear(color.b) * intensity];
             return { luma: luminance(energyRgb), energyRgb };
         });
         const totalLuma = energies.reduce((sum, energy) => sum + energy.luma, 0);
@@ -354,6 +448,10 @@ export class SimulationResources {
             ];
             const bounces = resolveBounces(photonBounces, light.bounces);
 
+            operation.updateSwitches({
+                bilinearPhotonDistribution: this.bilinearPhotonDistribution,
+                maxIntegrationSteps,
+            });
             operation.updateUniforms({
                 lightToTarget,
                 lightEnergy,

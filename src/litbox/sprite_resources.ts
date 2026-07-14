@@ -7,6 +7,7 @@ import { Entry, PackedUniformArray } from './packed_uniform_array.ts';
 import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } from './quad_mesh.ts';
 import { resolvePrimitiveShapeId } from './primitive_shape.ts';
 import { clusterByTextureWithinTiedGroups } from './draw_order.ts';
+import { srgbColorToLinear } from './color_space.ts';
 import spriteShaderCode from './shaders/sprite.wgsl?raw';
 import { preprocessShader } from './shaders/shader_preprocessor.ts';
 
@@ -471,22 +472,31 @@ function writeAtlasData(view: DataView, byteOffset: number, uvTransform: UvTrans
 }
 
 function writePropertiesData(view: DataView, byteOffset: number, sprite: SceneSprite, shapeId: number): void {
-    view.setFloat32(byteOffset + 0, sprite.ambient.r, true);
-    view.setFloat32(byteOffset + 4, sprite.ambient.g, true);
-    view.setFloat32(byteOffset + 8, sprite.ambient.b, true);
-    view.setFloat32(byteOffset + 12, sprite.ambient.a, true);
-    view.setFloat32(byteOffset + 16, sprite.emissive.r, true);
-    view.setFloat32(byteOffset + 20, sprite.emissive.g, true);
-    view.setFloat32(byteOffset + 24, sprite.emissive.b, true);
-    view.setFloat32(byteOffset + 28, sprite.emissive.a, true);
-    view.setFloat32(byteOffset + 32, sprite.simContribution.r, true);
-    view.setFloat32(byteOffset + 36, sprite.simContribution.g, true);
-    view.setFloat32(byteOffset + 40, sprite.simContribution.b, true);
-    view.setFloat32(byteOffset + 44, sprite.simContribution.a, true);
-    view.setFloat32(byteOffset + 48, sprite.colorMod.r, true);
-    view.setFloat32(byteOffset + 52, sprite.colorMod.g, true);
-    view.setFloat32(byteOffset + 56, sprite.colorMod.b, true);
-    view.setFloat32(byteOffset + 60, sprite.colorMod.a, true);
+    // ambient/emissive/simContribution/colorMod are authored/stored in sRGB (matching Unity's
+    // Inspector-authored Color, see color_space.ts) - converted to linear here, at GPU-upload
+    // time, since PortfolioSpriteShader.shader declares all 4 corresponding properties
+    // (_Ambience/_Emissive/_LightMod/_Color) as Color-typed (each gets Unity's own automatic
+    // conversion via RTDemoSprite.cs's MaterialPropertyBlock.SetColor calls).
+    const ambient = srgbColorToLinear(sprite.ambient);
+    const emissive = srgbColorToLinear(sprite.emissive);
+    const simContribution = srgbColorToLinear(sprite.simContribution);
+    const colorMod = srgbColorToLinear(sprite.colorMod);
+    view.setFloat32(byteOffset + 0, ambient.r, true);
+    view.setFloat32(byteOffset + 4, ambient.g, true);
+    view.setFloat32(byteOffset + 8, ambient.b, true);
+    view.setFloat32(byteOffset + 12, ambient.a, true);
+    view.setFloat32(byteOffset + 16, emissive.r, true);
+    view.setFloat32(byteOffset + 20, emissive.g, true);
+    view.setFloat32(byteOffset + 24, emissive.b, true);
+    view.setFloat32(byteOffset + 28, emissive.a, true);
+    view.setFloat32(byteOffset + 32, simContribution.r, true);
+    view.setFloat32(byteOffset + 36, simContribution.g, true);
+    view.setFloat32(byteOffset + 40, simContribution.b, true);
+    view.setFloat32(byteOffset + 44, simContribution.a, true);
+    view.setFloat32(byteOffset + 48, colorMod.r, true);
+    view.setFloat32(byteOffset + 52, colorMod.g, true);
+    view.setFloat32(byteOffset + 56, colorMod.b, true);
+    view.setFloat32(byteOffset + 60, colorMod.a, true);
     view.setFloat32(byteOffset + 64, sprite.opacity, true);
     view.setFloat32(byteOffset + 68, sprite.simBlur, true);
     view.setUint32(byteOffset + 72, shapeId, true);

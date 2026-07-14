@@ -50,7 +50,13 @@ function makeSpotlight(ownerId: number): Spotlight {
 }
 
 function makeCamera(ownerId: number): SceneCamera {
-    return { ownerId, verticalSize: 5, exposure: 1 };
+    return {
+        ownerId,
+        verticalSize: 5,
+        exposure: 1,
+        blackPointLog: { x: -4, y: -4, z: -4 },
+        whitePointLog: { x: 2, y: 2, z: 2 },
+    };
 }
 
 function makeSimulation(ownerId: number): SceneSimulation {
@@ -255,6 +261,13 @@ describe('LitboxScene.createRaytraced', () => {
         const obj = scene.createRaytraced({ name: 'New Traced' });
         const raytraced = scene.data.raytraced.find(r => r.ownerId === obj.id);
         expect(scene.getPendingStructuralOps()).toEqual([{ type: 'create', object: obj, raytraced }]);
+    });
+
+    it('honors an overridden primitiveShape', () => {
+        const scene = new TestScene(makeFixtureScene());
+        const obj = scene.createRaytraced({ name: 'New Traced', primitiveShape: 'ellipse' });
+        const entry = scene.data.raytraced.find(r => r.ownerId === obj.id)!;
+        expect(entry.primitiveShape).toBe('ellipse');
     });
 });
 

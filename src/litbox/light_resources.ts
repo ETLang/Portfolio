@@ -11,6 +11,7 @@ import type {
 import type { SceneGraph } from './scene_graph.ts';
 import { Entry, PackedUniformArray } from './packed_uniform_array.ts';
 import type { TransformResources } from './transform_resources.ts';
+import { srgbColorToLinear } from './color_space.ts';
 
 // erasableSyntaxOnly forbids `enum` - use a plain lookup instead.
 const LIGHT_KIND: Record<LightKind, number> = {
@@ -176,11 +177,16 @@ function isSpotlight(light: AnyLight): light is Spotlight {
 }
 
 function writeProperties(view: DataView, byteOffset: number, light: AnyLight, kind: number, transformIndex: number): void {
-    // color: vec4
-    view.setFloat32(byteOffset + 0, light.color.r, true);
-    view.setFloat32(byteOffset + 4, light.color.g, true);
-    view.setFloat32(byteOffset + 8, light.color.b, true);
-    view.setFloat32(byteOffset + 12, light.color.a, true);
+    // color: vec4 - converted sRGB->linear here (see color_space.ts), matching
+    // raytraced.albedo/sprite.{ambient,emissive,simContribution,colorMod}. Unity's
+    // RTLightSource.Energy now reads `.color.linear` (its own built-in sRGB->linear conversion)
+    // before uploading light color/energy to the simulation via ComputeShader.SetVector - so this
+    // must match, unlike before light color got Unity's own conversion at all.
+    const color = srgbColorToLinear(light.color);
+    view.setFloat32(byteOffset + 0, color.r, true);
+    view.setFloat32(byteOffset + 4, color.g, true);
+    view.setFloat32(byteOffset + 8, color.b, true);
+    view.setFloat32(byteOffset + 12, color.a, true);
     // transformIndex, kind, intensity, bounces, pinch
     view.setUint32(byteOffset + 16, transformIndex, true);
     view.setUint32(byteOffset + 20, kind, true);

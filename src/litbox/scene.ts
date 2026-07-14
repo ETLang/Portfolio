@@ -5,6 +5,12 @@ export interface Vector2 {
     y: number;
 }
 
+export interface Vector3 {
+    x: number;
+    y: number;
+    z: number;
+}
+
 export interface Color {
     r: number;
     g: number;
@@ -36,6 +42,10 @@ export interface SceneCamera {
     ownerId: number;
     verticalSize: number;
     exposure: number;
+    /** Per-channel log10 black point fed to the tonemap curve - see tonemap.wgsl's ToneMappingShape.blackPoint. */
+    blackPointLog: Vector3;
+    /** Per-channel log10 white point fed to the tonemap curve - see tonemap.wgsl's ToneMappingShape.whitePoint. */
+    whitePointLog: Vector3;
 }
 
 export interface RaytracedObject {

@@ -1,5 +1,5 @@
 import { mat4, vec4 } from 'gl-matrix';
-import type { SceneCamera, Vector2 } from './litbox/scene.ts';
+import type { SceneCamera, Vector2, Vector3 } from './litbox/scene.ts';
 import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { SceneGraph } from './litbox/scene_graph.ts';
 import { TextureCache } from './litbox/texture_cache.ts';
@@ -13,12 +13,18 @@ import { RingBufferedUniform } from './litbox/ring_buffered_uniform.ts';
 import { TransformResources } from './litbox/transform_resources.ts';
 import { ComputedDataManager } from './litbox/computed_data_manager.ts';
 import { DebugViewBlitResources, DEBUG_VIEW_MODE, type DebugView } from './litbox/debug_view.ts';
+import { RollingRateCounter, computeRateFromDelta } from './litbox/performance_metrics.ts';
+import { analyzeExecutionEnvironment } from './litbox/device_environment.ts';
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // viewProjection (mat4) + simInverseWorldTransform (mat4) + debugMode (f32, padded to 16
 // bytes), matching CameraUniform in sprite.wgsl.
 const CAMERA_UNIFORM_SIZE_BYTES = 4 * 16 * 2 + 16;
 const FRAMES_IN_FLIGHT = 2;
+// Mirrors tonemap.wgsl's toneMapDefaultShape() - used when there's no active camera, or when a
+// scene predates blackPointLog/whitePointLog and the loaded JSON doesn't carry them.
+const DEFAULT_WHITE_POINT_LOG: Vector3 = { x: 2, y: 2, z: 2 };
+const DEFAULT_BLACK_POINT_LOG: Vector3 = { x: -4, y: -4, z: -4 };
 
 interface ActiveCamera {
     camera: SceneCamera;
@@ -73,6 +79,17 @@ export class LitboxSceneRenderer {
     private activeScene: LitboxScene | null = null;
     private lastFrameTimeMs: number | null = null;
 
+    /** Rendered-frames-per-second, averaged over a rolling window - see getFps(). */
+    private fpsCounter = new RollingRateCounter(500);
+
+    /** Photon-writes/s tracking (see getPhotonWritesPerSecond()): polled independently of the
+     * render loop, on its own timer, since SimulationResources.getWriteCount() is an async GPU
+     * readback (mapAsync) that shouldn't gate every frame. */
+    private photonWritesPerSecond = 0;
+    private lastPhotonWriteCount: bigint | null = null;
+    private lastPhotonWriteTimeMs: number | null = null;
+    private static readonly PHOTON_METRICS_POLL_INTERVAL_MS = 500;
+
     /**
      * Diagnostic aid: when true, sprites render as flat, fully-opaque, shape-colored
      * quads, bypassing opacity/shading entirely - useful for confirming transforms/camera/
@@ -82,7 +99,8 @@ export class LitboxSceneRenderer {
 
     /**
      * When set (to a key registered in debugViews - currently 'albedo', 'density', 'normal',
-     * 'roughness', all contributed by the raytraced G-Buffer, see createSharedResources), replaces
+     * 'roughness' from the raytraced G-Buffer, plus 'lightmap' from the simulation's HDR photon
+     * accumulation, see createSharedResources), replaces
      * the entire normal render (simulation/sprites/tonemap) with a direct blit of that view's
      * source texture to the swapchain, transformed for actual legibility (see debug_view.wgsl) -
      * a diagnostic aid for verifying render-target contents before anything downstream consumes
@@ -111,6 +129,14 @@ export class LitboxSceneRenderer {
      */
     public exposureOverride: number | null = null;
 
+    /**
+     * When false, the tonemap pass (see tonemap.wgsl) is bypassed and the raw HDR frame
+     * buffer is written straight to the swapchain instead - useful for inspecting the
+     * simulation's actual output range without the filmic curve masking it. Values will
+     * clip to whatever range the presentation format allows.
+     */
+    public tonemapEnabled = true;
+
     /** Owner id of the camera exposureOverride was last synced to - see syncExposureToActiveCamera. */
     private lastActiveCameraOwnerId: number | null = null;
 
@@ -135,6 +161,8 @@ export class LitboxSceneRenderer {
 
         this.render = this.render.bind(this);
         requestAnimationFrame(this.render);
+
+        void this.pollPhotonWriteRate();
     }
 
     /** Stages (or swaps in) a scene. Safe to call before or after start(). */
@@ -160,6 +188,45 @@ export class LitboxSceneRenderer {
         return this.lutResources;
     }
 
+    /** The light simulation (see simulation.ts) - exposed so callers can reach its public tuning knobs, e.g. bilinearPhotonDistribution. */
+    public getSimulationResources(): SimulationResources {
+        return this.simulationResources;
+    }
+
+    /** Rendered frames/s, averaged over a rolling ~500ms window - see fpsCounter. 0 before the first window closes. */
+    public getFps(): number {
+        return this.fpsCounter.getRate();
+    }
+
+    /** Photon-writes/s, averaged over the ~500ms window between consecutive pollPhotonWriteRate() reads. 0 while there's no active simulation. */
+    public getPhotonWritesPerSecond(): number {
+        return this.photonWritesPerSecond;
+    }
+
+    /**
+     * Self-rescheduling poll loop (started once from start()) that turns SimulationResources'
+     * lifetime photon-writes counter into a per-second rate by diffing consecutive reads - exactly
+     * the pattern its getWriteCount() doc comment calls for. Deliberately independent of the render
+     * loop: getWriteCount() awaits an async GPU readback, which would otherwise stall frame timing.
+     */
+    private async pollPhotonWriteRate(): Promise<void> {
+        if (this.simulationResources.hasSimulation()) {
+            const count = await this.simulationResources.getWriteCount();
+            const nowMs = performance.now();
+            if (this.lastPhotonWriteCount !== null && this.lastPhotonWriteTimeMs !== null) {
+                const deltaCount = Number(count - this.lastPhotonWriteCount);
+                this.photonWritesPerSecond = computeRateFromDelta(deltaCount, nowMs - this.lastPhotonWriteTimeMs);
+            }
+            this.lastPhotonWriteCount = count;
+            this.lastPhotonWriteTimeMs = nowMs;
+        } else {
+            this.photonWritesPerSecond = 0;
+            this.lastPhotonWriteCount = null;
+            this.lastPhotonWriteTimeMs = null;
+        }
+        setTimeout(() => void this.pollPhotonWriteRate(), LitboxSceneRenderer.PHOTON_METRICS_POLL_INTERVAL_MS);
+    }
+
     private async initWebGPU(): Promise<boolean> {
         try {
             if (!navigator.gpu) {
@@ -173,6 +240,11 @@ export class LitboxSceneRenderer {
                 return false;
             }
             this.adapter = adapter;
+            // Feeds SimulationResources' device-tuning decision (see device_environment.ts's
+            // isRandomAccessFriendlyGpu/getSimulationDeviceProfile) - must happen before any scene
+            // loads, which this does since createSharedResources()/rebuildFromScene() only run
+            // later in start(), after initWebGPU() resolves.
+            analyzeExecutionEnvironment(adapter.info.vendor);
             // BC1-compressed textures (see TextureCache) need this feature enabled on the
             // device to be usable; request it opportunistically since not every GPU/browser
             // supports it (mobile GPUs typically don't) - TextureCache falls back gracefully
@@ -234,13 +306,18 @@ export class LitboxSceneRenderer {
         this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
 
         // Named debug views this renderer can blit in place of the normal render (see
-        // debugView) - currently all 4 come from the raytraced G-Buffer, but this map is the
-        // generic extension point: any future *Resources class that owns a debug-worthy texture
-        // just needs another entry here, no other renderer-level plumbing.
+        // debugView) - the first 4 come from the raytraced G-Buffer, 'lightmap' from the
+        // simulation's HDR photon accumulation, but this map is the generic extension point: any
+        // future *Resources class that owns a debug-worthy texture just needs another entry here,
+        // no other renderer-level plumbing.
         this.debugViews.set('albedo', { getSourceView: () => this.raytracedResources.getAlbedoView(), mode: DEBUG_VIEW_MODE.PASSTHROUGH });
         this.debugViews.set('density', { getSourceView: () => this.raytracedResources.getDensityView(), mode: DEBUG_VIEW_MODE.DENSITY });
         this.debugViews.set('normal', { getSourceView: () => this.raytracedResources.getNormalRoughnessView(), mode: DEBUG_VIEW_MODE.NORMAL_REMAP });
         this.debugViews.set('roughness', { getSourceView: () => this.raytracedResources.getNormalRoughnessView(), mode: DEBUG_VIEW_MODE.ALPHA_AS_LUMINANCE });
+        // Raw HDR lightmap (pre-tonemap, pre-exposure) - reuses debugViewScale as a divisor
+        // (same convention as 'density') since the "typical" irradiance magnitude depends
+        // entirely on the active scene's light intensities.
+        this.debugViews.set('lightmap', { getSourceView: () => this.simulationResources.getLightmapView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
 
         this.createHdrFrameTexture();
     }
@@ -458,12 +535,16 @@ export class LitboxSceneRenderer {
         return { camera, worldTransform: sceneGraph.getWorldTransform(camera.ownerId) };
     }
 
-    private writeCameraUniform(activeCamera: ActiveCamera | null): number {
+    private writeCameraUniform(activeCamera: ActiveCamera | null): { exposure: number; whitePointLog: Vector3; blackPointLog: Vector3 } {
         const viewProjection = mat4.create();
         let exposure = 0;
+        let whitePointLog = DEFAULT_WHITE_POINT_LOG;
+        let blackPointLog = DEFAULT_BLACK_POINT_LOG;
 
         if (activeCamera) {
             exposure = this.exposureOverride ?? activeCamera.camera.exposure;
+            whitePointLog = activeCamera.camera.whitePointLog ?? DEFAULT_WHITE_POINT_LOG;
+            blackPointLog = activeCamera.camera.blackPointLog ?? DEFAULT_BLACK_POINT_LOG;
 
             const view = mat4.create();
             mat4.invert(view, activeCamera.worldTransform);
@@ -488,7 +569,7 @@ export class LitboxSceneRenderer {
         data[32] = this.debugSolidColor ? 1 : 0;
         this.cameraUniform.write(data);
 
-        return exposure;
+        return { exposure, whitePointLog, blackPointLog };
     }
 
     /**
@@ -525,6 +606,7 @@ export class LitboxSceneRenderer {
 
         const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
         this.lastFrameTimeMs = timeMs;
+        this.fpsCounter.tick(timeMs);
         this.activeScene?.onFrame(deltaTimeSeconds);
         this.applyPendingStructuralOps();
         this.applyDynamicSceneUpdates();
@@ -568,7 +650,7 @@ export class LitboxSceneRenderer {
                 }
             }
 
-            const exposure = this.writeCameraUniform(this.getActiveCamera());
+            const { exposure, whitePointLog, blackPointLog } = this.writeCameraUniform(this.getActiveCamera());
 
             // Steps 3-6: sprites + additive simulation composite into the offscreen HDR frame buffer.
             // No depth/stencil attachment - It's safe to presume the vast majority of objects have
@@ -596,7 +678,7 @@ export class LitboxSceneRenderer {
                     storeOp: 'store',
                 }],
             });
-            this.tonemapResources.updateUniforms({ exposure });
+            this.tonemapResources.updateUniforms({ exposure, enabled: this.tonemapEnabled, whitePointLog, blackPointLog });
             this.tonemapResources.updateInputs(this.hdrFrameTextureView);
             this.tonemapResources.execute(tonemapPass);
             tonemapPass.end();
