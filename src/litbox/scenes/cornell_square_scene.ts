@@ -1,5 +1,5 @@
 import { LitboxScene } from '../litbox_scene.ts';
-import type { AnyLight, SceneObject } from '../scene.ts';
+import type { /*AnyLight,*/ SceneObject } from '../scene.ts';
 
 /** Scene-specific animation/interaction logic for cornell_square.json. */
 export class CornellSquareScene extends LitboxScene {

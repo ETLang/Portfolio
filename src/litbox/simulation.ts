@@ -20,6 +20,7 @@ import {
 import compositeShaderCode from './shaders/simulation_composite.wgsl?raw';
 import { preprocessShader } from './shaders/shader_preprocessor.ts';
 import { getPlatform, isRandomAccessFriendlyGpu, type Platform } from './device_environment.ts';
+import { srgbToLinear } from './color_space.ts';
 
 const LIGHTMAP_FORMAT: GPUTextureFormat = 'rgba16float';
 
@@ -397,7 +398,11 @@ export class SimulationResources {
             const { color, intensity } = entry.light;
             // NOT intensity² here - the Unity scene exporter already writes intensity² into the
             // JSON (LitboxDemoSceneExporter.cs), so this project's `intensity` is already squared.
-            const energyRgb: [number, number, number] = [color.r * intensity, color.g * intensity, color.b * intensity];
+            // color.r/g/b converted sRGB->linear (see color_space.ts) to match Unity's
+            // RTLightSource.Energy, which now reads `.color.linear * intensity * intensity` -
+            // this is that same Energy computation, just with the intensity² already folded into
+            // `intensity` upstream.
+            const energyRgb: [number, number, number] = [srgbToLinear(color.r) * intensity, srgbToLinear(color.g) * intensity, srgbToLinear(color.b) * intensity];
             return { luma: luminance(energyRgb), energyRgb };
         });
         const totalLuma = energies.reduce((sum, energy) => sum + energy.luma, 0);
