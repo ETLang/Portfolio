@@ -176,7 +176,14 @@ function isSpotlight(light: AnyLight): light is Spotlight {
 }
 
 function writeProperties(view: DataView, byteOffset: number, light: AnyLight, kind: number, transformIndex: number): void {
-    // color: vec4
+    // color: vec4 - deliberately NOT run through color_space.ts's srgbColorToLinear, unlike
+    // raytraced.albedo/sprite.{ambient,emissive,simContribution,colorMod}. In Unity, light color
+    // reaches the simulation via RTLightSource.Energy (a SpriteRenderer.color read, implicitly
+    // cast Color->Vector4 with no conversion) uploaded through ComputeShader.SetVector, which -
+    // unlike Material/MaterialPropertyBlock.SetColor - never gets Unity's automatic sRGB->linear
+    // conversion. So Unity's own simulation already consumes light colors as raw, unconverted sRGB
+    // floats; converting them here would diverge from Unity's actual (if arguably "incorrect")
+    // rendered behavior rather than match it.
     view.setFloat32(byteOffset + 0, light.color.r, true);
     view.setFloat32(byteOffset + 4, light.color.g, true);
     view.setFloat32(byteOffset + 8, light.color.b, true);

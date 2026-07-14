@@ -5,8 +5,9 @@ import type { TextureCache } from './texture_cache.ts';
 import type { SimulationResources } from './simulation.ts';
 import type { TransformResources } from './transform_resources.ts';
 import { Entry, PackedUniformArray } from './packed_uniform_array.ts';
-import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } from './quad_mesh.ts';
+import { PRIMITIVE_MESH_VERTEX_BUFFER_LAYOUT, PRIMITIVE_MESH_REGIONS, getPrimitiveMeshVertexBuffer } from './primitive_mesh.ts';
 import { resolvePrimitiveShapeId } from './primitive_shape.ts';
+import { srgbColorToLinear } from './color_space.ts';
 import { clusterByTextureWithinTiedGroups } from './draw_order.ts';
 import { ComputedDataManager, ComputedTexture } from './computed_data_manager.ts';
 import raytracedGBufferShaderCode from './shaders/raytraced_gbuffer.wgsl?raw';
@@ -54,6 +55,7 @@ interface ResolvedRaytracedEntry {
     logDensityAtlasEntry: Entry;
     sdfNormalTexture: GPUTexture;
     sdfNormalAtlasEntry: Entry;
+    shapeId: number; // cached resolvePrimitiveShapeId(raytraced.primitiveShape, ownerId) - looks up this object's mesh region in PRIMITIVE_MESH_REGIONS for draw batching
 }
 
 /**
@@ -72,12 +74,12 @@ interface ResolvedRaytracedEntry {
  * flat 2D layout like this) and only an approximation - a slight overestimate, never an
  * underestimate - when several objects' densities genuinely overlap the same pixel; accepted as
  * fine given this is a 2D raytracer where "on top of" is already an artistic approximation, not
- * literal depth. renderGBuffer() minimizes draw calls the same way SpriteResources.draw() does:
- * rebuildDrawOrder coalesces same-sortOrder, same-texture runs together (see
- * clusterByTextureWithinTiedGroups), and renderGBuffer issues one instanced draw call per
- * maximal run of consecutive, active, same-texture entries - this never reorders objects
- * relative to each other, so blending is unaffected by how many draw calls batching happens to
- * produce.
+ * literal depth. renderGBuffer() minimizes draw calls similarly to SpriteResources.draw(), plus one
+ * extra dimension: rebuildDrawOrder coalesces same-sortOrder, same-texture, same-primitiveShape
+ * runs together (see clusterByTextureWithinTiedGroups), and renderGBuffer issues one instanced draw
+ * call (drawing from that shape's mesh region - see primitive_mesh.ts) per maximal run of
+ * consecutive, active, same-texture, same-shape entries - this never reorders objects relative to
+ * each other, so blending is unaffected by how many draw calls batching happens to produce.
  *
  * The 3 G-Buffer textures are acquired from a shared ComputedDataManager, sized to the active
  * scene's simulation resolution - only loadFromScene() (a scene load, or equivalently a
@@ -120,7 +122,7 @@ export class RaytracedResources {
     constructor(device: GPUDevice, computedDataManager: ComputedDataManager) {
         this.device = device;
         this.computedDataManager = computedDataManager;
-        this.vertexBuffer = getQuadVertexBuffer(device);
+        this.vertexBuffer = getPrimitiveMeshVertexBuffer(device);
         this.propertiesArray = new PackedUniformArray(device, RAYTRACED_PROPERTIES_STRIDE_BYTES);
         this.atlasArray = new PackedUniformArray(device, RAYTRACED_ATLAS_STRIDE_BYTES);
         this.indexArray = new PackedUniformArray(device, RAYTRACED_INDEX_STRIDE_BYTES);
@@ -159,7 +161,7 @@ export class RaytracedResources {
             vertex: {
                 module: shaderModule,
                 entryPoint: 'vertex_main',
-                buffers: [QUAD_VERTEX_BUFFER_LAYOUT],
+                buffers: [PRIMITIVE_MESH_VERTEX_BUFFER_LAYOUT],
             },
             fragment: {
                 module: shaderModule,
@@ -304,27 +306,31 @@ export class RaytracedResources {
 
         let runStart = -1;
         let runTexture: GPUTexture | null = null;
+        let runShapeId = -1;
         const flushRun = (endExclusive: number): void => {
             if (runStart === -1) {
                 return;
             }
             const textureBindGroup = this.textureBindGroups.get(runTexture!);
             if (textureBindGroup) {
+                const region = PRIMITIVE_MESH_REGIONS[runShapeId];
                 pass.setBindGroup(2, textureBindGroup);
-                pass.draw(QUAD_VERTEX_COUNT, endExclusive - runStart, 0, runStart);
+                pass.draw(region.vertexCount, endExclusive - runStart, region.firstVertex, runStart);
             }
             runStart = -1;
             runTexture = null;
+            runShapeId = -1;
         };
 
         for (let i = 0; i < this.objects.length; i++) {
             const resolved = this.objects[i];
-            if (!resolved.isActive || resolved.texture !== runTexture) {
+            if (!resolved.isActive || resolved.texture !== runTexture || resolved.shapeId !== runShapeId) {
                 flushRun(i);
             }
             if (resolved.isActive && runStart === -1) {
                 runStart = i;
                 runTexture = resolved.texture;
+                runShapeId = resolved.shapeId;
             }
         }
         flushRun(this.objects.length);
@@ -390,6 +396,7 @@ export class RaytracedResources {
             return;
         }
         const shapeId = resolvePrimitiveShapeId(raytraced.primitiveShape, raytraced.ownerId);
+        resolved.shapeId = shapeId;
         this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, raytraced, shapeId));
 
         const targetImage = raytraced.albedoMap;
@@ -511,6 +518,7 @@ export class RaytracedResources {
             logDensityAtlasEntry,
             sdfNormalTexture,
             sdfNormalAtlasEntry,
+            shapeId,
         };
     }
 
@@ -550,7 +558,19 @@ export class RaytracedResources {
             this.indexArray.remove(entry);
         }
         this.objects.sort(compareRaytracedDrawOrder);
-        clusterByTextureWithinTiedGroups(this.objects, compareRaytracedDrawOrder);
+        // Objects with different shapeIds draw from different mesh vertex ranges (see
+        // primitive_mesh.ts) and can't share a batched draw call even when their texture matches -
+        // so the regrouping key combines both, not just texture. GPUTexture instances aren't
+        // directly usable as half of a compound primitive key, hence the call-scoped id map.
+        const textureIds = new Map<GPUTexture, number>();
+        clusterByTextureWithinTiedGroups(this.objects, compareRaytracedDrawOrder, (resolved) => {
+            let id = textureIds.get(resolved.texture);
+            if (id === undefined) {
+                id = textureIds.size;
+                textureIds.set(resolved.texture, id);
+            }
+            return `${id}:${resolved.shapeId}`;
+        });
         this.indexEntries = this.objects.map(resolved =>
             this.indexArray.insertStatic((view, byteOffset) => writeIndexData(view, byteOffset, resolved)));
     }
@@ -620,10 +640,14 @@ function writeAtlasData(view: DataView, byteOffset: number, uvTransform: UvTrans
 }
 
 function writePropertiesData(view: DataView, byteOffset: number, raytraced: RaytracedObject, shapeId: number): void {
-    view.setFloat32(byteOffset + 0, raytraced.albedo.r, true);
-    view.setFloat32(byteOffset + 4, raytraced.albedo.g, true);
-    view.setFloat32(byteOffset + 8, raytraced.albedo.b, true);
-    view.setFloat32(byteOffset + 12, raytraced.albedo.a, true);
+    // albedo is authored/stored in sRGB (matching Unity's Inspector-authored Color, see
+    // color_space.ts) - converted to linear here, at GPU-upload time, since RTObjectMat.shader
+    // declares _Color as a Color-typed property (gets Unity's own automatic conversion).
+    const albedo = srgbColorToLinear(raytraced.albedo);
+    view.setFloat32(byteOffset + 0, albedo.r, true);
+    view.setFloat32(byteOffset + 4, albedo.g, true);
+    view.setFloat32(byteOffset + 8, albedo.b, true);
+    view.setFloat32(byteOffset + 12, albedo.a, true);
     view.setFloat32(byteOffset + 16, Math.pow(10, raytraced.logDensity), true); // substrateDensity
     view.setFloat32(byteOffset + 20, 1 - raytraced.roughness, true); // particleAlignment
     view.setFloat32(byteOffset + 24, raytraced.heightScale, true);

@@ -22,9 +22,9 @@
 // combined density when several genuinely overlap; treated as acceptable given this is a flat 2D
 // scene where "on top of" is already an artistic approximation, not literal depth), and
 // NormalRoughness is drawn with no blending at all (an unconditional overwrite - last-drawn-object
-// wins). Because that last one is an unconditional overwrite, an ellipse-masked fragment outside
-// its shape must `discard` rather than write a transparent value - writing alpha=0 would still
-// stomp whatever a lower object wrote to NormalRoughness at that pixel.
+// wins). Shape silhouettes (rect/ellipse/unspecified) come entirely from which mesh region
+// RaytracedResources draws (see primitive_mesh.ts) - a fragment is never emitted outside an
+// object's own footprint in the first place, so no discard-based masking is needed here.
 //
 // Every per-instance value is looked up through storage-buffer indirection
 // (raytracedIndices[instance_index] -> transforms/raytracedProperties/atlasTransforms), never a
@@ -72,21 +72,49 @@ struct RaytracedAtlasTransform {
 
 @group(2) @binding(0) var mainTex: texture_2d<f32>; // albedoMap only - see file header.
 
+// Transforms a local-space normal into world space, correctly under non-uniform scale, without a
+// general matrix inverse. Every world transform in this project (see scene_graph.ts) is built as
+// translate * rotateZ(theta) * scale(sx, sy, 1), so worldTransform's upper-left 3x3 is exactly
+// R(theta) * diag(sx, sy, 1) - its columns are col0 = sx*(cos th, sin th, 0), col1 =
+// sy*(-sin th, cos th, 0), col2 = (0,0,1) (Z is never scaled or rotated out of axis, so col2 is
+// always exactly (0,0,1)). The mathematically correct normal transform is the inverse-transpose of
+// that 3x3 (mirroring Unity's UnityObjectToWorldNormal), which works out to
+// R(theta) * diag(1/sx, 1/sy, 1) applied to the local normal - equivalently, in closed form:
+//   col0*(vx/sx^2) + col1*(vy/sy^2) + col2*vz
+// with sx^2/sy^2 recovered via dot(col.xy, col.xy) rather than a separate length()+division. For
+// an axis-aligned local normal with vz=1, vx=vy=0 (the flat-quad case) this reduces to exactly
+// col2 = (0,0,1), matching the old naive `(worldTransform * vec4(n,0)).xyz` exactly - it's only
+// non-axis-aligned local normals (RTEllipse's rim, see primitive_mesh.ts) under non-uniform scale
+// where this differs from (and corrects) that naive approach: the naive transform multiplies by
+// scale instead of dividing by it, which only preserves direction for axis-aligned vectors.
+fn computeWorldNormal(worldTransform: mat4x4<f32>, localNormal: vec3<f32>) -> vec3<f32> {
+    let col0 = worldTransform[0].xyz;
+    let col1 = worldTransform[1].xyz;
+    let col2 = worldTransform[2].xyz;
+    let sx2 = dot(col0.xy, col0.xy);
+    let sy2 = dot(col1.xy, col1.xy);
+    let worldDir = col0 * (localNormal.x / sx2) + col1 * (localNormal.y / sy2) + col2 * localNormal.z;
+    return normalize(worldDir);
+}
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
-    // Base [0,1] quad-local UV, used for ellipse shape masking - NOT atlas-transformed.
-    @location(0) uv: vec2<f32>,
     // uv passed through atlasTransform, used only for sampling mainTex.
-    @location(1) atlasUv: vec2<f32>,
+    @location(0) atlasUv: vec2<f32>,
     // World-space face normal, heightScale NOT yet applied (applied in the fragment stage,
     // alongside particleAlignment, so this buffer's VERTEX-stage-only data stays untouched by
-    // per-object property changes that don't move the object).
-    @location(2) worldNormalUnscaled: vec3<f32>,
-    @location(3) @interpolate(flat) propertiesIndex: u32,
+    // per-object property changes that don't move the object). Varies per-vertex (not per-object)
+    // for rect/ellipse - see computeWorldNormal and primitive_mesh.ts.
+    @location(1) worldNormalUnscaled: vec3<f32>,
+    @location(2) @interpolate(flat) propertiesIndex: u32,
 }
 
 @vertex
-fn vertex_main(@builtin(instance_index) instanceIndex: u32, @location(0) localPos: vec2<f32>) -> VertexOutput {
+fn vertex_main(
+    @builtin(instance_index) instanceIndex: u32,
+    @location(0) localPos: vec2<f32>,
+    @location(1) localNormal: vec3<f32>,
+) -> VertexOutput {
     var out: VertexOutput;
     let idx = raytracedIndices[instanceIndex];
     let worldTransform = transforms[idx.transformIndex];
@@ -94,20 +122,14 @@ fn vertex_main(@builtin(instance_index) instanceIndex: u32, @location(0) localPo
 
     let world = worldTransform * vec4<f32>(localPos, 0.0, 1.0);
     out.position = camera.viewProjection * world;
-    out.uv = localPos + vec2<f32>(0.5, 0.5);
-    let atlasUvHomogeneous = vec3<f32>(out.uv, 1.0);
+    let uv = localPos + vec2<f32>(0.5, 0.5);
+    let atlasUvHomogeneous = vec3<f32>(uv, 1.0);
     out.atlasUv = vec2<f32>(dot(atlasUvHomogeneous, atlasTransform.row0.xyz), dot(atlasUvHomogeneous, atlasTransform.row1.xyz));
     // Matches sprite.wgsl's V-flip - see its comment for why (atlas packer's bottom-left-origin V
     // vs. this project's top-down texture upload/sampling convention).
     out.atlasUv.y = 1.0 - out.atlasUv.y;
 
-    // The quad always faces local +Z (see quad_mesh.ts's confirmed CCW winding). Transforming
-    // that constant local normal by the raw world matrix (w=0, so translation is ignored) is
-    // mathematically exact for every object in this scene graph, not an approximation: every
-    // world transform (scene_graph.ts) is built as translate * rotateZ * scale(sx, sy, 1) -
-    // rotation is always Z-axis-only and Z-scale is always locked to 1, so neither operation
-    // distorts or rotates the Z axis. No inverse-transpose correction is needed here.
-    out.worldNormalUnscaled = (worldTransform * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz;
+    out.worldNormalUnscaled = computeWorldNormal(worldTransform, localNormal);
     out.propertiesIndex = idx.propertiesIndex;
     return out;
 }
@@ -124,15 +146,6 @@ struct GBufferOutput {
 @fragment
 fn fragment_main(in: VertexOutput) -> GBufferOutput {
     let props = raytracedProperties[in.propertiesIndex];
-
-    // Ellipse geometry mask. Must `discard`, not write alpha=0 - see file header comment on why
-    // NormalRoughness's unconditional-overwrite semantics require this.
-    if (props.primitiveShapeId == 2u) {
-        let centered = (in.uv - vec2<f32>(0.5, 0.5)) * 2.0;
-        if (length(centered) > 1.0) {
-            discard;
-        }
-    }
 
     let c = textureSample(mainTex, mainSampler, in.atlasUv);
 

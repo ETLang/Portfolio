@@ -216,7 +216,12 @@ if (canvas) {
     CornellSquareScene.load()
         .then(scene => renderer.setScene(scene))
         .then(() => renderer.start())
-        .then(() => { litboxRenderer = renderer; })
+        .then(() => {
+            litboxRenderer = renderer;
+            // Exposed for manual debugging from the devtools console, e.g.
+            // `litboxRenderer.debugView = 'lightmap'` - see LitboxSceneRenderer.debugView.
+            (window as unknown as { litboxRenderer: LitboxSceneRenderer }).litboxRenderer = renderer;
+        })
         .catch(error => console.error('Failed to start Litbox scene renderer:', error));
 } else {
     console.error("Canvas element not found!");

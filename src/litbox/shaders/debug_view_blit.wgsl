@@ -19,6 +19,10 @@
 //   - mode 3 (alpha as luminance): displays the source's alpha channel as grayscale luminance,
 //     not as an actual alpha/transparency channel - e.g. RaytracedResources' NormalRoughness
 //     target's particleAlignment, which lives in alpha.
+//   - mode 4 (HDR scaled): the source is raw (unbounded, pre-tonemap) HDR - e.g. the simulation's
+//     lightmap - so it's divided by `scale` (same tunable as mode 1, no fixed "typical" value
+//     makes sense across scenes) and clamped to [0,1], with no DENSITY_SCALE undo since this
+//     source was never scaled that way to begin with.
 //
 // Uses textureSampleLevel with a non-filtering sampler (not textureSample with a filtering one)
 // for exact per-texel inspection (nearest-neighbor, no interpolation) - appropriate for a debug
@@ -65,7 +69,10 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
     } else if (debugUniform.mode == 2u) {
         let remapped = clamp(c.rgb * 0.5 + vec3<f32>(0.5), vec3<f32>(0.0), vec3<f32>(1.0));
         return vec4<f32>(remapped, 1.0);
-    } else {
+    } else if (debugUniform.mode == 3u) {
         return vec4<f32>(vec3<f32>(c.a), 1.0);
+    } else {
+        let normalized = clamp(c.rgb / debugUniform.scale, vec3<f32>(0.0), vec3<f32>(1.0));
+        return vec4<f32>(normalized, 1.0);
     }
 }

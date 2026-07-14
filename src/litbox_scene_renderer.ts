@@ -1,5 +1,5 @@
 import { mat4, vec4 } from 'gl-matrix';
-import type { SceneCamera, Vector2 } from './litbox/scene.ts';
+import type { SceneCamera, Vector2, Vector3 } from './litbox/scene.ts';
 import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { SceneGraph } from './litbox/scene_graph.ts';
 import { TextureCache } from './litbox/texture_cache.ts';
@@ -21,6 +21,10 @@ const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // bytes), matching CameraUniform in sprite.wgsl.
 const CAMERA_UNIFORM_SIZE_BYTES = 4 * 16 * 2 + 16;
 const FRAMES_IN_FLIGHT = 2;
+// Mirrors tonemap.wgsl's toneMapDefaultShape() - used when there's no active camera, or when a
+// scene predates blackPointLog/whitePointLog and the loaded JSON doesn't carry them.
+const DEFAULT_WHITE_POINT_LOG: Vector3 = { x: 2, y: 2, z: 2 };
+const DEFAULT_BLACK_POINT_LOG: Vector3 = { x: -4, y: -4, z: -4 };
 
 interface ActiveCamera {
     camera: SceneCamera;
@@ -95,7 +99,8 @@ export class LitboxSceneRenderer {
 
     /**
      * When set (to a key registered in debugViews - currently 'albedo', 'density', 'normal',
-     * 'roughness', all contributed by the raytraced G-Buffer, see createSharedResources), replaces
+     * 'roughness' from the raytraced G-Buffer, plus 'lightmap' from the simulation's HDR photon
+     * accumulation, see createSharedResources), replaces
      * the entire normal render (simulation/sprites/tonemap) with a direct blit of that view's
      * source texture to the swapchain, transformed for actual legibility (see debug_view.wgsl) -
      * a diagnostic aid for verifying render-target contents before anything downstream consumes
@@ -301,13 +306,18 @@ export class LitboxSceneRenderer {
         this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
 
         // Named debug views this renderer can blit in place of the normal render (see
-        // debugView) - currently all 4 come from the raytraced G-Buffer, but this map is the
-        // generic extension point: any future *Resources class that owns a debug-worthy texture
-        // just needs another entry here, no other renderer-level plumbing.
+        // debugView) - the first 4 come from the raytraced G-Buffer, 'lightmap' from the
+        // simulation's HDR photon accumulation, but this map is the generic extension point: any
+        // future *Resources class that owns a debug-worthy texture just needs another entry here,
+        // no other renderer-level plumbing.
         this.debugViews.set('albedo', { getSourceView: () => this.raytracedResources.getAlbedoView(), mode: DEBUG_VIEW_MODE.PASSTHROUGH });
         this.debugViews.set('density', { getSourceView: () => this.raytracedResources.getDensityView(), mode: DEBUG_VIEW_MODE.DENSITY });
         this.debugViews.set('normal', { getSourceView: () => this.raytracedResources.getNormalRoughnessView(), mode: DEBUG_VIEW_MODE.NORMAL_REMAP });
         this.debugViews.set('roughness', { getSourceView: () => this.raytracedResources.getNormalRoughnessView(), mode: DEBUG_VIEW_MODE.ALPHA_AS_LUMINANCE });
+        // Raw HDR lightmap (pre-tonemap, pre-exposure) - reuses debugViewScale as a divisor
+        // (same convention as 'density') since the "typical" irradiance magnitude depends
+        // entirely on the active scene's light intensities.
+        this.debugViews.set('lightmap', { getSourceView: () => this.simulationResources.getLightmapView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
 
         this.createHdrFrameTexture();
     }
@@ -525,12 +535,16 @@ export class LitboxSceneRenderer {
         return { camera, worldTransform: sceneGraph.getWorldTransform(camera.ownerId) };
     }
 
-    private writeCameraUniform(activeCamera: ActiveCamera | null): number {
+    private writeCameraUniform(activeCamera: ActiveCamera | null): { exposure: number; whitePointLog: Vector3; blackPointLog: Vector3 } {
         const viewProjection = mat4.create();
         let exposure = 0;
+        let whitePointLog = DEFAULT_WHITE_POINT_LOG;
+        let blackPointLog = DEFAULT_BLACK_POINT_LOG;
 
         if (activeCamera) {
             exposure = this.exposureOverride ?? activeCamera.camera.exposure;
+            whitePointLog = activeCamera.camera.whitePointLog ?? DEFAULT_WHITE_POINT_LOG;
+            blackPointLog = activeCamera.camera.blackPointLog ?? DEFAULT_BLACK_POINT_LOG;
 
             const view = mat4.create();
             mat4.invert(view, activeCamera.worldTransform);
@@ -555,7 +569,7 @@ export class LitboxSceneRenderer {
         data[32] = this.debugSolidColor ? 1 : 0;
         this.cameraUniform.write(data);
 
-        return exposure;
+        return { exposure, whitePointLog, blackPointLog };
     }
 
     /**
@@ -636,7 +650,7 @@ export class LitboxSceneRenderer {
                 }
             }
 
-            const exposure = this.writeCameraUniform(this.getActiveCamera());
+            const { exposure, whitePointLog, blackPointLog } = this.writeCameraUniform(this.getActiveCamera());
 
             // Steps 3-6: sprites + additive simulation composite into the offscreen HDR frame buffer.
             // No depth/stencil attachment - It's safe to presume the vast majority of objects have
@@ -664,7 +678,7 @@ export class LitboxSceneRenderer {
                     storeOp: 'store',
                 }],
             });
-            this.tonemapResources.updateUniforms({ exposure, enabled: this.tonemapEnabled });
+            this.tonemapResources.updateUniforms({ exposure, enabled: this.tonemapEnabled, whitePointLog, blackPointLog });
             this.tonemapResources.updateInputs(this.hdrFrameTextureView);
             this.tonemapResources.execute(tonemapPass);
             tonemapPass.end();

@@ -1,11 +1,16 @@
 import tonemapShaderCode from './shaders/tonemap.wgsl?raw';
 import { preprocessShader } from './shaders/shader_preprocessor.ts';
+import type { Vector3 } from './scene.ts';
 
 export interface TonemapUniforms {
     /** Added in log10 space before the filmic curve - see tonemap.wgsl for why its effective scale differs from a plain exposure stop. */
     exposure: number;
     /** When false, the filmic curve is bypassed entirely and the raw HDR value is written straight to the swapchain (clipping to whatever the presentation format's range allows). */
     enabled: boolean;
+    /** Per-channel log10 white point - see tonemap.wgsl's ToneMappingShape.whitePoint. */
+    whitePointLog: Vector3;
+    /** Per-channel log10 black point - see tonemap.wgsl's ToneMappingShape.blackPoint. */
+    blackPointLog: Vector3;
 }
 
 /**
@@ -31,6 +36,8 @@ export class TonemapResources {
 
     private lastExposure: number | null = null;
     private lastEnabled: boolean | null = null;
+    private lastWhitePointLog: Vector3 | null = null;
+    private lastBlackPointLog: Vector3 | null = null;
     private hdrView: GPUTextureView | null = null;
     private bindGroup: GPUBindGroup | null = null;
     private bindGroupDirty = true;
@@ -56,20 +63,37 @@ export class TonemapResources {
             primitive: { topology: 'triangle-list' },
         });
 
+        // 48 bytes: exposure/enabled (8 bytes, padded to 16) + whitePointLog/blackPointLog
+        // (two vec3<f32>, each padded to 16) - see tonemap.wgsl's TonemapUniform for the layout.
         this.uniformBuffer = device.createBuffer({
-            size: 8,
+            size: 48,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
     }
 
-    /** A no-op if `uniforms` describes the same exposure/enabled state already written. */
+    private static vector3Equals(a: Vector3 | null, b: Vector3): boolean {
+        return a !== null && a.x === b.x && a.y === b.y && a.z === b.z;
+    }
+
+    /** A no-op if `uniforms` describes the same exposure/enabled/white-black point state already written. */
     public updateUniforms(uniforms: TonemapUniforms): void {
-        if (this.lastExposure === uniforms.exposure && this.lastEnabled === uniforms.enabled) {
+        if (
+            this.lastExposure === uniforms.exposure &&
+            this.lastEnabled === uniforms.enabled &&
+            TonemapResources.vector3Equals(this.lastWhitePointLog, uniforms.whitePointLog) &&
+            TonemapResources.vector3Equals(this.lastBlackPointLog, uniforms.blackPointLog)
+        ) {
             return;
         }
         this.lastExposure = uniforms.exposure;
         this.lastEnabled = uniforms.enabled;
-        this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([uniforms.exposure, uniforms.enabled ? 1.0 : 0.0]));
+        this.lastWhitePointLog = uniforms.whitePointLog;
+        this.lastBlackPointLog = uniforms.blackPointLog;
+        this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([
+            uniforms.exposure, uniforms.enabled ? 1.0 : 0.0, 0, 0,
+            uniforms.whitePointLog.x, uniforms.whitePointLog.y, uniforms.whitePointLog.z, 0,
+            uniforms.blackPointLog.x, uniforms.blackPointLog.y, uniforms.blackPointLog.z, 0,
+        ]));
     }
 
     /** A no-op if `hdrView` is the same view already bound. */
