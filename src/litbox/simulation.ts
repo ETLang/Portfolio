@@ -7,6 +7,11 @@ import type { LutResources } from './lut_resources.ts';
 import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } from './quad_mesh.ts';
 import { ComputedDataManager, ComputedTexture, ComputedBuffer } from './computed_data_manager.ts';
 import { ConvertPhotonIrradianceToHdrOperation } from './convert_photon_irradiance_to_hdr.ts';
+import { MipDownsampleOperation } from './mip_downsample.ts';
+import { DensityMipBlitResources } from './density_mip_blit.ts';
+import { ComputeVarianceAndMipsOperation } from './compute_variance_and_mips.ts';
+import { FilterVarianceOperation } from './filter_variance.ts';
+import { DenoiseOperation } from './denoise_operation.ts';
 import {
     ForwardMonteCarloOperation,
     luminance,
@@ -23,6 +28,9 @@ import { getPlatform, isRandomAccessFriendlyGpu, type Platform } from './device_
 import { srgbToLinear } from './color_space.ts';
 
 const LIGHTMAP_FORMAT: GPUTextureFormat = 'rgba16float';
+// r32float, not r16float - r16float isn't a valid WGSL storage-texture texel format (see
+// ComputeVarianceAndMipsOperation/FilterVarianceOperation, both of which textureStore into this).
+const VARIANCE_FORMAT: GPUTextureFormat = 'r32float';
 
 /**
  * How a scene's raw SceneSimulation config gets scaled down for a given device - see
@@ -107,11 +115,39 @@ export class SimulationResources {
     private simulation: SceneSimulation | null = null;
     private worldTransform: mat4 = mat4.create();
 
-    /** Atomic accumulator the photon tracer writes into: width*height*3 u32 entries (3 consecutive slots per pixel: R, G, B). */
+    /**
+     * Atomic accumulator the photon tracer writes into: width*height*6 u32 entries - two
+     * interleaved 3-wide (R,G,B) halves per pixel (base, base+3), one per independent half of
+     * this frame's ray budget - see tracePhotons and this project's denoiser plan. Splitting the
+     * ray budget this way lets the two halves' disagreement serve as a variance estimate; their
+     * average is the same-quality signal a single undivided buffer would have produced.
+     */
     private photonBuffer: ComputedBuffer | null = null;
     /** Cached zeroed data matching photonBuffer's size, reused every frame to clear it - see run(). */
     private photonBufferClearData: Uint32Array | null = null;
     private convertToHdr: ConvertPhotonIrradianceToHdrOperation;
+
+    // --- Denoiser evidence-gathering pipeline (this project's denoiser plan) - the actual
+    // size-argument/guided-blur algorithm is a separate, not-yet-designed step; denoise below is
+    // currently a passthrough stub.
+
+    /** Per-half HDR conversion of photonBuffer, mip0 only - see ConvertPhotonIrradianceToHdrOperation. */
+    private irradianceA: ComputedTexture | null = null;
+    private irradianceB: ComputedTexture | null = null;
+    /** mean(irradianceA, irradianceB) pre-denoise signal, full mip chain (0..lightmap.mipLevelCount-1) - kept separate from `lightmap` since denoise() reads mip0 of this while writing lightmap's mip0. */
+    private combinedIrradiance: ComputedTexture | null = null;
+    /** Relative variance from the (irradianceA, irradianceB) pair, quarter resolution (matches combinedIrradiance's mip2) - see ComputeVarianceAndMipsOperation. */
+    private rawVariance: ComputedTexture | null = null;
+    private filteredVariance: ComputedTexture | null = null;
+
+    private computeVarianceAndMips: ComputeVarianceAndMipsOperation;
+    private filterVariance: FilterVarianceOperation;
+    private denoise: DenoiseOperation;
+    /** Fixed to 'rgba8unorm' at construction (Albedo's format) - never switched at runtime, so mipDownsampleAlbedo/mipDownsample never fight over recompiling the same pipeline for two different formats every frame. */
+    private mipDownsampleAlbedo: MipDownsampleOperation;
+    /** Fixed to 'rgba16float' (its default) - used for NormalRoughness, combinedIrradiance, and the final lightmap's own post-denoise mip chain. */
+    private mipDownsample: MipDownsampleOperation;
+    private densityMipBlit: DensityMipBlitResources;
 
     /** One ForwardMonteCarloOperation per light kind - see its class doc. Constructed in initialize() once lutResources exists. */
     private pointOperation: ForwardMonteCarloOperation | null = null;
@@ -145,6 +181,14 @@ export class SimulationResources {
         this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
         this.vertexBuffer = getQuadVertexBuffer(device);
         this.convertToHdr = new ConvertPhotonIrradianceToHdrOperation(device);
+
+        this.computeVarianceAndMips = new ComputeVarianceAndMipsOperation(device);
+        this.filterVariance = new FilterVarianceOperation(device);
+        this.denoise = new DenoiseOperation(device);
+        this.mipDownsampleAlbedo = new MipDownsampleOperation(device);
+        this.mipDownsampleAlbedo.updateSwitches({ outputFormat: 'rgba8unorm' });
+        this.mipDownsample = new MipDownsampleOperation(device);
+        this.densityMipBlit = new DensityMipBlitResources(device);
 
         this.writeCounterBuffer = device.createBuffer({
             size: 8,
@@ -203,6 +247,30 @@ export class SimulationResources {
         return this.lightmap?.view ?? null;
     }
 
+    // --- Denoiser evidence debug-view plumbing (see debug_view.ts's DebugView, registered by
+    // LitboxSceneRenderer) - not used by the normal render path.
+
+    public getIrradianceAView(): GPUTextureView | null {
+        return this.irradianceA?.view ?? null;
+    }
+
+    public getIrradianceBView(): GPUTextureView | null {
+        return this.irradianceB?.view ?? null;
+    }
+
+    /** Pre-denoise mean(A,B) signal - contrast with getLightmapView(), the post-denoise final (albedo/density-combined) image. */
+    public getCombinedIrradianceView(): GPUTextureView | null {
+        return this.combinedIrradiance?.view ?? null;
+    }
+
+    public getRawVarianceView(): GPUTextureView | null {
+        return this.rawVariance?.view ?? null;
+    }
+
+    public getFilteredVarianceView(): GPUTextureView | null {
+        return this.filteredVariance?.view ?? null;
+    }
+
     public getSampler(): GPUSampler {
         return this.sampler;
     }
@@ -256,6 +324,16 @@ export class SimulationResources {
             this.photonBuffer = null;
         }
         this.photonBufferClearData = null;
+        for (const texture of [this.irradianceA, this.irradianceB, this.combinedIrradiance, this.rawVariance, this.filteredVariance]) {
+            if (texture) {
+                this.computedDataManager.releaseTexture(texture);
+            }
+        }
+        this.irradianceA = null;
+        this.irradianceB = null;
+        this.combinedIrradiance = null;
+        this.rawVariance = null;
+        this.filteredVariance = null;
         const rawSimulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
@@ -289,10 +367,21 @@ export class SimulationResources {
         );
 
         this.photonBuffer = this.computedDataManager.acquireBuffer(
-            width * height * 3 * 4,
+            width * height * 6 * 4,
             GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         );
-        this.photonBufferClearData = new Uint32Array(width * height * 3);
+        this.photonBufferClearData = new Uint32Array(width * height * 6);
+
+        // Denoiser evidence-gathering textures (this project's denoiser plan) - see their field
+        // doc comments above for what each holds.
+        const irradianceUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING;
+        this.irradianceA = this.computedDataManager.acquireTexture(width, height, LIGHTMAP_FORMAT, irradianceUsage);
+        this.irradianceB = this.computedDataManager.acquireTexture(width, height, LIGHTMAP_FORMAT, irradianceUsage);
+        this.combinedIrradiance = this.computedDataManager.acquireTexture(width, height, LIGHTMAP_FORMAT, irradianceUsage, mipLevelCount);
+        const mip2Width = Math.max(1, width >> 2);
+        const mip2Height = Math.max(1, height >> 2);
+        this.rawVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
+        this.filteredVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
 
         if (this.compositeBindGroupLayout && this.compositeUniformBuffer) {
             this.compositeBindGroup = this.device.createBindGroup({
@@ -309,10 +398,17 @@ export class SimulationResources {
     }
 
     /**
-     * Clears the lightmap's higher mips (no mip-chain generation exists yet), dispatches the
-     * ForwardMonteCarlo photon tracer once per light instance (see tracePhotons), then converts the
-     * resulting photon-receptor buffer into lightmap mip 0 via ConvertPhotonIrradianceToHdrOperation,
-     * sourcing albedo/density from raytracedResources' G-Buffer (rendered earlier this same frame).
+     * Drives the full per-frame simulation + denoiser evidence-gathering pipeline (this project's
+     * denoiser plan): tracePhotons() dispatches the ForwardMonteCarlo tracer twice per light
+     * instance (once per half of the two-way variance-estimation ray split) into the shared
+     * stereo photonBuffer; ConvertPhotonIrradianceToHdrOperation converts each half into its own
+     * HDR irradiance texture; ComputeVarianceAndMipsOperation fuses mean(A,B)/variance/mip
+     * generation into combinedIrradiance (mip0-4) and rawVariance (quarter res); mip generation
+     * then continues for the G-Buffer and combinedIrradiance's deeper mips;
+     * FilterVarianceOperation bilateral-filters the variance evidence; denoise (currently a
+     * passthrough stub - the real size-argument/guided-blur algorithm is a separate, later step)
+     * produces the final lightmap mip0, whose own higher mips are then regenerated from it (for
+     * whatever later samples the lightmap across mips, e.g. sprites).
      */
     public run(
         encoder: GPUCommandEncoder,
@@ -321,16 +417,9 @@ export class SimulationResources {
         lutResources: LutResources,
         sceneGraph: SceneGraph,
     ): void {
-        if (!this.lightmap) {
+        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance) {
             return;
         }
-        for (let mip = 1; mip < this.lightmap.mipLevelCount; mip++) {
-            const pass = encoder.beginRenderPass({
-                colorAttachments: [{ view: this.lightmap.getMipView(mip), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }],
-            });
-            pass.end();
-        }
-
         if (!this.simulation || !this.photonBuffer) {
             return;
         }
@@ -344,10 +433,120 @@ export class SimulationResources {
         this.tracePhotons(encoder, lightResources, lutResources, sceneGraph, albedoView, densityView, normalRoughnessView);
 
         const { width, height } = this.simulation;
+
+        // Photon buffer -> two independent HDR irradiance textures. Deferred here:
+        // albedo/density combination now happens later, in denoise() - see this project's
+        // denoiser plan (combination must happen after variance computation and after denoising).
+        this.convertToHdr.updateSwitches({ combineAlbedoDensity: false });
         this.convertToHdr.updateUniforms({ hdrScale: (width * height) / 0xFFFFFFFF });
         this.convertToHdr.updateInputs(this.photonBuffer.buffer, albedoView, densityView);
-        this.convertToHdr.updateOutputs(this.lightmap.getMipView(0), width, height);
+        this.convertToHdr.updateOutputs(this.irradianceA.getMipView(0), this.irradianceB.getMipView(0), width, height);
         this.convertToHdr.execute(encoder);
+
+        // Fused mean/variance/mip pass - combinedIrradiance mip0-2 + rawVariance at mip2 (quarter
+        // resolution). Capped at mip2, not the 5 levels a 16x16 tile could in principle reduce to
+        // in one pass, by WebGPU's guaranteed-minimum maxStorageTexturesPerShaderStage of 4 (see
+        // ComputeVarianceAndMipsOperation) - only attempt it when combinedIrradiance actually has
+        // that many mip levels (tiny simulation resolutions might not; a real fix for that edge
+        // case is deferred, not a concern for realistic scene sizes).
+        if (this.combinedIrradiance.mipLevelCount >= 3) {
+            this.computeVarianceAndMips.updateInputs(this.irradianceA.getMipView(0), this.irradianceB.getMipView(0));
+            this.computeVarianceAndMips.updateOutputs(
+                this.combinedIrradiance.getMipView(0),
+                this.combinedIrradiance.getMipView(1),
+                this.combinedIrradiance.getMipView(2),
+                this.rawVariance.getMipView(0),
+                width,
+                height,
+            );
+            this.computeVarianceAndMips.execute(encoder);
+        }
+
+        // Extend combinedIrradiance past mip2 (irradianceA/B have already served their purpose -
+        // the variance evidence was captured at mip2 above) and generate the G-Buffer's own mip
+        // chains - all evidence the eventual guided blur will want.
+        this.generateEvidenceMips(encoder, raytracedResources);
+
+        // Bilateral-filter rawVariance using G-Buffer mip2 evidence (albedo similarity, luminance
+        // closeness) - structurally matches Unity's confirmed-live FilterVariance kernel.
+        const albedoMip2View = raytracedResources.getAlbedoMipView(2);
+        if (albedoMip2View) {
+            const mip2Width = Math.max(1, width >> 2);
+            const mip2Height = Math.max(1, height >> 2);
+            this.filterVariance.updateInputs(this.rawVariance.getMipView(0), albedoMip2View, this.combinedIrradiance.getMipView(2));
+            this.filterVariance.updateOutputs(this.filteredVariance.getMipView(0), mip2Width, mip2Height);
+            this.filterVariance.execute(encoder);
+        }
+
+        // Denoiser stub (see this project's denoiser plan) - passthrough for now, but this is
+        // where albedo/density finally get combined into the final lit image.
+        this.denoise.updateSwitches({ combineAlbedoDensity: true });
+        this.denoise.updateInputs(this.combinedIrradiance.getMipView(0), albedoView, densityView);
+        this.denoise.updateOutputs(this.lightmap.getMipView(0), width, height);
+        this.denoise.execute(encoder);
+
+        // Regenerate the final lightmap's own higher mips from its just-denoised mip0 (whatever
+        // later samples the lightmap across mips, e.g. sprites, needs a real chain, not a clear) -
+        // independent of combinedIrradiance's own chain, since this one reflects the final lit
+        // (albedo/density-combined) image, not raw irradiance.
+        for (let mip = 1; mip < this.lightmap.mipLevelCount; mip++) {
+            const mipWidth = Math.max(1, width >> mip);
+            const mipHeight = Math.max(1, height >> mip);
+            this.mipDownsample.updateInputs(this.lightmap.getMipView(mip - 1));
+            this.mipDownsample.updateOutputs(this.lightmap.getMipView(mip), mipWidth, mipHeight);
+            this.mipDownsample.execute(encoder);
+        }
+    }
+
+    /**
+     * G-Buffer mip chains (Albedo/NormalRoughness via MipDownsampleOperation, Density via its
+     * dedicated render-attachment blit - see DensityMipBlitResources for why) and combinedIrradiance's
+     * mip3+ (past what ComputeVarianceAndMipsOperation's fused pass produces) - all
+     * structural/signal evidence the eventual guided blur will want. See this project's denoiser
+     * plan.
+     */
+    private generateEvidenceMips(encoder: GPUCommandEncoder, raytracedResources: RaytracedResources): void {
+        if (!this.combinedIrradiance || !this.simulation) {
+            return;
+        }
+        const { width, height } = this.simulation;
+
+        const gBufferMipLevelCount = raytracedResources.getGBufferMipLevelCount();
+        for (let mip = 1; mip < gBufferMipLevelCount; mip++) {
+            const mipWidth = Math.max(1, width >> mip);
+            const mipHeight = Math.max(1, height >> mip);
+
+            const albedoSource = raytracedResources.getAlbedoMipView(mip - 1);
+            const albedoDest = raytracedResources.getAlbedoMipView(mip);
+            if (albedoSource && albedoDest) {
+                this.mipDownsampleAlbedo.updateInputs(albedoSource);
+                this.mipDownsampleAlbedo.updateOutputs(albedoDest, mipWidth, mipHeight);
+                this.mipDownsampleAlbedo.execute(encoder);
+            }
+
+            const normalRoughnessSource = raytracedResources.getNormalRoughnessMipView(mip - 1);
+            const normalRoughnessDest = raytracedResources.getNormalRoughnessMipView(mip);
+            if (normalRoughnessSource && normalRoughnessDest) {
+                this.mipDownsample.updateInputs(normalRoughnessSource);
+                this.mipDownsample.updateOutputs(normalRoughnessDest, mipWidth, mipHeight);
+                this.mipDownsample.execute(encoder);
+            }
+
+            const densitySource = raytracedResources.getDensityMipView(mip - 1);
+            const densityDest = raytracedResources.getDensityMipView(mip);
+            if (densitySource && densityDest) {
+                this.densityMipBlit.updateInputs(densitySource);
+                this.densityMipBlit.execute(encoder, densityDest);
+            }
+        }
+
+        for (let mip = 3; mip < this.combinedIrradiance.mipLevelCount; mip++) {
+            const mipWidth = Math.max(1, width >> mip);
+            const mipHeight = Math.max(1, height >> mip);
+            this.mipDownsample.updateInputs(this.combinedIrradiance.getMipView(mip - 1));
+            this.mipDownsample.updateOutputs(this.combinedIrradiance.getMipView(mip), mipWidth, mipHeight);
+            this.mipDownsample.execute(encoder);
+        }
     }
 
     /**
@@ -439,33 +638,58 @@ export class SimulationResources {
                 : [0, 0];
             const pinchSquared = pinch * pinch;
             const lightPinch: [number, number] = kind === 'spot' ? [pinchSquared, Math.atan(pinchSquared)] : [0, 0];
-
-            const photonEnergyScale = 0xFFFFFFFF / rays[i] / integrationInterval;
-            const lightEnergy: [number, number, number] = [
-                energyRgb[0] * photonEnergyScale,
-                energyRgb[1] * photonEnergyScale,
-                energyRgb[2] * photonEnergyScale,
-            ];
             const bounces = resolveBounces(photonBounces, light.bounces);
 
             operation.updateSwitches({
                 bilinearPhotonDistribution: this.bilinearPhotonDistribution,
                 maxIntegrationSteps,
             });
-            operation.updateUniforms({
-                lightToTarget,
-                lightEnergy,
-                bounces,
-                seedBase: seedBases[i],
-                directionalLightDirection,
-                lightPinch,
-                integrationInterval,
-                integrationIntervalSquared,
-                rays: rays[i],
-            });
             operation.updateInputs(seedBuffer.buffer, albedoView, densityView, normalRoughnessView, lutResources);
             operation.updateOutputs(this.photonBuffer.buffer, this.writeCounterBuffer);
-            operation.execute(encoder);
+
+            // Split this light's ray budget into two independent halves - disjoint seedBase
+            // sub-ranges within its own seedBases[i]..seedBases[i]+rays[i] slice, each writing
+            // into photonBuffer's own half (see its doc comment and this project's denoiser
+            // plan). Split at workgroup (64-ray) granularity, not just in two arbitrarily: rays[i]
+            // is always a multiple of 64 (computeRayCount), and ForwardMonteCarloOperation's
+            // dispatch extent rounds *up* to whole workgroups - an unaligned split would let one
+            // half's "overflow" threads run past its intended ray count and collide with the
+            // other half's seed sub-range and photon writes. A light with the minimum single
+            // workgroup (rays[i] === 64) can't be split at all this way - all 64 rays go to half
+            // 0 and half 1 gets none for that light this frame, a rare, low-stakes edge case.
+            const workgroupCount = rays[i] / 64;
+            const workgroupCountA = Math.floor(workgroupCount / 2);
+            const halves: { rays: number; seedBase: number; halfIndex: number }[] = [
+                { rays: workgroupCountA * 64, seedBase: seedBases[i], halfIndex: 0 },
+                { rays: (workgroupCount - workgroupCountA) * 64, seedBase: seedBases[i] + workgroupCountA * 64, halfIndex: 1 },
+            ];
+            for (const half of halves) {
+                if (half.rays === 0) {
+                    continue;
+                }
+                // Normalized from this half's own ray count, not rays[i] - so each half
+                // independently is an unbiased estimator of the same signal on its own, matching
+                // Unity's TracerPostProcessing.compute's mean(sample_a, sample_b) equivalence.
+                const photonEnergyScale = 0xFFFFFFFF / half.rays / integrationInterval;
+                const lightEnergy: [number, number, number] = [
+                    energyRgb[0] * photonEnergyScale,
+                    energyRgb[1] * photonEnergyScale,
+                    energyRgb[2] * photonEnergyScale,
+                ];
+                operation.updateUniforms({
+                    lightToTarget,
+                    lightEnergy,
+                    bounces,
+                    seedBase: half.seedBase,
+                    halfIndex: half.halfIndex,
+                    directionalLightDirection,
+                    lightPinch,
+                    integrationInterval,
+                    integrationIntervalSquared,
+                    rays: half.rays,
+                });
+                operation.execute(encoder);
+            }
         }
     }
 

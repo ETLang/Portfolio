@@ -37,6 +37,12 @@ struct DebugViewUniform {
     // "typical" value range depends entirely on the active scene, which isn't knowable in advance
     // from this shader alone.
     scale: f32,
+    // Which mip level of srcTex to sample (see LitboxSceneRenderer.debugViewMipLevel) - lets
+    // mipmapped sources (the G-Buffer, lightmap, combined irradiance - see this project's
+    // denoiser plan) be inspected level-by-level. textureSampleLevel clamps this to srcTex's
+    // actual mip range on its own, so a single-mip source (e.g. irradiance-a/b, raw/filtered
+    // variance) just always shows its one real level regardless of this value.
+    mipLevel: f32,
 }
 @group(0) @binding(0) var<uniform> debugUniform: DebugViewUniform;
 @group(0) @binding(1) var srcTex: texture_2d<f32>;
@@ -58,7 +64,7 @@ fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 @fragment
 fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let c = textureSampleLevel(srcTex, srcSampler, in.uv, 0.0);
+    let c = textureSampleLevel(srcTex, srcSampler, in.uv, debugUniform.mipLevel);
 
     if (debugUniform.mode == 0u) {
         return vec4<f32>(c.rgb, 1.0);

@@ -61,15 +61,17 @@ export class DebugViewBlitResources {
         });
 
         this.uniformBuffer = device.createBuffer({
-            size: 8,
+            size: 12,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
     }
 
-    public apply(passEncoder: GPURenderPassEncoder, sourceView: GPUTextureView, mode: number, scale: number): void {
-        const uniformData = new ArrayBuffer(8);
-        new DataView(uniformData).setUint32(0, mode, true);
-        new DataView(uniformData).setFloat32(4, scale, true);
+    public apply(passEncoder: GPURenderPassEncoder, sourceView: GPUTextureView, mode: number, scale: number, mipLevel: number): void {
+        const uniformData = new ArrayBuffer(12);
+        const view = new DataView(uniformData);
+        view.setUint32(0, mode, true);
+        view.setFloat32(4, scale, true);
+        view.setFloat32(8, mipLevel, true);
         this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
 
         if (this.cachedSourceView !== sourceView) {

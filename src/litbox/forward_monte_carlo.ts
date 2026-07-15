@@ -16,8 +16,9 @@ const LIGHT_KIND_DEFINE: Record<LightKind, string> = {
 
 // Must match the Uniforms struct layout in forward_monte_carlo.wgsl exactly (WGSL's default
 // uniform-address-space struct layout rules: mat4x4 at 0 (64 bytes), vec3 at 64 (padded to 16),
-// bounces/seedBase (u32) packed into that vec3's trailing padding at 76/80, directionalLightDirection
-// (vec2, 8-byte aligned) at 88, lightPinch at 96, then two f32 at 104/108 - total 112 bytes).
+// bounces/seedBase/halfIndex (u32) packed into that vec3's trailing padding at 76/80/84,
+// directionalLightDirection (vec2, 8-byte aligned) at 88, lightPinch at 96, then two f32 at
+// 104/108 - total 112 bytes).
 const UNIFORMS_SIZE_BYTES = 112;
 
 export interface ForwardMonteCarloSwitches {
@@ -47,6 +48,8 @@ export interface ForwardMonteCarloUniforms {
     bounces: number;
     /** This light's offset into the shared random-seed buffer - see ComputedDataManager.acquireRandomSeedBuffer. */
     seedBase: number;
+    /** 0 or 1 - which half of the two-way variance-estimation split this dispatch writes into - see forward_monte_carlo.wgsl's Uniforms.halfIndex. */
+    halfIndex: number;
     directionalLightDirection: readonly [number, number];
     /** (pinch^2, atan(pinch^2)) - spot kind only. */
     lightPinch: readonly [number, number];
@@ -132,6 +135,7 @@ export class ForwardMonteCarloOperation extends ComputeOperation {
         view.setFloat32(72, uniforms.lightEnergy[2], true);
         view.setUint32(76, uniforms.bounces, true);
         view.setUint32(80, uniforms.seedBase, true);
+        view.setUint32(84, uniforms.halfIndex, true);
         view.setFloat32(88, uniforms.directionalLightDirection[0], true);
         view.setFloat32(92, uniforms.directionalLightDirection[1], true);
         view.setFloat32(96, uniforms.lightPinch[0], true);

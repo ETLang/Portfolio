@@ -99,16 +99,19 @@ export class LitboxSceneRenderer {
 
     /**
      * When set (to a key registered in debugViews - currently 'albedo', 'density', 'normal',
-     * 'roughness' from the raytraced G-Buffer, plus 'lightmap' from the simulation's HDR photon
-     * accumulation, see createSharedResources), replaces
-     * the entire normal render (simulation/sprites/tonemap) with a direct blit of that view's
-     * source texture to the swapchain, transformed for actual legibility (see debug_view.wgsl) -
-     * a diagnostic aid for verifying render-target contents before anything downstream consumes
-     * them. The G-Buffer itself is still rendered every frame regardless
-     * (raytracedResources.renderGBuffer runs unconditionally), so a G-Buffer-sourced view reflects
-     * live scene changes. Set to null to return to normal rendering. An unknown key is treated the
-     * same as null (silently falls through to normal rendering) rather than throwing, since this
-     * is diagnostic-only.
+     * 'roughness' from the raytraced G-Buffer; 'lightmap' from the simulation's final HDR image;
+     * 'irradiance-a'/'irradiance-b' (the two independent, uncombined per-half HDR estimates -
+     * see this project's denoiser plan), 'combined-irradiance' (their mean, pre-denoise), and
+     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline, see
+     * createSharedResources), replaces the entire normal render (simulation/sprites/tonemap) with
+     * a direct blit of that view's source texture to the swapchain, transformed for actual
+     * legibility (see debug_view_blit.wgsl) - a diagnostic aid for verifying render-target
+     * contents before anything downstream consumes them. Mipmapped sources (G-Buffer, lightmap,
+     * combined-irradiance) can be inspected at any level via debugViewMipLevel. The G-Buffer
+     * itself is still rendered every frame regardless (raytracedResources.renderGBuffer runs
+     * unconditionally), so a G-Buffer-sourced view reflects live scene changes. Set to null to
+     * return to normal rendering. An unknown key is treated the same as null (silently falls
+     * through to normal rendering) rather than throwing, since this is diagnostic-only.
      */
     public debugView: string | null = null;
 
@@ -120,6 +123,17 @@ export class LitboxSceneRenderer {
      * guessing a fixed constant.
      */
     public debugViewScale = 0.5;
+
+    /**
+     * Which mip level of the active debugView's source texture to display (see
+     * debug_view_blit.wgsl) - lets G-Buffer/lightmap/combined-irradiance mip chains and the
+     * denoiser evidence textures (see this project's denoiser plan) be inspected level-by-level,
+     * e.g. `litboxRenderer.debugViewMipLevel = 2`. Out-of-range values are clamped by the GPU to
+     * the source texture's actual mip count (e.g. selecting mip 5 on a single-mip texture like
+     * irradiance-a/b or raw/filtered-variance just shows their one real level) - no need to keep
+     * this in sync with whichever view is currently selected.
+     */
+    public debugViewMipLevel = 0;
 
     /**
      * Exposure fed to the tonemap pass (see tonemap.wgsl). Seeded from the active camera's
@@ -318,6 +332,19 @@ export class LitboxSceneRenderer {
         // (same convention as 'density') since the "typical" irradiance magnitude depends
         // entirely on the active scene's light intensities.
         this.debugViews.set('lightmap', { getSourceView: () => this.simulationResources.getLightmapView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+
+        // Denoiser evidence-gathering pipeline (see this project's denoiser plan) - lets each
+        // piece of evidence be sanity-checked independently (e.g. confirm A/B look like
+        // independent noisy estimates of the same image, confirm variance is high exactly where
+        // the image is noisy) before any blur logic depends on them. Variance textures are
+        // single-channel (r32float) - HDR_SCALED's c.rgb reads back (value, 0, 0), so higher
+        // variance shows as a brighter red rather than true grayscale, but is legible enough for a
+        // debug view.
+        this.debugViews.set('irradiance-a', { getSourceView: () => this.simulationResources.getIrradianceAView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        this.debugViews.set('irradiance-b', { getSourceView: () => this.simulationResources.getIrradianceBView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        this.debugViews.set('combined-irradiance', { getSourceView: () => this.simulationResources.getCombinedIrradianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        this.debugViews.set('raw-variance', { getSourceView: () => this.simulationResources.getRawVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        this.debugViews.set('filtered-variance', { getSourceView: () => this.simulationResources.getFilteredVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
 
         this.createHdrFrameTexture();
     }
@@ -643,7 +670,7 @@ export class LitboxSceneRenderer {
                             storeOp: 'store',
                         }],
                     });
-                    this.debugViewBlitResources.apply(debugPass, sourceView, view.mode, this.debugViewScale);
+                    this.debugViewBlitResources.apply(debugPass, sourceView, view.mode, this.debugViewScale, this.debugViewMipLevel);
                     debugPass.end();
                     this.device.queue.submit([encoder.finish()]);
                     return;
