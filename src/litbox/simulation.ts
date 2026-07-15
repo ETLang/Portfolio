@@ -51,20 +51,31 @@ const VARIANCE_FORMAT: GPUTextureFormat = 'r32float';
  *   small-screen argument), but only halve raysPerFrame (not quarter) and keep the bilinear splat
  *   on, since the GPU shouldn't be paying the same atomic-contention tax the default profile is
  *   working around.
+ *
+ * maxBlurMip is independent of the resolutionScale/raysPerFrameScale split above (applies the same
+ * on mobile regardless of gpuRandomAccessFriendly - it's a mip-count argument, not a
+ * scattered-access one): denoise.wgsl's traversal cost is dominated by how deep it's allowed to
+ * descend per seed, and a deeper descent means more divergent per-pixel stack work (see CLAUDE.md's
+ * PowerVR-divergent-SIMT-loop finding). Desktop's default (DEFAULT_DENOISER_TUNABLES.maxBlurMip) is
+ * already trimmed by 2 further levels on mobile - one level beyond the parity mobile's halved
+ * resolution already gives it for free (fewer real mip levels in the texture chain), to actually
+ * cut worst-case traversal depth rather than just track the smaller texture.
  */
 export interface SimulationDeviceProfile {
     resolutionScale: number;
     raysPerFrameScale: number;
     bilinearPhotonDistribution: boolean;
+    maxBlurMip: number;
 }
 
 export function getSimulationDeviceProfile(platform: Platform, gpuRandomAccessFriendly: boolean): SimulationDeviceProfile {
     if (platform === 'desktop') {
-        return { resolutionScale: 1, raysPerFrameScale: 1, bilinearPhotonDistribution: true };
+        return { resolutionScale: 1, raysPerFrameScale: 1, bilinearPhotonDistribution: true, maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip };
     }
+    const maxBlurMip = DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2;
     return gpuRandomAccessFriendly
-        ? { resolutionScale: 0.5, raysPerFrameScale: 0.5, bilinearPhotonDistribution: true }
-        : { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false };
+        ? { resolutionScale: 0.5, raysPerFrameScale: 0.5, bilinearPhotonDistribution: true, maxBlurMip }
+        : { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false, maxBlurMip };
 }
 
 /**
@@ -432,12 +443,14 @@ export class SimulationResources {
         const deviceProfile = getSimulationDeviceProfile(getPlatform(), isRandomAccessFriendlyGpu());
         this.simulation = deriveEffectiveSimulation(rawSimulation, deviceProfile);
         this.bilinearPhotonDistribution = deviceProfile.bilinearPhotonDistribution;
+        this.denoiserTunables.maxBlurMip = deviceProfile.maxBlurMip;
         // Visible via the on-screen console overlay on mobile - lets a device profile be verified
         // without attaching devtools (see CDP-over-adb mobile debugging notes: some GPU readback
         // paths hang under remote debugging, so an in-page log is the more reliable check anyway).
         console.log(`Litbox: device profile - platform=${getPlatform()} gpuRandomAccessFriendly=${isRandomAccessFriendlyGpu()} `
             + `resolution=${this.simulation.width}x${this.simulation.height} raysPerFrame=${this.simulation.raysPerFrame} `
-            + `maxIntegrationSteps=${computeMaxIntegrationSteps(this.simulation.width, this.simulation.height)} bilinear=${this.bilinearPhotonDistribution}`);
+            + `maxIntegrationSteps=${computeMaxIntegrationSteps(this.simulation.width, this.simulation.height)} bilinear=${this.bilinearPhotonDistribution} `
+            + `maxBlurMip=${this.denoiserTunables.maxBlurMip}`);
 
         this.worldTransform = sceneGraph.getWorldTransform(this.simulation.ownerId);
 

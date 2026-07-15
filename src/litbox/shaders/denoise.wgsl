@@ -55,10 +55,6 @@ struct DenoiseUniforms {
 
 const SEED_RADIUS: i32 = 1; // 3x3 seed neighborhood at the chosen starting mip.
 
-// Must match @workgroup_size below (8*2*1) - WGSL has no way to derive this from the attribute
-// itself, same manual-sync convention as compute_variance_and_mips.wgsl's TILE_SIZE/THREAD_COUNT.
-const THREAD_COUNT: u32 = 16u;
-
 // See this project's denoiser plan for the derivation: sized to survive Phase 1's forced-full-
 // split worst case (every one of the 9 seeds fully descending from maxBlurMip to mip 0 in a
 // depth-first push-4/pop-1 traversal), not copied from the Unity reference's arbitrary 64.
@@ -69,12 +65,17 @@ struct TreeSampleNode {
     mip: i32,
 }
 
-// Cannot be a function-local array indexed by a runtime stack pointer - per this project's
-// CLAUDE.md, that class of bug silently corrupts on some mobile GPU drivers. var<workgroup> is
-// the documented-safe alternative; each thread's STACK_SIZE-entry slice is private to it (no
-// cross-thread cooperation needed here, unlike compute_variance_and_mips.wgsl's use of the same
-// pattern for an actual reduction).
-var<workgroup> stack: array<TreeSampleNode, THREAD_COUNT * STACK_SIZE>;
+// PERF EXPERIMENT (mobile occupancy floor): this used to be a THREAD_COUNT*STACK_SIZE
+// var<workgroup> array with a per-thread stackBase slice, to route around CLAUDE.md's documented
+// WGSL indexing bug. That bug is specifically about dynamically indexing a *literal*-initialized
+// local array (`var x = array<T, N>(...); x[runtimeIndex]`) - this is a plain, uninitialized local
+// declaration (no array(...) constructor), a different WGSL construct, so it's not expected to hit
+// that lowering bug. Trying function-local here because the workgroup-shared version reserved
+// THREAD_COUNT*STACK_SIZE*16 bytes of shared memory per workgroup unconditionally (whether or not
+// any thread's traversal used it), which likely capped resident-workgroup occupancy on this GPU
+// regardless of actual per-pixel work - see this project's denoiser plan / mobile-perf-tuning
+// notes. STILL NEEDS REAL-HARDWARE CORRECTNESS VERIFICATION per CLAUDE.md - the known bug produces
+// silent output corruption, not a validation error or crash, so a clean run isn't proof by itself.
 
 // Evidence available: filteredVariance (relative-variance, quarter res) and combinedIrradiance's
 // own mip chain (already box-filtered, so a coarse mip IS the local mean - no separate blur pass
@@ -197,7 +198,6 @@ fn decideWeight(
 @compute @workgroup_size(8, 2, 1)
 fn main(
     @builtin(global_invocation_id) id: vec3<u32>,
-    @builtin(local_invocation_index) localIndex: u32,
 ) {
     let size = textureDimensions(output);
     if (id.x >= size.x || id.y >= size.y) {
@@ -242,12 +242,12 @@ fn main(
     let centerLuminance = luminance(centerIrradiance);
 
     let seedTexelSize = texelSize * f32(1u << u32(startMip));
-    let stackBase = localIndex * STACK_SIZE;
+    var stack: array<TreeSampleNode, STACK_SIZE>;
     var stackCount: u32 = 0u;
 
     for (var dy = -SEED_RADIUS; dy <= SEED_RADIUS; dy++) {
         for (var dx = -SEED_RADIUS; dx <= SEED_RADIUS; dx++) {
-            stack[stackBase + stackCount] = TreeSampleNode(uv + vec2<f32>(f32(dx), f32(dy)) * seedTexelSize, startMip);
+            stack[stackCount] = TreeSampleNode(uv + vec2<f32>(f32(dx), f32(dy)) * seedTexelSize, startMip);
             stackCount++;
         }
     }
@@ -256,17 +256,17 @@ fn main(
 
     while (stackCount > 0u) {
         stackCount--;
-        let current = stack[stackBase + stackCount];
+        let current = stack[stackCount];
         let depth = startMip - current.mip;
         let nodeSize = pow(0.25, f32(depth));
 
         if (shouldSplit(current.uv, current.mip, uv, texelSize) && stackCount + 4u <= STACK_SIZE) {
             let childMip = current.mip - 1;
             let childTexelSize = texelSize * f32(1u << u32(childMip));
-            stack[stackBase + stackCount]      = TreeSampleNode(current.uv + vec2<f32>(-0.5, -0.5) * childTexelSize, childMip);
-            stack[stackBase + stackCount + 1u] = TreeSampleNode(current.uv + vec2<f32>( 0.5, -0.5) * childTexelSize, childMip);
-            stack[stackBase + stackCount + 2u] = TreeSampleNode(current.uv + vec2<f32>(-0.5,  0.5) * childTexelSize, childMip);
-            stack[stackBase + stackCount + 3u] = TreeSampleNode(current.uv + vec2<f32>( 0.5,  0.5) * childTexelSize, childMip);
+            stack[stackCount]      = TreeSampleNode(current.uv + vec2<f32>(-0.5, -0.5) * childTexelSize, childMip);
+            stack[stackCount + 1u] = TreeSampleNode(current.uv + vec2<f32>( 0.5, -0.5) * childTexelSize, childMip);
+            stack[stackCount + 2u] = TreeSampleNode(current.uv + vec2<f32>(-0.5,  0.5) * childTexelSize, childMip);
+            stack[stackCount + 3u] = TreeSampleNode(current.uv + vec2<f32>( 0.5,  0.5) * childTexelSize, childMip);
             stackCount += 4u;
             continue;
         }
