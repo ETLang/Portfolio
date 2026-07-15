@@ -12,6 +12,8 @@ import { DensityMipBlitResources } from './density_mip_blit.ts';
 import { ComputeVarianceAndMipsOperation } from './compute_variance_and_mips.ts';
 import { FilterVarianceOperation } from './filter_variance.ts';
 import { DenoiseOperation } from './denoise_operation.ts';
+import { ComputeVolatilityOperation } from './compute_volatility.ts';
+import { BuildDenoiserQuadtreeOperation } from './build_denoiser_quadtree.ts';
 import {
     ForwardMonteCarloOperation,
     luminance,
@@ -89,6 +91,61 @@ export function deriveEffectiveSimulation(simulation: SceneSimulation, profile: 
 }
 
 /**
+ * Every tunable threshold in the denoiser pipeline (both DenoiseOperation's guided-blur weights
+ * and BuildDenoiserQuadtreeOperation's split-quadtree bake), bundled into one flat object so the
+ * portfolio page's config UI (see main.ts's denoiser tunables panel) has a single source of truth
+ * to read/write - mutate a field directly (e.g. `simulationResources.denoiserTunables.varianceScale
+ * = 4`); run()/buildDenoiserQuadtree() read this fresh every frame, so there's no separate "apply"
+ * step. None of these are solved constants - see this project's denoiser plan for what each one
+ * does and why its current default was chosen as a starting point, not a final value.
+ */
+export interface DenoiserTunables {
+    // DenoiseOperation (denoise.wgsl) - see DenoiseUniforms in denoise_operation.ts for what each does.
+    varianceScale: number;
+    darknessNoiseFloor: number;
+    maxBlurMip: number;
+    albedoSensitivity: number;
+    densitySensitivity: number;
+    normalSensitivity: number;
+    sigmaLuminanceTight: number;
+    sigmaLuminanceLoose: number;
+    kLuminance: number;
+    maxSplitDistance: number;
+    // BuildDenoiserQuadtreeOperation (build_denoiser_quadtree.wgsl) - see
+    // BuildDenoiserQuadtreeUniforms in build_denoiser_quadtree.ts. currentGBufferMip is excluded -
+    // that field is derived per-dispatch (which quadtree level is being built), not a tunable.
+    albedoLuminanceThreshold: number;
+    albedoChromaThreshold: number;
+    logDensityThreshold: number;
+    volatilityThreshold: number;
+    detailThreshold: number;
+    varianceGateScale: number;
+}
+
+export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
+    varianceScale: 8.0,
+    darknessNoiseFloor: 0.002,
+    maxBlurMip: 5.0,
+    albedoSensitivity: 0.3,
+    densitySensitivity: 1.0,
+    normalSensitivity: 8.0,
+    // Matches filter_variance.wgsl's SIGMA_LUMINANCE_TIGHT/LOOSE/K_LUMINANCE exactly - same
+    // adaptive-sigma pattern, reused rather than re-derived (see denoise.wgsl).
+    sigmaLuminanceTight: 0.05,
+    sigmaLuminanceLoose: 2.5,
+    kLuminance: 2.0,
+    // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
+    // doc comment for the node-relative-texels normalization this is measured in.
+    maxSplitDistance: 2.0,
+    albedoLuminanceThreshold: 0.1,
+    albedoChromaThreshold: 0.2,
+    logDensityThreshold: 0.05,
+    volatilityThreshold: 0.05,
+    detailThreshold: 0.1,
+    varianceGateScale: 20.0,
+};
+
+/**
  * Owns the HDR mipmapped lightmap produced by the light simulation, and the pipeline that
  * additively composites it into the HDR frame buffer as a world-space quad.
  *
@@ -127,9 +184,13 @@ export class SimulationResources {
     private photonBufferClearData: Uint32Array | null = null;
     private convertToHdr: ConvertPhotonIrradianceToHdrOperation;
 
-    // --- Denoiser evidence-gathering pipeline (this project's denoiser plan) - the actual
-    // size-argument/guided-blur algorithm is a separate, not-yet-designed step; denoise below is
-    // currently a passthrough stub.
+    // --- Denoiser pipeline (this project's denoiser plan): a hierarchical guided blur over
+    // combinedIrradiance, backed by a baked min/max-range quadtree over the G-Buffer. Phase 1
+    // (forceFullSplit) validated the guided blur's weight quality in isolation; Phase 2 (the
+    // quadtree below) is what makes ShouldSplit() actually prune the traversal.
+
+    /** Live-editable copy of every denoiser threshold - see DenoiserTunables' own doc comment. */
+    public denoiserTunables: DenoiserTunables = { ...DEFAULT_DENOISER_TUNABLES };
 
     /** Per-half HDR conversion of photonBuffer, mip0 only - see ConvertPhotonIrradianceToHdrOperation. */
     private irradianceA: ComputedTexture | null = null;
@@ -140,9 +201,21 @@ export class SimulationResources {
     private rawVariance: ComputedTexture | null = null;
     private filteredVariance: ComputedTexture | null = null;
 
+    /** Normal-based edge detector feeding the quadtree bake, full G-Buffer resolution, mip0 only - see ComputeVolatilityOperation. */
+    private volatility: ComputedTexture | null = null;
+    /** Baked min/max-range quadtree textures (see BuildDenoiserQuadtreeOperation) - half G-Buffer resolution, own 0-indexed mip chain of (combinedIrradiance.mipLevelCount - 1) levels; level i answers "should G-Buffer mip (i+1) split into mip-i children" (see denoise.wgsl's shouldSplit()). */
+    private albedoMin: ComputedTexture | null = null;
+    private albedoMax: ComputedTexture | null = null;
+    private densityMinMaxVolatility: ComputedTexture | null = null;
+    private quadtreeMustSplit: ComputedTexture | null = null;
+
     private computeVarianceAndMips: ComputeVarianceAndMipsOperation;
     private filterVariance: FilterVarianceOperation;
     private denoise: DenoiseOperation;
+    private computeVolatility: ComputeVolatilityOperation;
+    /** Permanently LEVEL0=true / LEVEL0=false respectively - never toggled per-frame, see build_denoiser_quadtree.wgsl's file header (a switch change is a full pipeline recompile). */
+    private buildQuadtreeLevel0: BuildDenoiserQuadtreeOperation;
+    private buildQuadtreeIterate: BuildDenoiserQuadtreeOperation;
     /** Fixed to 'rgba8unorm' at construction (Albedo's format) - never switched at runtime, so mipDownsampleAlbedo/mipDownsample never fight over recompiling the same pipeline for two different formats every frame. */
     private mipDownsampleAlbedo: MipDownsampleOperation;
     /** Fixed to 'rgba16float' (its default) - used for NormalRoughness, combinedIrradiance, and the final lightmap's own post-denoise mip chain. */
@@ -185,6 +258,10 @@ export class SimulationResources {
         this.computeVarianceAndMips = new ComputeVarianceAndMipsOperation(device);
         this.filterVariance = new FilterVarianceOperation(device);
         this.denoise = new DenoiseOperation(device);
+        this.computeVolatility = new ComputeVolatilityOperation(device);
+        this.buildQuadtreeLevel0 = new BuildDenoiserQuadtreeOperation(device);
+        this.buildQuadtreeIterate = new BuildDenoiserQuadtreeOperation(device);
+        this.buildQuadtreeIterate.updateSwitches({ level0: false });
         this.mipDownsampleAlbedo = new MipDownsampleOperation(device);
         this.mipDownsampleAlbedo.updateSwitches({ outputFormat: 'rgba8unorm' });
         this.mipDownsample = new MipDownsampleOperation(device);
@@ -324,7 +401,10 @@ export class SimulationResources {
             this.photonBuffer = null;
         }
         this.photonBufferClearData = null;
-        for (const texture of [this.irradianceA, this.irradianceB, this.combinedIrradiance, this.rawVariance, this.filteredVariance]) {
+        for (const texture of [
+            this.irradianceA, this.irradianceB, this.combinedIrradiance, this.rawVariance, this.filteredVariance,
+            this.volatility, this.albedoMin, this.albedoMax, this.densityMinMaxVolatility, this.quadtreeMustSplit,
+        ]) {
             if (texture) {
                 this.computedDataManager.releaseTexture(texture);
             }
@@ -334,6 +414,11 @@ export class SimulationResources {
         this.combinedIrradiance = null;
         this.rawVariance = null;
         this.filteredVariance = null;
+        this.volatility = null;
+        this.albedoMin = null;
+        this.albedoMax = null;
+        this.densityMinMaxVolatility = null;
+        this.quadtreeMustSplit = null;
         const rawSimulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
@@ -382,6 +467,23 @@ export class SimulationResources {
         const mip2Height = Math.max(1, height >> 2);
         this.rawVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
         this.filteredVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
+
+        // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - see field doc comments
+        // above. albedoMin/Max/densityMinMaxVolatility/quadtreeMustSplit are allocated at HALF the
+        // G-Buffer's resolution with their own (mipLevelCount - 1)-level chain (own 0-indexed mip
+        // space, offset by -1 from G-Buffer/irradiance mip space - see denoise.wgsl's
+        // shouldSplit()); skipped entirely (guarded again in run()) if the simulation is too small
+        // to have any levels for it.
+        this.volatility = this.computedDataManager.acquireTexture(width, height, VARIANCE_FORMAT, irradianceUsage);
+        const quadtreeMipLevelCount = mipLevelCount - 1;
+        if (quadtreeMipLevelCount > 0) {
+            const quadtreeWidth = Math.max(1, width >> 1);
+            const quadtreeHeight = Math.max(1, height >> 1);
+            this.albedoMin = this.computedDataManager.acquireTexture(quadtreeWidth, quadtreeHeight, LIGHTMAP_FORMAT, irradianceUsage, quadtreeMipLevelCount);
+            this.albedoMax = this.computedDataManager.acquireTexture(quadtreeWidth, quadtreeHeight, LIGHTMAP_FORMAT, irradianceUsage, quadtreeMipLevelCount);
+            this.densityMinMaxVolatility = this.computedDataManager.acquireTexture(quadtreeWidth, quadtreeHeight, LIGHTMAP_FORMAT, irradianceUsage, quadtreeMipLevelCount);
+            this.quadtreeMustSplit = this.computedDataManager.acquireTexture(quadtreeWidth, quadtreeHeight, VARIANCE_FORMAT, irradianceUsage, quadtreeMipLevelCount);
+        }
 
         if (this.compositeBindGroupLayout && this.compositeUniformBuffer) {
             this.compositeBindGroup = this.device.createBindGroup({
@@ -478,10 +580,22 @@ export class SimulationResources {
             this.filterVariance.execute(encoder);
         }
 
-        // Denoiser stub (see this project's denoiser plan) - passthrough for now, but this is
-        // where albedo/density finally get combined into the final lit image.
-        this.denoise.updateSwitches({ combineAlbedoDensity: true });
-        this.denoise.updateInputs(this.combinedIrradiance.getMipView(0), albedoView, densityView);
+        // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - backs denoise.wgsl's
+        // real ShouldSplit(). Must run after filterVariance above (the irradiance-detail trigger
+        // gates on filteredVariance) and before denoise below. See build_denoiser_quadtree.wgsl.
+        this.buildDenoiserQuadtree(encoder, raytracedResources);
+
+        // Hierarchical guided blur (see this project's denoiser plan). forceFullSplit is off -
+        // ShouldSplit() now consults the baked quadtree above instead of always splitting to mip
+        // 0. Also where albedo/density finally get combined into the final lit image.
+        this.denoise.updateSwitches({ combineAlbedoDensity: true, forceFullSplit: false });
+        // denoiserTunables has more fields than DenoiseUniforms needs (the quadtree-bake ones) -
+        // structurally fine to pass straight through, see DenoiserTunables' own doc comment.
+        this.denoise.updateUniforms(this.denoiserTunables);
+        this.denoise.updateInputs(
+            this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
+            this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
+        );
         this.denoise.updateOutputs(this.lightmap.getMipView(0), width, height);
         this.denoise.execute(encoder);
 
@@ -546,6 +660,66 @@ export class SimulationResources {
             this.mipDownsample.updateInputs(this.combinedIrradiance.getMipView(mip - 1));
             this.mipDownsample.updateOutputs(this.combinedIrradiance.getMipView(mip), mipWidth, mipHeight);
             this.mipDownsample.execute(encoder);
+        }
+    }
+
+    /**
+     * Builds the baked min/max-range quadtree (this project's denoiser plan, Phase 2) that backs
+     * denoise.wgsl's ShouldSplit() - see build_denoiser_quadtree.wgsl for the algorithm.
+     * computeVolatility runs once (normalRoughness mip0 -> volatility, the only point this touches
+     * the normal texture); buildQuadtreeLevel0 then buildQuadtreeIterate (looped) build the
+     * quadtree's own mip chain level by level, each level's output feeding the next. Two
+     * permanently-switched operation instances (not one instance toggled per frame) - see
+     * BuildDenoiserQuadtreeOperation's doc comment for why.
+     */
+    private buildDenoiserQuadtree(encoder: GPUCommandEncoder, raytracedResources: RaytracedResources): void {
+        if (!this.combinedIrradiance || !this.filteredVariance || !this.volatility
+            || !this.albedoMin || !this.albedoMax || !this.densityMinMaxVolatility || !this.quadtreeMustSplit
+            || !this.simulation) {
+            return;
+        }
+        const { width, height } = this.simulation;
+        const albedoView = raytracedResources.getAlbedoView();
+        const densityView = raytracedResources.getDensityView();
+        const normalRoughnessView = raytracedResources.getNormalRoughnessView();
+        if (!albedoView || !densityView || !normalRoughnessView) {
+            return;
+        }
+
+        this.computeVolatility.updateInputs(normalRoughnessView);
+        this.computeVolatility.updateOutputs(this.volatility.getMipView(0), width, height);
+        this.computeVolatility.execute(encoder);
+
+        // Thresholds come from denoiserTunables (TBD/tunable - see this project's denoiser plan),
+        // shared across every level of the chain (both the LEVEL0 and iterative passes apply the
+        // same comparison, per the Unity reference this was ported from) - only currentGBufferMip
+        // changes per level, so it's overridden fresh on each call below.
+        const level0Width = Math.max(1, width >> 1);
+        const level0Height = Math.max(1, height >> 1);
+        this.buildQuadtreeLevel0.updateUniforms({ ...this.denoiserTunables, currentGBufferMip: 1 });
+        this.buildQuadtreeLevel0.updateInputsLevel0(
+            albedoView, densityView, this.volatility.getMipView(0), this.combinedIrradiance.view, this.filteredVariance.view,
+        );
+        this.buildQuadtreeLevel0.updateOutputs(
+            this.albedoMin.getMipView(0), this.albedoMax.getMipView(0), this.densityMinMaxVolatility.getMipView(0), this.quadtreeMustSplit.getMipView(0),
+            level0Width, level0Height,
+        );
+        this.buildQuadtreeLevel0.execute(encoder);
+
+        for (let level = 1; level < this.quadtreeMustSplit.mipLevelCount; level++) {
+            const levelWidth = Math.max(1, width >> (level + 1));
+            const levelHeight = Math.max(1, height >> (level + 1));
+            this.buildQuadtreeIterate.updateUniforms({ ...this.denoiserTunables, currentGBufferMip: level + 1 });
+            this.buildQuadtreeIterate.updateInputsIterate(
+                this.albedoMin.getMipView(level - 1), this.albedoMax.getMipView(level - 1),
+                this.densityMinMaxVolatility.getMipView(level - 1), this.quadtreeMustSplit.getMipView(level - 1),
+                this.combinedIrradiance.view, this.filteredVariance.view,
+            );
+            this.buildQuadtreeIterate.updateOutputs(
+                this.albedoMin.getMipView(level), this.albedoMax.getMipView(level), this.densityMinMaxVolatility.getMipView(level), this.quadtreeMustSplit.getMipView(level),
+                levelWidth, levelHeight,
+            );
+            this.buildQuadtreeIterate.execute(encoder);
         }
     }
 

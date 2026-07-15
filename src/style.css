@@ -506,6 +506,62 @@ canvas {
     margin-top: 1em;
 }
 
+/* Denoiser tunables panel (see denoiser_tunables_panel.ts) - one row per DenoiserTunables field. */
+.denoiser-tunables {
+    margin-top: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+}
+
+.denoiser-tunables summary {
+    cursor: pointer;
+    font-weight: bold;
+    color: var(--text-secondary-header);
+    padding: 0.25rem 0;
+}
+
+.denoiser-tunables summary:hover {
+    color: var(--accent-color);
+}
+
+.denoiser-tunables-list {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.denoiser-param label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.denoiser-param-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.denoiser-param-controls .denoiser-param-slider {
+    flex: 1;
+    min-width: 0;
+}
+
+.denoiser-param-controls .denoiser-param-number {
+    width: 5.5rem;
+    flex-shrink: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
 /* --- MOBILE LAYOUT (PORTRAIT) --- */
 @media (max-width: 768px) {
   .modal-content {

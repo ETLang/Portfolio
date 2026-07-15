@@ -6,6 +6,8 @@ import { CornellSquareScene } from './litbox/scenes/cornell_square_scene.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
 import { formatRate } from './litbox/performance_metrics.ts';
+import { getDenoiserTunablesPanel } from './denoiser_tunables_panel.ts';
+import { DEFAULT_DENOISER_TUNABLES, type DenoiserTunables } from './litbox/simulation.ts';
 import introMdText from './intro.md?raw';
 
 // Import markdown files as URLs. Vite will handle resolving these paths correctly
@@ -126,6 +128,13 @@ async function updateView(view: ViewKey) {
         } else {
             sidebarPane.innerHTML = content.sidebar;
         }
+        if (view === 'litbox') {
+            // Read live values (not baked into the static viewContent.litbox.sidebar string) so
+            // revisiting this view after adjusting a slider shows what's actually running, not a
+            // reset to defaults. Falls back to defaults if the scene hasn't finished loading yet.
+            const tunables = litboxRenderer?.getSimulationResources().denoiserTunables ?? DEFAULT_DENOISER_TUNABLES;
+            sidebarPane.insertAdjacentHTML('beforeend', getDenoiserTunablesPanel(tunables));
+        }
     }
 
     // Show/hide main content
@@ -153,6 +162,27 @@ sidebarPane.addEventListener('input', (e: Event) => {
     const target = e.target as HTMLElement;
     if (target.id === 'exposure-slider' && litboxRenderer) {
         litboxRenderer.exposureOverride = parseFloat((target as HTMLInputElement).value);
+        return;
+    }
+
+    // Denoiser tunables panel (see denoiser_tunables_panel.ts): the slider and textbox in a row
+    // share the same data-param attribute (the DenoiserTunables key), differing only by class -
+    // one delegated handler for all of them instead of one id-based branch per parameter.
+    const param = target.dataset.param as keyof DenoiserTunables | undefined;
+    if (param && litboxRenderer) {
+        const value = parseFloat((target as HTMLInputElement).value);
+        if (Number.isNaN(value)) {
+            return;
+        }
+        litboxRenderer.getSimulationResources().denoiserTunables[param] = value;
+        // Keep the OTHER control in this row (slider <-> textbox) in sync with whichever one the
+        // user just edited.
+        const row = target.closest('.denoiser-param');
+        const pairedSelector = target.classList.contains('denoiser-param-slider') ? '.denoiser-param-number' : '.denoiser-param-slider';
+        const paired = row?.querySelector<HTMLInputElement>(pairedSelector);
+        if (paired) {
+            paired.value = String(value);
+        }
     }
 });
 

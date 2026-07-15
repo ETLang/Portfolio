@@ -20,15 +20,8 @@ const SIGMA_ALBEDO: f32 = 0.05;
 const SIGMA_LUMINANCE_TIGHT: f32 = 0.05;
 const SIGMA_LUMINANCE_LOOSE: f32 = 2.5;
 const K_LUMINANCE: f32 = 2.0;
-const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
-
-fn gaussianWeight(x: f32, sigma: f32) -> f32 {
-    return exp(-(x * x) / (2.0 * sigma * sigma));
-}
-
-fn luminance(rgb: vec3<f32>) -> f32 {
-    return dot(rgb, LUMINANCE_WEIGHTS);
-}
+// gaussianWeight/luminance/LUMINANCE_WEIGHTS live in LitboxCommon.wgsl - denoise.wgsl reuses them
+// too (its darkness-evidence and radiance-similarity terms), see this project's denoiser plan.
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
