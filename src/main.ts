@@ -89,6 +89,7 @@ const viewContent = {
             <p>Bounce Depth: <input type="range" min="1" max="10" value="5" class="slider"></p>
             <p>Exposure: <input type="range" id="exposure-slider" min="-4" max="4" step="0.1" value="0" class="slider"></p>
             <p><label><input type="checkbox" id="tonemap-toggle" checked> Tone mapping</label></p>
+            <p><label><input type="checkbox" id="denoiser-toggle" checked> Denoising</label></p>
         `,
     },
     fractals: {
@@ -130,10 +131,27 @@ async function updateView(view: ViewKey) {
         }
         if (view === 'litbox') {
             // Read live values (not baked into the static viewContent.litbox.sidebar string) so
-            // revisiting this view after adjusting a slider shows what's actually running, not a
-            // reset to defaults. Falls back to defaults if the scene hasn't finished loading yet.
+            // revisiting this view after adjusting a control shows what's actually running, not a
+            // reset to the markup's hardcoded defaults. Falls back to defaults if the scene hasn't
+            // finished loading yet. Bug fix: the exposure slider/tonemap-toggle/denoiser-toggle
+            // used to skip this and always come back showing their hardcoded markup state (e.g.
+            // "checked") even after being changed, since sidebarPane.innerHTML above regenerates
+            // them fresh from the static template every time.
             const tunables = litboxRenderer?.getSimulationResources().denoiserTunables ?? DEFAULT_DENOISER_TUNABLES;
             sidebarPane.insertAdjacentHTML('beforeend', getDenoiserTunablesPanel(tunables));
+
+            const exposureSlider = document.getElementById('exposure-slider') as HTMLInputElement | null;
+            if (exposureSlider) {
+                exposureSlider.value = String(litboxRenderer?.exposureOverride ?? 0);
+            }
+            const tonemapToggle = document.getElementById('tonemap-toggle') as HTMLInputElement | null;
+            if (tonemapToggle) {
+                tonemapToggle.checked = litboxRenderer?.tonemapEnabled ?? true;
+            }
+            const denoiserToggle = document.getElementById('denoiser-toggle') as HTMLInputElement | null;
+            if (denoiserToggle) {
+                denoiserToggle.checked = litboxRenderer?.getSimulationResources().denoiserEnabled ?? true;
+            }
         }
     }
 
@@ -190,6 +208,8 @@ sidebarPane.addEventListener('change', (e: Event) => {
     const target = e.target as HTMLElement;
     if (target.id === 'tonemap-toggle' && litboxRenderer) {
         litboxRenderer.tonemapEnabled = (target as HTMLInputElement).checked;
+    } else if (target.id === 'denoiser-toggle' && litboxRenderer) {
+        litboxRenderer.getSimulationResources().denoiserEnabled = (target as HTMLInputElement).checked;
     }
 });
 

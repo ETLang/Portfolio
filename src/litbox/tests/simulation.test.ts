@@ -47,12 +47,13 @@ describe('getSimulationDeviceProfile', () => {
             resolutionScale: 0.5,
             raysPerFrameScale: 0.5,
             bilinearPhotonDistribution: true,
-            maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2,
+            maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 1,
         });
     });
 
-    it('reduces maxBlurMip on mobile by exactly 2 levels regardless of GPU friendliness (a mip-count argument, not a scattered-access one)', () => {
-        expect(getSimulationDeviceProfile('android', true).maxBlurMip).toBe(DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2);
+    it('reduces maxBlurMip by only 1 level (the resolution-parity correction) on mobile with a friendly GPU, but by 2 (parity + the PowerVR-divergent-traversal cut) on an unfriendly one', () => {
+        expect(getSimulationDeviceProfile('android', true).maxBlurMip).toBe(DEFAULT_DENOISER_TUNABLES.maxBlurMip - 1);
+        expect(getSimulationDeviceProfile('android', false).maxBlurMip).toBe(DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2);
     });
 });
 

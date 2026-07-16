@@ -52,14 +52,19 @@ const VARIANCE_FORMAT: GPUTextureFormat = 'r32float';
  *   on, since the GPU shouldn't be paying the same atomic-contention tax the default profile is
  *   working around.
  *
- * maxBlurMip is independent of the resolutionScale/raysPerFrameScale split above (applies the same
- * on mobile regardless of gpuRandomAccessFriendly - it's a mip-count argument, not a
- * scattered-access one): denoise.wgsl's traversal cost is dominated by how deep it's allowed to
- * descend per seed, and a deeper descent means more divergent per-pixel stack work (see CLAUDE.md's
- * PowerVR-divergent-SIMT-loop finding). Desktop's default (DEFAULT_DENOISER_TUNABLES.maxBlurMip) is
- * already trimmed by 2 further levels on mobile - one level beyond the parity mobile's halved
- * resolution already gives it for free (fewer real mip levels in the texture chain), to actually
- * cut worst-case traversal depth rather than just track the smaller texture.
+ * maxBlurMip, unlike the resolutionScale/raysPerFrameScale/bilinear split above, trims off
+ * Desktop's default (DEFAULT_DENOISER_TUNABLES.maxBlurMip) by a flat amount rather than scaling -
+ * but *how much* it trims does still depend on gpuRandomAccessFriendly, for two additive reasons
+ * that apply independently:
+ * - Both mobile profiles get a free -1 from resolutionScale's halved resolution alone (fewer real
+ *   mip levels exist in the texture chain at half res, so the equivalent-quality starting mip is
+ *   one level lower without cutting anything - this is a parity correction, not a quality cut).
+ * - GPU NOT random-access-friendly (PowerVR) gets a further -1 on top of that: denoise.wgsl's
+ *   traversal cost is dominated by how deep it's allowed to descend per seed, and a deeper descent
+ *   means more divergent per-pixel stack work on PowerVR's SIMT model specifically (see CLAUDE.md's
+ *   PowerVR-divergent-SIMT-loop finding) - confirmed NOT to be a problem on Apple GPUs (measured:
+ *   the denoiser "runs amazingly well" on iPhone, see this project's mobile-perf-tuning notes), so
+ *   random-access-friendly mobile only pays the resolution-parity -1, not this extra cut.
  */
 export interface SimulationDeviceProfile {
     resolutionScale: number;
@@ -72,10 +77,9 @@ export function getSimulationDeviceProfile(platform: Platform, gpuRandomAccessFr
     if (platform === 'desktop') {
         return { resolutionScale: 1, raysPerFrameScale: 1, bilinearPhotonDistribution: true, maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip };
     }
-    const maxBlurMip = DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2;
     return gpuRandomAccessFriendly
-        ? { resolutionScale: 0.5, raysPerFrameScale: 0.5, bilinearPhotonDistribution: true, maxBlurMip }
-        : { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false, maxBlurMip };
+        ? { resolutionScale: 0.5, raysPerFrameScale: 0.5, bilinearPhotonDistribution: true, maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 1 }
+        : { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false, maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2 };
 }
 
 /**
@@ -202,6 +206,19 @@ export class SimulationResources {
 
     /** Live-editable copy of every denoiser threshold - see DenoiserTunables' own doc comment. */
     public denoiserTunables: DenoiserTunables = { ...DEFAULT_DENOISER_TUNABLES };
+
+    /**
+     * When false, run() skips generateEvidenceMips, filterVariance, and buildDenoiserQuadtree
+     * entirely (the deeper G-Buffer/combinedIrradiance mips, variance filtering, and the
+     * multi-level quadtree bake are only ever consulted by the guided blur below) and forces
+     * denoise's maxBlurMip uniform to 0 - see run()'s use of this flag for why that's sufficient
+     * on its own to make denoise.wgsl take its cheap centerIrradiance * albedo * density path for
+     * every pixel (decideBlurSize's result is `maxBlurMip * max(...)`, so maxBlurMip=0 collapses
+     * it to startMip=0 regardless of actual variance/luminance) without needing a separate
+     * shader switch. combinedIrradiance's mip0 (the mean(A,B) full-quality photon-traced image)
+     * is still always computed - it's the base render, not denoiser-only.
+     */
+    public denoiserEnabled = true;
 
     /** Per-half HDR conversion of photonBuffer, mip0 only - see ConvertPhotonIrradianceToHdrOperation. */
     private irradianceA: ComputedTexture | null = null;
@@ -577,26 +594,35 @@ export class SimulationResources {
             this.computeVarianceAndMips.execute(encoder);
         }
 
-        // Extend combinedIrradiance past mip2 (irradianceA/B have already served their purpose -
-        // the variance evidence was captured at mip2 above) and generate the G-Buffer's own mip
-        // chains - all evidence the eventual guided blur will want.
-        this.generateEvidenceMips(encoder, raytracedResources);
+        if (this.denoiserEnabled) {
+            // Extend combinedIrradiance past mip2 (irradianceA/B have already served their purpose
+            // - the variance evidence was captured at mip2 above) and generate the G-Buffer's own
+            // mip chains - all evidence the eventual guided blur will want.
+            this.generateEvidenceMips(encoder, raytracedResources);
 
-        // Bilateral-filter rawVariance using G-Buffer mip2 evidence (albedo similarity, luminance
-        // closeness) - structurally matches Unity's confirmed-live FilterVariance kernel.
-        const albedoMip2View = raytracedResources.getAlbedoMipView(2);
-        if (albedoMip2View) {
-            const mip2Width = Math.max(1, width >> 2);
-            const mip2Height = Math.max(1, height >> 2);
-            this.filterVariance.updateInputs(this.rawVariance.getMipView(0), albedoMip2View, this.combinedIrradiance.getMipView(2));
-            this.filterVariance.updateOutputs(this.filteredVariance.getMipView(0), mip2Width, mip2Height);
-            this.filterVariance.execute(encoder);
+            // Bilateral-filter rawVariance using G-Buffer mip2 evidence (albedo similarity,
+            // luminance closeness) - structurally matches Unity's confirmed-live FilterVariance
+            // kernel.
+            const albedoMip2View = raytracedResources.getAlbedoMipView(2);
+            if (albedoMip2View) {
+                const mip2Width = Math.max(1, width >> 2);
+                const mip2Height = Math.max(1, height >> 2);
+                this.filterVariance.updateInputs(this.rawVariance.getMipView(0), albedoMip2View, this.combinedIrradiance.getMipView(2));
+                this.filterVariance.updateOutputs(this.filteredVariance.getMipView(0), mip2Width, mip2Height);
+                this.filterVariance.execute(encoder);
+            }
+
+            // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - backs
+            // denoise.wgsl's real ShouldSplit(). Must run after filterVariance above (the
+            // irradiance-detail trigger gates on filteredVariance) and before denoise below. See
+            // build_denoiser_quadtree.wgsl.
+            this.buildDenoiserQuadtree(encoder, raytracedResources);
         }
-
-        // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - backs denoise.wgsl's
-        // real ShouldSplit(). Must run after filterVariance above (the irradiance-detail trigger
-        // gates on filteredVariance) and before denoise below. See build_denoiser_quadtree.wgsl.
-        this.buildDenoiserQuadtree(encoder, raytracedResources);
+        // When denoiserEnabled is false, none of the three passes above ran this frame, so
+        // filteredVariance/quadtreeMustSplit/the deeper G-Buffer & combinedIrradiance mips hold
+        // stale (or, on a fresh scene load, zero-initialized) data - harmless, since forcing
+        // maxBlurMip to 0 below makes denoise.wgsl take its startMip==0 fast path for every pixel,
+        // which never reads any of them for its output (see denoiserEnabled's own doc comment).
 
         // Hierarchical guided blur (see this project's denoiser plan). forceFullSplit is off -
         // ShouldSplit() now consults the baked quadtree above instead of always splitting to mip
@@ -604,7 +630,9 @@ export class SimulationResources {
         this.denoise.updateSwitches({ combineAlbedoDensity: true, forceFullSplit: false });
         // denoiserTunables has more fields than DenoiseUniforms needs (the quadtree-bake ones) -
         // structurally fine to pass straight through, see DenoiserTunables' own doc comment.
-        this.denoise.updateUniforms(this.denoiserTunables);
+        // maxBlurMip forced to 0 when disabled - see denoiserEnabled's doc comment for why that's
+        // sufficient to skip the blur entirely without a separate shader switch.
+        this.denoise.updateUniforms(this.denoiserEnabled ? this.denoiserTunables : { ...this.denoiserTunables, maxBlurMip: 0 });
         this.denoise.updateInputs(
             this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
             this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
