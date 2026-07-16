@@ -26,6 +26,11 @@ struct Uniforms {
     // 0 for every light, so two lights dispatched the same frame stomp/advance the same RNG state.
     // Giving each light a disjoint slice removes that correlation.
     seedBase: u32,
+    // 0 or 1 - which half of the two-way variance-estimation split (see this project's denoiser
+    // plan) this dispatch's rays accumulate into within the shared, interleaved-per-pixel photons
+    // buffer below. Occupies what would otherwise be layout padding (seedBase's vec2-aligned
+    // trailing gap), not a size increase - see ForwardMonteCarloOperation.updateUniforms.
+    halfIndex: u32,
     directionalLightDirection: vec2<f32>,
     // (pinch^2, atan(pinch^2)) - spot kind only, computed CPU-side exactly like Unity's g_lightPinch.
     lightPinch: vec2<f32>,
@@ -47,8 +52,11 @@ struct Uniforms {
 @group(1) @binding(6) var teardropScatteringLut: texture_2d<f32>;
 @group(1) @binding(7) var brdfLut: texture_3d<f32>;
 
-// photons: 3 consecutive atomic<u32> entries per pixel (R,G,B) - same layout
-// convert_photon_irradiance_to_hdr.wgsl reads. writeCounter: a 2-element manual uint64 (index 0 =
+// photons: 6 consecutive atomic<u32> entries per pixel - two interleaved 3-wide (R,G,B) halves,
+// this dispatch's own half selected by uniforms.halfIndex (see this project's denoiser plan: the
+// ray budget is split into two independent halves per light so their disagreement can be used as
+// a variance estimate) - same layout convert_photon_irradiance_to_hdr.wgsl reads. writeCounter: a
+// 2-element manual uint64 (index 0 =
 // low 32 bits, wrapping; index 1 = overflow/carry count) - a lifetime (never per-frame-cleared)
 // photon-writes counter, ported from Unity's g_write_counter/GetCurrentWriteCountAsync for a
 // portfolio-page "MWrites/s" display - see SimulationResources.getWriteCount.
@@ -303,7 +311,7 @@ fn writePhotonIndexed(pixel: vec2<i32>, energy: vec3<f32>, suppressPhoton: bool)
         return;
     }
 
-    let base = (u32(pixel.y) * u32(size.x) + u32(pixel.x)) * 3u;
+    let base = (u32(pixel.y) * u32(size.x) + u32(pixel.x)) * 6u + uniforms.halfIndex * 3u;
     atomicAdd(&photons[base], u32(energy.r));
     atomicAdd(&photons[base + 1u], u32(energy.g));
     atomicAdd(&photons[base + 2u], u32(energy.b));

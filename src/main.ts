@@ -6,6 +6,8 @@ import { CornellSquareScene } from './litbox/scenes/cornell_square_scene.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
 import { formatRate } from './litbox/performance_metrics.ts';
+import { getDenoiserTunablesPanel } from './denoiser_tunables_panel.ts';
+import { DEFAULT_DENOISER_TUNABLES, type DenoiserTunables } from './litbox/simulation.ts';
 import introMdText from './intro.md?raw';
 
 // Import markdown files as URLs. Vite will handle resolving these paths correctly
@@ -87,6 +89,7 @@ const viewContent = {
             <p>Bounce Depth: <input type="range" min="1" max="10" value="5" class="slider"></p>
             <p>Exposure: <input type="range" id="exposure-slider" min="-4" max="4" step="0.1" value="0" class="slider"></p>
             <p><label><input type="checkbox" id="tonemap-toggle" checked> Tone mapping</label></p>
+            <p><label><input type="checkbox" id="denoiser-toggle" checked> Denoising</label></p>
         `,
     },
     fractals: {
@@ -126,6 +129,30 @@ async function updateView(view: ViewKey) {
         } else {
             sidebarPane.innerHTML = content.sidebar;
         }
+        if (view === 'litbox') {
+            // Read live values (not baked into the static viewContent.litbox.sidebar string) so
+            // revisiting this view after adjusting a control shows what's actually running, not a
+            // reset to the markup's hardcoded defaults. Falls back to defaults if the scene hasn't
+            // finished loading yet. Bug fix: the exposure slider/tonemap-toggle/denoiser-toggle
+            // used to skip this and always come back showing their hardcoded markup state (e.g.
+            // "checked") even after being changed, since sidebarPane.innerHTML above regenerates
+            // them fresh from the static template every time.
+            const tunables = litboxRenderer?.getSimulationResources().denoiserTunables ?? DEFAULT_DENOISER_TUNABLES;
+            sidebarPane.insertAdjacentHTML('beforeend', getDenoiserTunablesPanel(tunables));
+
+            const exposureSlider = document.getElementById('exposure-slider') as HTMLInputElement | null;
+            if (exposureSlider) {
+                exposureSlider.value = String(litboxRenderer?.exposureOverride ?? 0);
+            }
+            const tonemapToggle = document.getElementById('tonemap-toggle') as HTMLInputElement | null;
+            if (tonemapToggle) {
+                tonemapToggle.checked = litboxRenderer?.tonemapEnabled ?? true;
+            }
+            const denoiserToggle = document.getElementById('denoiser-toggle') as HTMLInputElement | null;
+            if (denoiserToggle) {
+                denoiserToggle.checked = litboxRenderer?.getSimulationResources().denoiserEnabled ?? true;
+            }
+        }
     }
 
     // Show/hide main content
@@ -153,6 +180,27 @@ sidebarPane.addEventListener('input', (e: Event) => {
     const target = e.target as HTMLElement;
     if (target.id === 'exposure-slider' && litboxRenderer) {
         litboxRenderer.exposureOverride = parseFloat((target as HTMLInputElement).value);
+        return;
+    }
+
+    // Denoiser tunables panel (see denoiser_tunables_panel.ts): the slider and textbox in a row
+    // share the same data-param attribute (the DenoiserTunables key), differing only by class -
+    // one delegated handler for all of them instead of one id-based branch per parameter.
+    const param = target.dataset.param as keyof DenoiserTunables | undefined;
+    if (param && litboxRenderer) {
+        const value = parseFloat((target as HTMLInputElement).value);
+        if (Number.isNaN(value)) {
+            return;
+        }
+        litboxRenderer.getSimulationResources().denoiserTunables[param] = value;
+        // Keep the OTHER control in this row (slider <-> textbox) in sync with whichever one the
+        // user just edited.
+        const row = target.closest('.denoiser-param');
+        const pairedSelector = target.classList.contains('denoiser-param-slider') ? '.denoiser-param-number' : '.denoiser-param-slider';
+        const paired = row?.querySelector<HTMLInputElement>(pairedSelector);
+        if (paired) {
+            paired.value = String(value);
+        }
     }
 });
 
@@ -160,6 +208,8 @@ sidebarPane.addEventListener('change', (e: Event) => {
     const target = e.target as HTMLElement;
     if (target.id === 'tonemap-toggle' && litboxRenderer) {
         litboxRenderer.tonemapEnabled = (target as HTMLInputElement).checked;
+    } else if (target.id === 'denoiser-toggle' && litboxRenderer) {
+        litboxRenderer.getSimulationResources().denoiserEnabled = (target as HTMLInputElement).checked;
     }
 });
 

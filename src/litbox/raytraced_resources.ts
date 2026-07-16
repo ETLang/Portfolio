@@ -259,10 +259,18 @@ export class RaytracedResources {
         if (!resolution) {
             return;
         }
-        const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
-        this.albedoGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, ALBEDO_FORMAT, usage);
-        this.densityGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, DENSITY_FORMAT, usage);
-        this.normalRoughnessGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, NORMAL_ROUGHNESS_FORMAT, usage);
+        // Mip chains feed the denoiser's evidence gathering (this project's denoiser plan) - same
+        // level-count formula as SimulationResources' lightmap. Albedo/NormalRoughness get
+        // STORAGE_BINDING so MipDownsampleOperation can textureStore into their higher mips;
+        // Density (rg16float) can't - not a valid WGSL storage-texture format - so its mips are
+        // generated via a render-attachment blit instead (DensityMipBlitResources), for which
+        // RENDER_ATTACHMENT (already present below) is sufficient.
+        const mipLevelCount = Math.floor(Math.log2(Math.max(resolution.width, resolution.height))) + 1;
+        const storageUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING;
+        const renderOnlyUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
+        this.albedoGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, ALBEDO_FORMAT, storageUsage, mipLevelCount);
+        this.densityGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, DENSITY_FORMAT, renderOnlyUsage, mipLevelCount);
+        this.normalRoughnessGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, NORMAL_ROUGHNESS_FORMAT, storageUsage, mipLevelCount);
         this.hasGBufferTarget = true;
 
         this.objects = await Promise.all(scene.raytraced.map(entry => this.resolveRaytraced(entry, sceneGraph, textureCache, transformResources)));
@@ -291,12 +299,15 @@ export class RaytracedResources {
             return;
         }
 
+        // mip0 specifically, not the default .view - these targets now carry a full mip chain
+        // for the denoiser's evidence gathering (this project's denoiser plan), and a render-pass
+        // color attachment must be a single mip level.
         const pass = encoder.beginRenderPass({
             colorAttachments: [
-                { view: this.albedoGBuffer.view, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' },
+                { view: this.albedoGBuffer.getMipView(0), clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: 'clear', storeOp: 'store' },
                 // Additive identity (0), matching the density target's additive blend below.
-                { view: this.densityGBuffer.view, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
-                { view: this.normalRoughnessGBuffer.view, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+                { view: this.densityGBuffer.getMipView(0), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+                { view: this.normalRoughnessGBuffer.getMipView(0), clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
             ],
         });
         pass.setPipeline(this.pipeline);
@@ -476,6 +487,29 @@ export class RaytracedResources {
 
     public getNormalRoughnessView(): GPUTextureView | null {
         return this.normalRoughnessGBuffer?.view ?? null;
+    }
+
+    // --- G-Buffer mip-chain accessors, for the denoiser's evidence-gathering mip generation (see
+    // this project's denoiser plan) - SimulationResources drives the actual downsample loop
+    // (MipDownsampleOperation for Albedo/NormalRoughness, DensityMipBlitResources for Density),
+    // reading/writing these per-level views; RaytracedResources only owns producing mip0 each
+    // frame (renderGBuffer) and exposing the chain, not the downsample operations themselves.
+
+    /** Mip level count shared by all 3 G-Buffer textures (they're always sized/allocated together - see loadFromScene). */
+    public getGBufferMipLevelCount(): number {
+        return this.albedoGBuffer?.mipLevelCount ?? 0;
+    }
+
+    public getAlbedoMipView(level: number): GPUTextureView | null {
+        return this.albedoGBuffer?.getMipView(level) ?? null;
+    }
+
+    public getDensityMipView(level: number): GPUTextureView | null {
+        return this.densityGBuffer?.getMipView(level) ?? null;
+    }
+
+    public getNormalRoughnessMipView(level: number): GPUTextureView | null {
+        return this.normalRoughnessGBuffer?.getMipView(level) ?? null;
     }
 
     /**

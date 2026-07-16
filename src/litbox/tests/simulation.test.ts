@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getSimulationDeviceProfile, deriveEffectiveSimulation, computeMaxIntegrationSteps } from '../simulation.ts';
+import { getSimulationDeviceProfile, deriveEffectiveSimulation, computeMaxIntegrationSteps, DEFAULT_DENOISER_TUNABLES } from '../simulation.ts';
 import type { SceneSimulation } from '../scene.ts';
 
 const RAW_SIMULATION: SceneSimulation = {
@@ -17,11 +17,13 @@ describe('getSimulationDeviceProfile', () => {
             resolutionScale: 1,
             raysPerFrameScale: 1,
             bilinearPhotonDistribution: true,
+            maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip,
         });
         expect(getSimulationDeviceProfile('desktop', false)).toEqual({
             resolutionScale: 1,
             raysPerFrameScale: 1,
             bilinearPhotonDistribution: true,
+            maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip,
         });
     });
 
@@ -30,11 +32,13 @@ describe('getSimulationDeviceProfile', () => {
             resolutionScale: 0.5,
             raysPerFrameScale: 0.25,
             bilinearPhotonDistribution: false,
+            maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2,
         });
         expect(getSimulationDeviceProfile('ios', false)).toEqual({
             resolutionScale: 0.5,
             raysPerFrameScale: 0.25,
             bilinearPhotonDistribution: false,
+            maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2,
         });
     });
 
@@ -43,13 +47,19 @@ describe('getSimulationDeviceProfile', () => {
             resolutionScale: 0.5,
             raysPerFrameScale: 0.5,
             bilinearPhotonDistribution: true,
+            maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 1,
         });
+    });
+
+    it('reduces maxBlurMip by only 1 level (the resolution-parity correction) on mobile with a friendly GPU, but by 2 (parity + the PowerVR-divergent-traversal cut) on an unfriendly one', () => {
+        expect(getSimulationDeviceProfile('android', true).maxBlurMip).toBe(DEFAULT_DENOISER_TUNABLES.maxBlurMip - 1);
+        expect(getSimulationDeviceProfile('android', false).maxBlurMip).toBe(DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2);
     });
 });
 
 describe('deriveEffectiveSimulation', () => {
     it('leaves everything unchanged under the identity (desktop) profile', () => {
-        const effective = deriveEffectiveSimulation(RAW_SIMULATION, { resolutionScale: 1, raysPerFrameScale: 1, bilinearPhotonDistribution: true });
+        const effective = deriveEffectiveSimulation(RAW_SIMULATION, { resolutionScale: 1, raysPerFrameScale: 1, bilinearPhotonDistribution: true, maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip });
         expect(effective.width).toBe(512);
         expect(effective.height).toBe(512);
         expect(effective.raysPerFrame).toBe(100000);
@@ -57,7 +67,7 @@ describe('deriveEffectiveSimulation', () => {
     });
 
     it('scales width/height/raysPerFrame by the profile, rounding and flooring at 1', () => {
-        const effective = deriveEffectiveSimulation(RAW_SIMULATION, { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false });
+        const effective = deriveEffectiveSimulation(RAW_SIMULATION, { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false, maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2 });
         expect(effective.width).toBe(256);
         expect(effective.height).toBe(256);
         expect(effective.raysPerFrame).toBe(25000);
@@ -65,7 +75,7 @@ describe('deriveEffectiveSimulation', () => {
 
     it('never scales a dimension or ray count down to 0', () => {
         const tiny: SceneSimulation = { ...RAW_SIMULATION, width: 1, height: 1, raysPerFrame: 1 };
-        const effective = deriveEffectiveSimulation(tiny, { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false });
+        const effective = deriveEffectiveSimulation(tiny, { resolutionScale: 0.5, raysPerFrameScale: 0.25, bilinearPhotonDistribution: false, maxBlurMip: DEFAULT_DENOISER_TUNABLES.maxBlurMip - 2 });
         expect(effective.width).toBeGreaterThanOrEqual(1);
         expect(effective.height).toBeGreaterThanOrEqual(1);
         expect(effective.raysPerFrame).toBeGreaterThanOrEqual(1);

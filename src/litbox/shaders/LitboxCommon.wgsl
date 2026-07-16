@@ -5,6 +5,26 @@
 // this scale.
 const DENSITY_SCALE: f32 = 8192.0;
 
+// Shared by filter_variance.wgsl (bilateral variance filtering) and denoise.wgsl (darkness
+// evidence + the guided blur's radiance-similarity term) - see this project's denoiser plan.
+const LUMINANCE_WEIGHTS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
+
+fn luminance(rgb: vec3<f32>) -> f32 {
+    return dot(rgb, LUMINANCE_WEIGHTS);
+}
+
+fn gaussianWeight(x: f32, sigma: f32) -> f32 {
+    return exp(-(x * x) / (2.0 * sigma * sigma));
+}
+
+// (1 - transmittance) -> optical depth (-log(transmittance)), used wherever density needs a
+// perceptually-linear similarity metric instead of comparing the raw [0,1] coverage value - e.g.
+// denoise.wgsl's guided-blur structural weight. densityValue is the already-descaled ([0,1])
+// value (raw G-Buffer density / DENSITY_SCALE), not the raw scaled texel.
+fn opticalDepth(densityValue: f32) -> f32 {
+    return -log(max(1e-6, 1.0 - densityValue));
+}
+
 // Deliberately not array-indexed: some mobile GPU drivers (confirmed on a Pixel 10 Pro, both
 // Chrome and Brave) silently corrupt geometry when a fullscreen quad's positions come from a
 // WGSL array indexed by vertex_index. Branching instead of indexing works around it - see this
