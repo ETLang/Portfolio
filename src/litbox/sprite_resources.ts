@@ -323,7 +323,19 @@ export class SpriteResources {
         if (!resolved) {
             return;
         }
+        // propertiesArray.markDynamic can relocate up to two entries: resolved's own (moving to
+        // the dynamic region) and whichever sprite currently occupies the last static slot
+        // (displaced to make the dynamic region contiguous - see PackedUniformArray.markDynamic).
+        // Every sprite's spriteIndices entry holds a *snapshot* of its propertiesEntry.index taken
+        // by rebuildDrawOrder - so either relocation leaves that snapshot stale (pointing at
+        // whatever now occupies the old slot) until the index buffer is rederived. Only do this
+        // on an actual (first-time) transition, so per-frame calls on an already-dynamic sprite
+        // (the common case - see LitboxSceneRenderer.applyDynamicSceneUpdates) stay a cheap no-op.
+        const wasStatic = resolved.propertiesEntry.index < this.propertiesArray.getStaticCount();
         this.propertiesArray.markDynamic(resolved.propertiesEntry);
+        if (wasStatic) {
+            this.rebuildDrawOrder();
+        }
     }
 
     public flush(): void {

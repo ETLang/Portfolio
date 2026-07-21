@@ -2,12 +2,13 @@ import './style.css';
 import { marked } from 'marked';
 import { ModalDialog } from './modal-dialog.ts';
 import { LitboxSceneRenderer } from './litbox_scene_renderer.ts';
-import { CornellSquareScene } from './litbox/scenes/cornell_square_scene.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
 import { formatRate } from './litbox/performance_metrics.ts';
 import { getDenoiserTunablesPanel } from './denoiser_tunables_panel.ts';
+import { getScenePropertiesPanel } from './scene_properties_panel.ts';
 import { DEFAULT_DENOISER_TUNABLES, type DenoiserTunables } from './litbox/simulation.ts';
+import { SCENE_REGISTRY, DEFAULT_SCENE_KEY } from './litbox_scene_registry.ts';
 import introMdText from './intro.md?raw';
 
 // Import markdown files as URLs. Vite will handle resolving these paths correctly
@@ -77,6 +78,16 @@ if (consoleContainer) {
 }
 
 
+// --- SCENE SELECTION ---
+// Key into SCENE_REGISTRY for whichever scene is currently loaded - kept in sync by the
+// scene-select 'change' handler below, so revisiting the litbox view (which regenerates
+// sidebarPane.innerHTML from scratch) can restore the dropdown's selection.
+let activeSceneKey: string = DEFAULT_SCENE_KEY;
+
+const sceneSelectOptions = Object.entries(SCENE_REGISTRY)
+    .map(([key, { label }]) => `<option value="${key}">${label}</option>`)
+    .join('');
+
 // --- VIEW DATA MODEL ---
 const viewContent = {
     intro: {
@@ -85,6 +96,13 @@ const viewContent = {
     litbox: {
         sidebar: `
             <h3>Litbox Config</h3>
+            <div class="litbox-config">
+                <div class="litbox-config-row">
+                    <label for="scene-select">Scene</label>
+                    <select id="scene-select" class="scene-select">${sceneSelectOptions}</select>
+                </div>
+            </div>
+            <div id="scene-properties-container"></div>
             <div class="litbox-config">
                 <div class="litbox-config-row">
                     <label for="rays-per-pixel-slider">Rays/Pixel</label>
@@ -170,6 +188,15 @@ async function updateView(view: ViewKey) {
             const tunables = litboxRenderer?.getSimulationResources().denoiserTunables ?? DEFAULT_DENOISER_TUNABLES;
             sidebarPane.insertAdjacentHTML('beforeend', getDenoiserTunablesPanel(tunables));
 
+            const sceneSelect = document.getElementById('scene-select') as HTMLSelectElement | null;
+            if (sceneSelect) {
+                sceneSelect.value = activeSceneKey;
+            }
+            const scenePropertiesContainer = document.getElementById('scene-properties-container');
+            if (scenePropertiesContainer) {
+                scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer?.getActiveScene() ?? null);
+            }
+
             const exposureValue = String(litboxRenderer?.exposureOverride ?? 0);
             sidebarPane.querySelectorAll<HTMLInputElement>('[data-litbox-param="exposure"]').forEach(el => {
                 el.value = exposureValue;
@@ -249,15 +276,54 @@ sidebarPane.addEventListener('input', (e: Event) => {
         if (paired) {
             paired.value = String(value);
         }
+        return;
+    }
+
+    // Scene Properties panel (see scene_properties_panel.ts): the slider and textbox in a row
+    // share the same data-scene-slider-index attribute (the slider's index into
+    // scene.getSliders()) - same pairing convention as the two panels above.
+    const sceneSliderIndexAttr = target.dataset.sceneSliderIndex;
+    if (sceneSliderIndexAttr !== undefined) {
+        const activeScene = litboxRenderer?.getActiveScene();
+        const index = parseInt(sceneSliderIndexAttr, 10);
+        const value = parseFloat((target as HTMLInputElement).value);
+        if (Number.isNaN(value) || !activeScene) {
+            return;
+        }
+        const slider = activeScene.getSliders()[index];
+        if (slider) {
+            slider.setValue(value);
+        }
+        const row = target.closest('.scene-param');
+        const pairedSelector = target.classList.contains('scene-param-slider') ? '.scene-param-number' : '.scene-param-slider';
+        const paired = row?.querySelector<HTMLInputElement>(pairedSelector);
+        if (paired) {
+            paired.value = String(value);
+        }
     }
 });
 
-sidebarPane.addEventListener('change', (e: Event) => {
+sidebarPane.addEventListener('change', async (e: Event) => {
     const target = e.target as HTMLElement;
     if (target.id === 'tonemap-toggle' && litboxRenderer) {
         litboxRenderer.tonemapEnabled = (target as HTMLInputElement).checked;
     } else if (target.id === 'denoiser-toggle' && litboxRenderer) {
         litboxRenderer.getSimulationResources().denoiserEnabled = (target as HTMLInputElement).checked;
+    } else if (target.id === 'scene-select' && litboxRenderer) {
+        const key = (target as HTMLSelectElement).value;
+        const entry = SCENE_REGISTRY[key];
+        if (!entry) {
+            return;
+        }
+        activeSceneKey = key;
+        const scene = await entry.load();
+        await litboxRenderer.setScene(scene);
+        // The newly-loaded scene has its own slider set (and its own live values), so the panel
+        // needs regenerating rather than just re-reading the same controls in place.
+        const scenePropertiesContainer = document.getElementById('scene-properties-container');
+        if (scenePropertiesContainer) {
+            scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer.getActiveScene());
+        }
     }
 });
 
@@ -311,7 +377,7 @@ if (canvas) {
     });
     resizeObserver.observe(appContainer);
 
-    CornellSquareScene.load()
+    SCENE_REGISTRY[DEFAULT_SCENE_KEY].load()
         .then(scene => renderer.setScene(scene))
         .then(() => renderer.start())
         .then(() => {
