@@ -61,12 +61,15 @@ fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(hdrTex, hdrSampler, in.uv).rgb;
     if (tonemapUniform.enabled < 0.5) {
-        return vec4<f32>(hdr, 1.0);
+        return vec4<f32>(linearToSrgb(hdr), 1.0);
     }
     var shape = toneMapDefaultShape();
     shape.exposure = tonemapUniform.exposure;
     shape.whitePoint = tonemapUniform.whitePointLog;
     shape.blackPoint = tonemapUniform.blackPointLog;
     let mapped = toneMapUE5(hdr, shape);
-    return vec4<f32>(mapped, 1.0);
+    // mapped is linear (the smoothstep curve, not a display transform on its own) - gamma-encode
+    // before writing, since the swapchain's presentation format is never an "-srgb" variant (see
+    // linearToSrgb's doc comment in LitboxCommon.wgsl).
+    return vec4<f32>(linearToSrgb(mapped), 1.0);
 }
