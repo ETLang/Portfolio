@@ -62,3 +62,12 @@ drivers: WGSL dynamic-indexing corruption, and `copyExternalImageToTexture` sile
 texture black on Android. A clean screenshot from this skill says nothing about either - real
 device testing (see the CDP-over-adb mobile debugging setup) is still required before trusting a
 shader or texture-upload change on mobile.
+
+**This skill cannot run in a headless cloud/CI environment - do not attempt it from a `remote`
+agent sandbox, GitHub Actions, or similar.** It needs a real GPU plus a working WebGPU-capable
+browser on the host machine. The `msedge` workaround above only helped because this machine
+already has real GPU hardware and drivers - Playwright's own Chromium build was the broken part,
+not the hardware. A standard cloud VM has no GPU device at all (no `/dev/dri`, no vendor driver),
+so `navigator.gpu.requestAdapter()` returns `null` unconditionally in every browser there - there
+is no "try a different browser" fix for missing hardware. Only attempt this on a machine known to
+have a real GPU and a browser already validated against it (see the probe history above).
