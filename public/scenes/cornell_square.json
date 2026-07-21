@@ -759,7 +759,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "rect"
         },
         {
             "ownerId": -5364,
@@ -792,7 +792,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "rect"
         },
         {
             "ownerId": 42894,
@@ -825,7 +825,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "rect"
         },
         {
             "ownerId": -5344,
@@ -858,7 +858,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "ellipse"
         },
         {
             "ownerId": 42892,
@@ -891,7 +891,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "rect"
         },
         {
             "ownerId": 42890,
@@ -924,7 +924,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "rect"
         },
         {
             "ownerId": 42896,
@@ -957,7 +957,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "rect"
         },
         {
             "ownerId": -5322,
@@ -990,7 +990,7 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "rect"
         }
     ],
     "pointLights": [],

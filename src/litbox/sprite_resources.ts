@@ -290,7 +290,7 @@ export class SpriteResources {
         if (!resolved) {
             return;
         }
-        const shapeId = this.resolveShapeId(sprite);
+        const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
         this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
 
         const targetImage = sprite.image;
@@ -347,7 +347,7 @@ export class SpriteResources {
     private async resolveSprite(sprite: SceneSprite, sceneGraph: SceneGraph, textureCache: TextureCache, transformResources: TransformResources): Promise<ResolvedSprite> {
         const isActive = sceneGraph.isActiveInHierarchy(sprite.ownerId);
         const { texture, uvTransform } = await textureCache.resolve(sprite.image, 'white');
-        const shapeId = this.resolveShapeId(sprite);
+        const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
 
         const transformEntry = transformResources.ensureEntry(sprite.ownerId, sceneGraph);
         const propertiesEntry = this.propertiesArray.insertStatic((view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
@@ -447,10 +447,6 @@ export class SpriteResources {
             ],
         });
         this.sharedBindGroupDirty = false;
-    }
-
-    private resolveShapeId(sprite: SceneSprite): number {
-        return resolvePrimitiveShapeId(sprite.primitiveShape, sprite.ownerId);
     }
 }
 

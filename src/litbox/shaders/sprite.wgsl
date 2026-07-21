@@ -124,12 +124,13 @@ fn vertex_main(@builtin(instance_index) instanceIndex: u32, @location(0) localPo
 // ellipse (2) needs an actual mask here, to approximate a circular sprite without a
 // separate mesh; unspecified (0) and rect (1) both render the full quad, matching the
 // reference's behavior.
-fn shapeAlpha(shapeId: u32, uv: vec2<f32>) -> f32 {
+fn insideShape(shapeId: u32, uv: vec2<f32>) -> bool {
     if (shapeId == 2u) {
-        let centered = (uv - vec2<f32>(0.5, 0.5)) * 2.0;
-        return select(0.0, 1.0, length(centered) <= 1.0);
+        discard;
+        let centered = (uv - vec2<f32>(0.5, 0.5));
+        return dot(centered, centered) <= 0.25;
     }
-    return 1.0;
+    return true;
 }
 
 @fragment
@@ -160,6 +161,7 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
     color = color + props.emissive;
     color = color * props.opacity;
 
-    let alpha = clamp(shapeAlpha(props.primitiveShapeId, in.uv) * color.a, 0.0, 1.0);
+    let inside = insideShape(props.primitiveShapeId, in.uv);
+    let alpha = select(0.0, clamp(color.a, 0.0, 1.0), inside);
     return vec4<f32>(color.rgb, alpha);
 }
