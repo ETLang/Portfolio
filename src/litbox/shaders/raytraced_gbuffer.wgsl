@@ -158,9 +158,19 @@ fn fragment_main(in: VertexOutput) -> GBufferOutput {
     let t = pow(imageTransmissibility, 100.0 / camera.targetHeightPixels);
     let scaledDensity = (1.0 - t) * DENSITY_SCALE;
 
+    // Y-flipped to match simulation-target-pixel-space (see forward_monte_carlo.ts's
+    // computeWorldToTargetPixels yFlip), not left as raw world space: this is a direction, not a
+    // position, so it isn't corrected by the position-space yFlip baked into the G-buffer's own
+    // viewProjection/lightToTarget transforms. World +Y (up) is pixel-space -Y (since pixel/UV
+    // space is top-down), so forward_monte_carlo.wgsl's scatterMaterially - which dots and
+    // reflects this normal against photon directions that live entirely in pixel space - would
+    // otherwise silently reflect/transmit photons across the wrong side of every non-horizontal
+    // surface. Unity's original never needed this flip because its pixel space was already
+    // Y-up, matching world space with no flip at all.
+    let normal = in.worldNormalUnscaled * props.heightScale;
     var out: GBufferOutput;
     out.albedo = vec4<f32>(c.rgb * props.albedo.rgb, 1.0) * c.a * props.albedo.a;
     out.density = vec4<f32>(scaledDensity, scaledDensity, 0.0, 0.0);
-    out.normalRoughness = vec4<f32>(in.worldNormalUnscaled * props.heightScale, props.particleAlignment);
+    out.normalRoughness = vec4<f32>(normal.x, -normal.y, normal.z, props.particleAlignment);
     return out;
 }
