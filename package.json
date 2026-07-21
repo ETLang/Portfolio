@@ -12,6 +12,7 @@
   "devDependencies": {
     "@types/marked": "^5.0.2",
     "@webgpu/types": "^0.1.71",
+    "playwright": "^1.61.1",
     "typescript": "~6.0.2",
     "vite": "^8.1.0",
     "vite-plugin-mkcert": "^1.17.1",
