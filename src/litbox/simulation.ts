@@ -150,7 +150,7 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     sigmaLuminanceLoose: 2.5,
     kLuminance: 2.0,
     // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
-    // doc comment for the node-relative-texels normalization this is measured in.
+    // doc comment for the seed-relative-texels normalization this is measured in.
     maxSplitDistance: 2.0,
     albedoLuminanceThreshold: 0.1,
     albedoChromaThreshold: 0.2,
