@@ -12,13 +12,19 @@ on a clean typecheck/build.
 ## How to run it
 
 ```
-node .claude/skills/screenshot-litbox/screenshot.mjs --out <absolute-path.png> [--scene <key>] [--settle-ms 5000] [--width 1280] [--height 800]
+node .claude/skills/screenshot-litbox/screenshot.mjs [--scene <key>] [--settle-ms 5000] [--width 1280] [--height 800] [--out <path.png>]
 ```
 
-- `--out` is required. **Use a native Windows path (`C:\...`), not a Git-Bash-style path
-  (`/c/...`)** - the script runs as a plain Windows Node process, so a `/c/...` path gets
-  reinterpreted as a relative path (`.\c\...`) instead of erroring, which silently writes the
-  screenshot to the wrong place. Prefer the scratchpad directory for the output path.
+Normal usage takes **no arguments at all** (or just `--scene`). Every argument is optional.
+
+- The screenshot always lands at `.claude/skills/screenshot-litbox/output/render.png` unless
+  `--out` overrides it - a fixed path, overwritten on every run, not a fresh path per invocation.
+  Read that file after each run rather than round-tripping the JSON `out` field into a `--out` you
+  pick yourself. See "Why the output path is fixed" below for why this matters.
+- `--out`, if you do need a custom location, must be a native Windows path (`C:\...`), not a
+  Git-Bash-style path (`/c/...`) - the script runs as a plain Windows Node process, so a `/c/...`
+  path gets reinterpreted as a relative path (`.\c\...`) instead of erroring, which silently
+  writes the screenshot to the wrong place.
 - `--scene` is optional and must be a key from `SCENE_REGISTRY` in
   [litbox_scene_registry.ts](../../../src/litbox_scene_registry.ts). Omit it to just screenshot
   whatever the default scene renders. When given, the script clicks the "Litbox" nav button and
@@ -35,6 +41,17 @@ useful early check (a black canvas + console errors is over-determined), but a b
 no console errors at all* is exactly the kind of failure this project has hit before (see
 CLAUDE.md's WebGPU JS-API gotchas) - only the image itself tells you if it actually rendered the
 scene.
+
+## Why the output path is fixed
+
+The output path used to be a required `--out <path>` argument, generated fresh each run (e.g. a
+session-specific scratchpad path). That meant the shell command line was different every time,
+which made it impossible to pre-approve this command once in permission settings - every run
+needed a fresh approval. Defaulting to a fixed, always-overwritten path instead means the same
+literal command (`node .claude/skills/screenshot-litbox/screenshot.mjs`, optionally with
+`--scene`) is used on every invocation, which *can* be allowlisted once. `--out` still exists for
+the rare case a caller wants to keep more than one screenshot around, but reach for the default
+first.
 
 ## Why this drives Edge, not Playwright's own Chromium
 

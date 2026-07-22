@@ -4,9 +4,16 @@
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+
+// Fixed, always-overwritten default location (not a caller-supplied path) so the invocation is
+// identical on every run - see SKILL.md's "Why the output path is fixed" for why that matters.
+const DEFAULT_OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'output', 'render.png');
 
 function parseArgs(argv) {
-    const args = { settleMs: 5000, width: 1280, height: 800 };
+    const args = { settleMs: 5000, width: 1280, height: 800, out: DEFAULT_OUT };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--scene') args.scene = argv[++i];
@@ -16,7 +23,6 @@ function parseArgs(argv) {
         else if (a === '--height') args.height = Number(argv[++i]);
         else throw new Error(`Unknown argument: ${a}`);
     }
-    if (!args.out) throw new Error('--out <path> is required (use an absolute Windows-style path, e.g. C:\\...)');
     return args;
 }
 
@@ -91,6 +97,7 @@ async function main() {
             }
 
             await sleep(args.settleMs);
+            mkdirSync(path.dirname(args.out), { recursive: true });
             await page.locator('canvas').screenshot({ path: args.out });
 
             console.log(JSON.stringify({ ok: true, out: args.out, consoleIssues }));
