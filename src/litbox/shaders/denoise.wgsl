@@ -134,7 +134,7 @@ fn decideBlurSize(centerVariance: f32, localLuminance: f32) -> f32 {
 // supposed to ("will decideWeight care about this branch at all"), instead of one that happens to
 // answer "has this branch split more than ~log2(maxSplitDistance) times," which is a different
 // question that doesn't track real relevance.
-fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, seedTexelSize: vec2<f32>) -> bool {
+fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, texelSize: vec2<f32>) -> bool {
 #ifdef FORCE_FULL_SPLIT
     return mip > 0;
 #else
@@ -142,8 +142,11 @@ fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, seedTexelSize: vec2<
         return false;
     }
 
-    let distanceInSeedTexels = length(uv - queryUv) / max(seedTexelSize.x, seedTexelSize.y);
-    if (distanceInSeedTexels > uniforms.maxSplitDistance) {
+    // The split distance condition scales with the texel size of each mip level.
+    // This is by design and works quite nicely.
+    let nodeTexelSize = texelSize * f32(1u << u32(mip));
+    let distanceInNodeTexels = length(uv - queryUv) / max(nodeTexelSize.x, nodeTexelSize.y);
+    if (distanceInNodeTexels > uniforms.maxSplitDistance) {
         return false;
     }
 
@@ -293,7 +296,7 @@ fn main(
         let depth = startMip - current.mip;
         let nodeSize = pow(0.25, f32(depth));
 
-        if (shouldSplit(current.uv, current.mip, uv, seedTexelSize) && stackCount + 4u <= STACK_SIZE) {
+        if (shouldSplit(current.uv, current.mip, uv, texelSize) && stackCount + 4u <= STACK_SIZE) {
             let childMip = current.mip - 1;
             let childTexelSize = texelSize * f32(1u << u32(childMip));
             stack[stackCount]      = TreeSampleNode(current.uv + vec2<f32>(-0.5, -0.5) * childTexelSize, childMip);
