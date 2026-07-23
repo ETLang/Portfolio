@@ -60,14 +60,6 @@ struct DenoiseUniforms {
 
 const SEED_RADIUS: i32 = 1; // 3x3 seed neighborhood at the chosen starting mip.
 
-// Cheap per-pixel hash (Hash without Sine, David Hoskins) backing the seed-placement jitter below -
-// see seedJitter's own doc comment for why this exists.
-fn hash2(p: vec2<f32>) -> vec2<f32> {
-    var p3 = fract(vec3<f32>(p.xyx) * vec3<f32>(0.1031, 0.1030, 0.0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xx + p3.yz) * p3.zy);
-}
-
 // See this project's denoiser plan for the derivation: sized to survive Phase 1's forced-full-
 // split worst case (every one of the 9 seeds fully descending from maxBlurMip to mip 0 in a
 // depth-first push-4/pop-1 traversal), not copied from the Unity reference's arbitrary 64.
@@ -77,18 +69,6 @@ struct TreeSampleNode {
     uv: vec2<f32>,
     mip: i32,
 }
-
-// PERF EXPERIMENT (mobile occupancy floor): this used to be a THREAD_COUNT*STACK_SIZE
-// var<workgroup> array with a per-thread stackBase slice, to route around CLAUDE.md's documented
-// WGSL indexing bug. That bug is specifically about dynamically indexing a *literal*-initialized
-// local array (`var x = array<T, N>(...); x[runtimeIndex]`) - this is a plain, uninitialized local
-// declaration (no array(...) constructor), a different WGSL construct, so it's not expected to hit
-// that lowering bug. Trying function-local here because the workgroup-shared version reserved
-// THREAD_COUNT*STACK_SIZE*16 bytes of shared memory per workgroup unconditionally (whether or not
-// any thread's traversal used it), which likely capped resident-workgroup occupancy on this GPU
-// regardless of actual per-pixel work - see this project's denoiser plan / mobile-perf-tuning
-// notes. STILL NEEDS REAL-HARDWARE CORRECTNESS VERIFICATION per CLAUDE.md - the known bug produces
-// silent output corruption, not a validation error or crash, so a clean run isn't proof by itself.
 
 // Evidence available: filteredVariance (relative-variance, quarter res) and combinedIrradiance's
 // own mip chain (already box-filtered, so a coarse mip IS the local mean - no separate blur pass
@@ -288,7 +268,7 @@ fn main(
     // collide adjacent pixels' hash inputs and undo the spatial decorrelation this jitter exists
     // for in the first place.
     let temporalOffset = vec2<f32>(uniforms.frameIndex * 37.0, uniforms.frameIndex * 17.0);
-    let seedJitter = (hash2(vec2<f32>(coords) + temporalOffset) - 0.5) * seedTexelSize;
+    let seedJitter = (hash22(vec2<f32>(coords) + temporalOffset) - 0.5) * seedTexelSize;
     var stack: array<TreeSampleNode, STACK_SIZE>;
     var stackCount: u32 = 0u;
 

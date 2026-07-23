@@ -59,3 +59,162 @@ fn randomNextDirection(rand: ptr<function, Random>) -> vec2<f32> {
 fn randomNextCircle(rand: ptr<function, Random>) -> vec2<f32> {
     return randomNextDirection(rand) * sqrt(randomNext(rand));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Ported from David Hoskin's integer-hash family. Created by David Hoskins, May 2018.
+// https://www.shadertoy.com/view/XdGfRR
+// Licensed under Creative Commons Attribution-ShareAlike 4.0 International
+// (https://creativecommons.org/licenses/by-sa/4.0/).
+//
+// Naming: hash(out)(in), e.g. hash23 takes 2 inputs and produces a 3-component output. The
+// original GLSL overloads each name for both a uint/uvec seed and a float/vec seed, but WGSL has
+// no function overloading, so the uint/uvec overload here is suffixed "U" (e.g. hash12U) and the
+// float/vec overload keeps the bare name (e.g. hash12) - otherwise this is a direct, unmodified
+// port, including hash12's odd `/ 0xffffffffu` divisor (every other function normalizes with the
+// `2.328306437080797e-10` constant instead) and hash44(vec4)'s vec3 return that silently drops
+// the w channel - both quirks are present in the original source, kept here for fidelity.
+//---------------------------------------------------------------------------------------------------------------
+fn hash11U(qIn: u32) -> f32 {
+    let n = qIn * vec2<u32>(1597334673u, 3812015801u);
+    let q = (n.x ^ n.y) * 1597334673u;
+    return f32(q) * 2.328306437080797e-10;
+}
+
+fn hash11(p: f32) -> f32 {
+    let n = u32(i32(p)) * vec2<u32>(1597334673u, 3812015801u);
+    let q = (n.x ^ n.y) * 1597334673u;
+    return f32(q) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash12U(qIn: vec2<u32>) -> f32 {
+    let q = qIn * vec2<u32>(1597334673u, 3812015801u);
+    let n = (q.x ^ q.y) * 1597334673u;
+    return f32(n) / f32(0xffffffffu);
+}
+
+fn hash12(p: vec2<f32>) -> f32 {
+    let q = vec2<u32>(vec2<i32>(p)) * vec2<u32>(1597334673u, 3812015801u);
+    let n = (q.x ^ q.y) * 1597334673u;
+    return f32(n) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash13U(qIn: vec3<u32>) -> f32 {
+    let q = qIn * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    let n = (q.x ^ q.y ^ q.z) * 1597334673u;
+    return f32(n) * 2.328306437080797e-10;
+}
+
+fn hash13(p: vec3<f32>) -> f32 {
+    let q = vec3<u32>(vec3<i32>(p)) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    let n = (q.x ^ q.y ^ q.z) * 1597334673u;
+    return f32(n) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash14U(qIn: vec4<u32>) -> f32 {
+    let q = qIn * vec4<u32>(1597334673u, 3812015801u, 2798796415u, 1979697957u);
+    let n = (q.x ^ q.y ^ q.z ^ q.w) * 1597334673u;
+    return f32(n) * 2.328306437080797e-10;
+}
+
+fn hash14(p: vec4<f32>) -> f32 {
+    let q = vec4<u32>(vec4<i32>(p)) * vec4<u32>(1597334673u, 3812015801u, 2798796415u, 1979697957u);
+    let n = (q.x ^ q.y ^ q.z ^ q.w) * 1597334673u;
+    return f32(n) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash21U(qIn: u32) -> vec2<f32> {
+    var n = qIn * vec2<u32>(1597334673u, 3812015801u);
+    n = (n.x ^ n.y) * vec2<u32>(1597334673u, 3812015801u);
+    return vec2<f32>(n) * 2.328306437080797e-10;
+}
+
+fn hash21(p: f32) -> vec2<f32> {
+    var n = u32(i32(p)) * vec2<u32>(1597334673u, 3812015801u);
+    n = (n.x ^ n.y) * vec2<u32>(1597334673u, 3812015801u);
+    return vec2<f32>(n) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash22U(qIn: vec2<u32>) -> vec2<f32> {
+    var q = qIn * vec2<u32>(1597334673u, 3812015801u);
+    q = (q.x ^ q.y) * vec2<u32>(1597334673u, 3812015801u);
+    return vec2<f32>(q) * 2.328306437080797e-10;
+}
+
+fn hash22(p: vec2<f32>) -> vec2<f32> {
+    var q = vec2<u32>(vec2<i32>(p)) * vec2<u32>(1597334673u, 3812015801u);
+    q = (q.x ^ q.y) * vec2<u32>(1597334673u, 3812015801u);
+    return vec2<f32>(q) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash23U(qIn: vec3<u32>) -> vec2<f32> {
+    let q = qIn * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    let n = (q.x ^ q.y ^ q.z) * vec2<u32>(1597334673u, 3812015801u);
+    return vec2<f32>(n) * 2.328306437080797e-10;
+}
+
+fn hash23(p: vec3<f32>) -> vec2<f32> {
+    let q = vec3<u32>(vec3<i32>(p)) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    let n = (q.x ^ q.y ^ q.z) * vec2<u32>(1597334673u, 3812015801u);
+    return vec2<f32>(n) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash31U(qIn: u32) -> vec3<f32> {
+    var n = qIn * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    n = (n.x ^ n.y ^ n.z) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    return vec3<f32>(n) * 2.328306437080797e-10;
+}
+
+fn hash31(p: f32) -> vec3<f32> {
+    var n = u32(i32(p)) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    n = (n.x ^ n.y ^ n.z) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    return vec3<f32>(n) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash32U(qIn: vec2<u32>) -> vec3<f32> {
+    var n = qIn.xyx * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    n = (n.x ^ n.y ^ n.z) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    return vec3<f32>(n) * 2.328306437080797e-10;
+}
+
+fn hash32(q: vec2<f32>) -> vec3<f32> {
+    var n = vec3<u32>(vec3<i32>(q.xyx)) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    n = (n.x ^ n.y ^ n.z) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    return vec3<f32>(n) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash33U(qIn: vec3<u32>) -> vec3<f32> {
+    var q = qIn * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    q = (q.x ^ q.y ^ q.z) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    return vec3<f32>(q) * 2.328306437080797e-10;
+}
+
+fn hash33(p: vec3<f32>) -> vec3<f32> {
+    var q = vec3<u32>(vec3<i32>(p)) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    q = (q.x ^ q.y ^ q.z) * vec3<u32>(1597334673u, 3812015801u, 2798796415u);
+    return vec3<f32>(q) * 2.328306437080797e-10;
+}
+
+//---------------------------------------------------------------------------------------------------------------
+fn hash44U(qIn: vec4<u32>) -> vec4<f32> {
+    var q = qIn * vec4<u32>(1597334673u, 3812015801u, 2798796415u, 1979697957u);
+    q = (q.x ^ q.y ^ q.z ^ q.w) * vec4<u32>(1597334673u, 3812015801u, 2798796415u, 1979697957u);
+    return vec4<f32>(q) * 2.328306437080797e-10;
+}
+
+// NOTE: returns vec3, not vec4 - matches the original source exactly, which drops the w channel
+// here (the uint4 overload above returns the full vec4).
+fn hash44(p: vec4<f32>) -> vec3<f32> {
+    var q = vec4<u32>(vec4<i32>(p)) * vec4<u32>(1597334673u, 3812015801u, 2798796415u, 1979697957u);
+    q = (q.x ^ q.y ^ q.z ^ q.w) * vec4<u32>(1597334673u, 3812015801u, 2798796415u, 1979697957u);
+    return vec3<f32>(q.xyz) * 2.328306437080797e-10;
+}
+ 
