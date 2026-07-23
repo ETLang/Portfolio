@@ -12,6 +12,7 @@ import { DensityMipBlitResources } from './density_mip_blit.ts';
 import { ComputeVarianceAndMipsOperation } from './compute_variance_and_mips.ts';
 import { FilterVarianceOperation } from './filter_variance.ts';
 import { DenoiseOperation } from './denoise_operation.ts';
+import { DitherFilterOperation } from './dither_filter.ts';
 import { ComputeVolatilityOperation } from './compute_volatility.ts';
 import { BuildDenoiserQuadtreeOperation } from './build_denoiser_quadtree.ts';
 import {
@@ -246,6 +247,9 @@ export class SimulationResources {
     private rawVariance: ComputedTexture | null = null;
     private filteredVariance: ComputedTexture | null = null;
 
+    /** DenoiseOperation's output when DitherFilterOperation is about to run over it (see run()'s use of this) - the not-yet-final, jittery denoised image, full G-Buffer resolution, single mip. DitherFilterOperation reads this and writes lightmap's mip0 directly, so no copy is ever needed to get the real final image into lightmap. */
+    private denoiseScratch: ComputedTexture | null = null;
+
     /** Normal-based edge detector feeding the quadtree bake, full G-Buffer resolution, mip0 only - see ComputeVolatilityOperation. */
     private volatility: ComputedTexture | null = null;
     /** Baked min/max-range quadtree textures (see BuildDenoiserQuadtreeOperation) - half G-Buffer resolution, own 0-indexed mip chain of (combinedIrradiance.mipLevelCount - 1) levels; level i answers "should G-Buffer mip (i+1) split into mip-i children" (see denoise.wgsl's shouldSplit()). */
@@ -257,6 +261,7 @@ export class SimulationResources {
     private computeVarianceAndMips: ComputeVarianceAndMipsOperation;
     private filterVariance: FilterVarianceOperation;
     private denoise: DenoiseOperation;
+    private ditherFilter: DitherFilterOperation;
     private computeVolatility: ComputeVolatilityOperation;
     /** Permanently LEVEL0=true / LEVEL0=false respectively - never toggled per-frame, see build_denoiser_quadtree.wgsl's file header (a switch change is a full pipeline recompile). */
     private buildQuadtreeLevel0: BuildDenoiserQuadtreeOperation;
@@ -303,6 +308,7 @@ export class SimulationResources {
         this.computeVarianceAndMips = new ComputeVarianceAndMipsOperation(device);
         this.filterVariance = new FilterVarianceOperation(device);
         this.denoise = new DenoiseOperation(device);
+        this.ditherFilter = new DitherFilterOperation(device);
         this.computeVolatility = new ComputeVolatilityOperation(device);
         this.buildQuadtreeLevel0 = new BuildDenoiserQuadtreeOperation(device);
         this.buildQuadtreeIterate = new BuildDenoiserQuadtreeOperation(device);
@@ -449,6 +455,7 @@ export class SimulationResources {
         for (const texture of [
             this.irradianceA, this.irradianceB, this.combinedIrradiance, this.rawVariance, this.filteredVariance,
             this.volatility, this.albedoMin, this.albedoMax, this.densityMinMaxVolatility, this.quadtreeMustSplit,
+            this.denoiseScratch,
         ]) {
             if (texture) {
                 this.computedDataManager.releaseTexture(texture);
@@ -464,6 +471,7 @@ export class SimulationResources {
         this.albedoMax = null;
         this.densityMinMaxVolatility = null;
         this.quadtreeMustSplit = null;
+        this.denoiseScratch = null;
         const rawSimulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
@@ -514,6 +522,12 @@ export class SimulationResources {
         const mip2Height = Math.max(1, height >> 2);
         this.rawVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
         this.filteredVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
+        // DenoiseOperation's output when DitherFilterOperation is about to run over it (see run()) -
+        // STORAGE_BINDING for denoise's write, TEXTURE_BINDING for the filter's textureLoad read.
+        // No COPY_SRC/COPY_DST - the filter writes its result straight to lightmap's mip0 (its real
+        // final destination), so this texture is never the source or destination of a GPU copy.
+        this.denoiseScratch = this.computedDataManager.acquireTexture(
+            width, height, LIGHTMAP_FORMAT, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
 
         // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - see field doc comments
         // above. albedoMin/Max/densityMinMaxVolatility/quadtreeMustSplit are allocated at HALF the
@@ -566,7 +580,7 @@ export class SimulationResources {
         lutResources: LutResources,
         sceneGraph: SceneGraph,
     ): void {
-        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance) {
+        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance || !this.denoiseScratch) {
             return;
         }
         if (!this.simulation || !this.photonBuffer) {
@@ -658,8 +672,27 @@ export class SimulationResources {
             this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
             this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
         );
-        this.denoise.updateOutputs(this.lightmap.getMipView(0), width, height);
+        // Targets denoiseScratch (not lightmap directly) when the guided post-filter below is
+        // about to run over its result - lightmap's mip0 is the FINAL destination now, written
+        // once, by whichever pass produces the last word on this frame's image. When the denoiser
+        // (and therefore the filter) is off, that's still denoise itself, exactly as before - no
+        // extra buffer, no copy, matching what already happened pre-filter.
+        this.denoise.updateOutputs(this.denoiserEnabled ? this.denoiseScratch.view : this.lightmap.getMipView(0), width, height);
         this.denoise.execute(encoder);
+
+        // Guided post-filter over denoise's just-written result (see dither_filter.wgsl) -
+        // EXPERIMENTAL, see this project's denoiser plan/conversation history: temporal jitter
+        // alone already looked good enough that this may prove unnecessary. Gated on
+        // denoiserEnabled - when the denoiser is off, denoise wrote straight to lightmap above
+        // (see its own comment) and there's no jitter to clean up anyway. Reads from denoiseScratch
+        // (denoise's just-written, not-yet-final result) and writes directly to lightmap's mip0 -
+        // its real final destination, not a staging copy - so this frame never needs a
+        // copyTextureToTexture: each pass writes straight to wherever its result actually belongs.
+        if (this.denoiserEnabled) {
+            this.ditherFilter.updateInputs(this.denoiseScratch.view, albedoView, normalRoughnessView, densityView);
+            this.ditherFilter.updateOutputs(this.lightmap.getMipView(0), width, height);
+            this.ditherFilter.execute(encoder);
+        }
 
         // Regenerate the final lightmap's own higher mips from its just-denoised mip0 (whatever
         // later samples the lightmap across mips, e.g. sprites, needs a real chain, not a clear) -
