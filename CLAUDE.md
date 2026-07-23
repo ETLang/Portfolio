@@ -137,3 +137,167 @@ op.execute(encoder);
   since it changes which shader code actually gets compiled - so `updateSwitches` marks its own
   `pipelineDirty` flag, checked and rebuilt by `execute()` before dispatch, the same lazy-rebuild
   pattern used for the three bind groups.
+
+## Denoiser architecture and philosophy (`denoise.wgsl`)
+
+This section **is** "this project's denoiser plan" that comments across `denoise.wgsl`,
+`build_denoiser_quadtree.wgsl`, `filter_variance.wgsl`, `compute_volatility.wgsl`,
+`compute_variance_and_mips.wgsl`, and `LitboxCommon.wgsl` point to - it's the one place the full
+argument lives, not just those files' own inline notes.
+
+### Pipeline
+
+Photon tracing produces two independent noisy irradiance samples per pixel (an A/B split), never
+one, because that's what makes a valid per-pixel noise estimate possible at all (see "A/B split"
+below). From there, evidence accumulates in stages, each coarser and cheaper than the last, before
+the per-pixel blur ever runs:
+
+1. `compute_variance_and_mips.wgsl` - fuses A/B into `combinedIrradiance`'s mip0-2 mean pyramid and
+   derives `rawVariance` (quarter-res) from that same A/B pair.
+2. `filter_variance.wgsl` - bilateral-filters `rawVariance` against mip2 albedo/irradiance into
+   `filteredVariance`, so one noisy pixel doesn't read as an isolated "blur here" spike.
+3. `compute_volatility.wgsl` - a normal-based edge detector, computed once at full-res mip0 and
+   propagated upward by max-reduction, never re-derived at coarser levels.
+4. `build_denoiser_quadtree.wgsl` - bakes a min/max-range quadtree (albedo, density, volatility,
+   plus an irradiance-detail trigger) into a per-mip "must split" texture at half G-Buffer
+   resolution.
+5. `denoise.wgsl` - the guided blur itself: `decideBlurSize` picks a per-pixel starting mip,
+   `shouldSplit` (backed by step 4's baked quadtree) drives a hierarchical descent from there, and
+   `decideWeight` combines whatever the descent visits into the blurred result, optionally folding
+   albedo/density back in (`COMBINE_ALBEDO_DENSITY`) to produce the final lit image.
+
+### Core philosophy: three separate questions, three separate mechanisms
+
+The blur deliberately never answers "how much should this pixel blur" with one signal or one
+mechanism. It's split into three independent questions, each backed by different evidence, because
+each question has a different failure mode if it's asked with the wrong evidence:
+
+- **How much evidence of noise is there at all, at this pixel?** (`decideBlurSize`) - a *scalar*
+  question, answered from variance + local brightness.
+- **Where, spatially, does refining the blur further still change the answer?** (`shouldSplit`,
+  driven by the baked quadtree) - a *where* question, answered from material/normal/density range
+  and an irradiance-detail trigger, because none of those individually can see every kind of
+  feature that matters.
+- **Given a gathered set of samples, how much should each one count?** (`decideWeight`) - a
+  *weighting* question, answered from structural similarity, radiance similarity, and spatial
+  falloff multiplied together, because each rejects a different, non-overlapping kind of incorrect
+  bleed.
+
+Collapsing these into a single heuristic (e.g. "blur harder near edges") would conflate "there's
+real detail here" with "there's noise here" with "this sample is relevant to the center pixel" -
+three claims that are frequently true independently of each other (a laser beam through uniform
+haze has real detail with no material-edge signature at all; a dark corner has high-confidence
+low-variance MC noise that variance itself can't see; a same-material sample two seed-radii away is
+irrelevant to the average regardless of how well it resolved). Keeping the questions separate is
+also what makes the quadtree's evidence *reusable*: it's baked once per frame and shared across
+every pixel's independent descent, rather than re-derived per-pixel inside the blur, because a
+descent through mostly-flat regions of the image would otherwise re-pay for the same "is this
+region interesting" answer thousands of times over.
+
+### The evidence, and the argument for each piece
+
+**`decideBlurSize` - how much to blur, from `filteredVariance` and the irradiance mip chain itself:**
+- `combinedIrradiance`'s own mip chain is a genuine box filter (built once in
+  `compute_variance_and_mips.wgsl`), so a coarse mip already *is* the local mean - there's no need
+  for a second, separate blur pass just to estimate "what does this region look like on average"
+  the way the Unity reference re-derives one by hand.
+- Relative variance under-reports noise in rarely-hit dark regions: both A/B half-samples can land
+  near zero, making their difference deceptively small - it's a difference of two things wrong in
+  the same direction, not an absolute confidence measure. Mean brightness (`darknessShortfall`)
+  doesn't share that blind spot, so the two signals are combined with `max()`, not a blend:
+  whichever one says "blur more" wins, since either one being right is sufficient justification to
+  blur, and averaging them would let a confident "blur more" from one signal get diluted by the
+  other's blind spot.
+
+**`shouldSplit` / the baked quadtree - where further refinement can still change the result:**
+- **Albedo range (luma + chroma, decorrelated)** - the direct signature of a material/color
+  boundary. Luma and chroma are checked separately (not a single RGB distance) so a chroma-only
+  boundary (equal brightness, different hue) isn't washed out by a luma-dominated combined metric.
+- **Density range, compared as optical depth, not raw coverage** - `opticalDepth` = `-log(1 -
+  density)` because density's *perceptual* effect on the image is nonlinear (going from 90% to 95%
+  coverage matters far more to the rendered result than going from 10% to 15%), so a raw linear
+  density-value comparison would over- or under-trigger splits depending on where in the [0,1] range
+  the difference sits.
+- **Volatility (normal-based edge detector)** - protects a smooth Lambertian shading gradient on a
+  uniform-albedo curved surface: real, converged detail that has *no* albedo or density signature
+  at all, only a normal one. Without it, a curved object with one material would get over-blurred
+  into faceted-looking bands, because nothing else in the evidence set would flag "this region's
+  appearance is still changing."
+- **Irradiance-detail trigger (Laplacian-pyramid-style, same-uv adjacent-mip comparison)** - catches
+  the complementary blind spot: a feature with *no* G-Buffer signature whatsoever (the canonical
+  example is a laser beam through uniform haze - same albedo, same density, same normal on both
+  sides of the beam, only the lit result differs). `combinedIrradiance`'s mip chain is a genuine box
+  filter, so a real feature produces a real disagreement between adjacent mips at the same
+  location, while a flat region's adjacent mips agree almost exactly - the trigger is gated by
+  nearby `filteredVariance` (a higher effective threshold where variance is already high) so plain
+  MC noise in a flat, under-sampled region doesn't get misread as detail.
+- **Distance bias, normalized to the candidate node's own current footprint (not the fixed seed
+  footprint `decideWeight`'s spatial term uses)** - as a candidate's distance from the query pixel
+  grows *relative to its own size*, `decideWeight`'s `spatialWeight` term is going to discount it
+  heavily no matter how accurately its fine structure resolves, so refining it further is wasted
+  work. Node-relative normalization (dividing by the *current* node's own texel size, which halves
+  every split) is what makes this depth-aware rather than a blunt per-branch on/off switch: a branch
+  that starts near the query keeps a roughly constant distance-in-its-own-texels ratio as it
+  descends (each split's children move by a fixed fraction of the *parent's* footprint, a fraction
+  that doesn't grow with depth), so it's free to keep splitting as deep as the quadtree wants; a
+  branch that starts far away roughly *doubles* that ratio with every split (distance stays near-
+  constant while its footprint keeps halving), so it gets cut off increasingly fast the farther out
+  it already was - exactly "fine detail far away doesn't matter, no matter how deep you'd have to go
+  to see it," made computable per-node instead of asserted globally.
+- All of the above are baked once, at half-resolution, into a shared quadtree - not recomputed per
+  query pixel - specifically because the same regional evidence ("is there a material boundary
+  here," "is there real irradiance detail here") is relevant to every nearby pixel's independent
+  descent; amortizing it once per frame is what keeps the hierarchical descent affordable at all.
+
+**`decideWeight` - how much a gathered sample counts, once the descent has visited it:**
+- **`structuralWeight` (albedo x normal x density)** rejects cross-*material* bleed: hard edges and
+  silhouettes where a neighboring sample belongs to visibly different surface. Squaring the
+  albedo/density terms (`w *= w`) sharpens the falloff near the tolerance boundary rather than
+  letting it fade linearly, and the normal term is specifically what protects a smooth shading
+  gradient on a curved, uniform-albedo surface - the same real-but-invisible-to-albedo detail
+  `shouldSplit`'s volatility channel exists to catch on the "where" side.
+- **`radianceWeight`** rejects cross-*feature* bleed that `structuralWeight` cannot see at all: a
+  region that's uniform in every G-Buffer channel (the laser-through-haze case again) can still
+  contain a real, sharp irradiance feature that a material-only weight would happily blur across.
+  Its sigma is adaptive on the *center* pixel's own variance (tight/selective where the center is
+  already trustworthy, loose/permissive where it isn't), reusing `filter_variance.wgsl`'s validated
+  adaptive-sigma pattern verbatim - specifically so that a region which is genuinely noisy but flat
+  doesn't get its real neighbors rejected by its own Monte Carlo noise being mistaken for a feature
+  boundary.
+- **`spatialWeight`**, normalized by the *fixed seed* texel size (deliberately different from
+  `shouldSplit`'s node-relative distance metric) - this term answers "how far is this sample from
+  the query, relative to the whole blur kernel's radius," a question about the final weighted
+  average, not "is it worth resolving this branch further," which is a question that needs to scale
+  with how deep the branch already is. Using the same metric for both would either make the split
+  cutoff too aggressive near the seed or too permissive far from it.
+- **`nodeSize` (`4^-depth-below-seed`)**, a partition-of-unity area weight, is multiplied in rather
+  than stored per-node, because it's a pure function of `(startMip - node.mip)`: it guarantees a
+  region that fully resolves down to mip 0 contributes the same total weight mass to the average as
+  it would have unsplit, so a heavily-detailed (hence heavily-split, hence many-stack-entries)
+  region doesn't numerically dominate the average simply by producing more terms in the sum.
+- The three weight terms are **multiplied together, not summed or blended**, because each one is a
+  veto for a distinct, non-overlapping failure mode (wrong material, wrong feature, wrong location)
+  - a sample only deserves weight if it survives *all three* tests, not merely one of them.
+
+**Correctness fix vs. the Unity reference: stack-overflow leaves resolve at their current mip
+instead of dropping energy.** When the traversal stack has no room left to push four children
+(`stackCount + 4 > STACK_SIZE`), the Unity reference falls through to leaf code that only
+accumulates at mip 0, silently discarding that branch's energy entirely. Resolving it as a leaf at
+its *current* (coarser) mip instead bounds the worst case to a quality degradation (a locally
+blurrier estimate), never an energy loss (a locally dark/wrong estimate) - the same
+partition-of-unity `nodeSize` weighting keeps its contribution correctly scaled even though it
+stopped short of full resolution.
+
+**`COMBINE_ALBEDO_DENSITY` multiplies by the *center* pixel's own albedo/density, never a per-sample
+or blurred value**, because albedo/density describe the material property *at the output pixel*,
+independent of which neighbors' irradiance fed the blur - the blur only ever operates on the
+lighting signal (`combinedIrradiance`), and material re-application happens once, after, at full
+sharpness. Left toggleable (raw irradiance vs. final lit image) purely for debugging.
+
+**`FORCE_FULL_SPLIT` exists to isolate `decideWeight`'s own quality from `shouldSplit`'s split
+heuristic.** Forcing every stack node to fully descend to mip 0 regardless of the baked quadtree
+removes the "where to refine" question entirely, so any remaining quality issue must be in the
+weighting math, not the split decision - the mode this project's mobile-perf-tuning work used to
+validate `decideWeight` before the quadtree existed, kept around specifically for re-isolating the
+two failure modes from each other later, at the cost of being extremely slow by design (worst-case
+full descent from every one of the 9 seeds).

@@ -55,7 +55,7 @@ interface ResolvedRaytracedEntry {
     logDensityAtlasEntry: Entry;
     sdfNormalTexture: GPUTexture;
     sdfNormalAtlasEntry: Entry;
-    shapeId: number; // cached resolvePrimitiveShapeId(raytraced.primitiveShape, ownerId) - looks up this object's mesh region in PRIMITIVE_MESH_REGIONS for draw batching
+    shapeId: number; // cached resolvePrimitiveShapeId(raytraced.primitiveShape) - looks up this object's mesh region in PRIMITIVE_MESH_REGIONS for draw batching
 }
 
 /**
@@ -406,7 +406,7 @@ export class RaytracedResources {
         if (!resolved) {
             return;
         }
-        const shapeId = resolvePrimitiveShapeId(raytraced.primitiveShape, raytraced.ownerId);
+        const shapeId = resolvePrimitiveShapeId(raytraced.primitiveShape);
         resolved.shapeId = shapeId;
         this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, raytraced, shapeId));
 
@@ -527,7 +527,7 @@ export class RaytracedResources {
         const { texture: logDensityTexture, uvTransform: logDensityUvTransform } = await textureCache.resolve(raytraced.logDensityMap, 'black');
         const { texture: sdfNormalTexture, uvTransform: sdfNormalUvTransform } = await textureCache.resolve(raytraced.sdfNormalMap, 'black');
 
-        const shapeId = resolvePrimitiveShapeId(raytraced.primitiveShape, raytraced.ownerId);
+        const shapeId = resolvePrimitiveShapeId(raytraced.primitiveShape);
         const transformEntry = transformResources.ensureEntry(raytraced.ownerId, sceneGraph);
         const propertiesEntry = this.propertiesArray.insertStatic((view, byteOffset) => writePropertiesData(view, byteOffset, raytraced, shapeId));
         const atlasEntry = this.atlasArray.insertStatic((view, byteOffset) => writeAtlasData(view, byteOffset, uvTransform));

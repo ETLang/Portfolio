@@ -70,6 +70,21 @@ export interface CreateSpotlightOptions extends CreateLightOptions {
 }
 
 /**
+ * A single scene-specific tunable (e.g. a light's rotation, an object's rotation, a light's
+ * intensity) that a LitboxScene subclass exposes to the configuration UI as a slider - see
+ * LitboxScene.addSlider. `getValue`/`setValue` close over whatever live struct(s) the subclass
+ * captured in onLoad(), so the UI never needs to know the scene's internal shape.
+ */
+export interface SceneSlider {
+    label: string;
+    min: number;
+    max: number;
+    step: number;
+    getValue: () => number;
+    setValue: (value: number) => void;
+}
+
+/**
  * A pending structural change recorded by createObject/createSprite/createRaytraced/create<Light>/
  * destroyObject/destroySprite/destroyRaytraced/destroyLight/reparentObject, applied to the live
  * SceneGraph (and GPU resources) once per frame by LitboxSceneRenderer - the same two-phase split
@@ -121,6 +136,9 @@ export abstract class LitboxScene {
 
     private nextObjectId: number;
     private pendingStructuralOps: StructuralOp[] = [];
+
+    /** Scene-specific sliders registered via addSlider(), in registration order - see getSliders(). */
+    private sliders: SceneSlider[] = [];
 
     constructor(data: Scene, baseUrl = '') {
         this.data = data;
@@ -221,6 +239,38 @@ export abstract class LitboxScene {
     /** Marks the named object's Nth owned raytraced entry dirty. No-op if already dynamic. */
     public markRayTracedDirty(name: string, index = 0): void {
         this.raytracedFlags.markDirty(this.findRaytracedByOwner(this.resolvePath(name), index));
+    }
+
+    // --- Configuration UI API. Lets a subclass expose bespoke, scene-specific tunables (a
+    // light's rotation, an object's rotation, a light's intensity, etc.) as sliders in the
+    // configuration page's scene-specific panel, alongside the fixed Litbox/denoiser panels
+    // (see scene_properties_panel.ts for the sibling pattern to denoiser_tunables_panel.ts).
+
+    /**
+     * Returns the named object's live struct without marking its transform dynamic/dirty -
+     * unlike makeTransformDynamic, this doesn't opt it into continuous per-frame GPU re-upload.
+     * Intended for onLoad() to capture a struct for a slider's getValue/setValue (see addSlider);
+     * pair a setValue that mutates the returned struct with a markTransformDirty() call so the
+     * change actually reaches the GPU.
+     */
+    public getObject(name: string): SceneObject {
+        return this.resolvePath(name);
+    }
+
+    /**
+     * Registers a scene-specific tunable to appear as a slider in the configuration UI's
+     * scene-specific panel. Call from onLoad(), after capturing whatever live struct(s)
+     * getValue/setValue close over (e.g. via getObject/makeLightDynamic). `setValue` is
+     * responsible for calling the appropriate markTransformDirty/markLightDirty/etc. itself, if
+     * the mutated struct isn't already dynamic.
+     */
+    protected addSlider(label: string, min: number, max: number, step: number, getValue: () => number, setValue: (value: number) => void): void {
+        this.sliders.push({ label, min, max, step, getValue, setValue });
+    }
+
+    /** @internal Consumed by scene_properties_panel.ts to render this scene's slider panel - see addSlider. */
+    public getSliders(): readonly SceneSlider[] {
+        return this.sliders;
     }
 
     // --- Structural authoring API. Mutates `data` immediately (so subsequent calls in the same

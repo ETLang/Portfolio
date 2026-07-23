@@ -506,6 +506,131 @@ canvas {
     margin-top: 1em;
 }
 
+/* Litbox Config panel (see main.ts's viewContent.litbox.sidebar) - styled to match the
+   denoiser tunables panel below so both option groups in the Litbox sidebar read as one
+   visual system. */
+.litbox-config {
+    margin-top: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.litbox-config-row label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.litbox-config-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.litbox-config-controls .litbox-config-slider {
+    flex: 1;
+    min-width: 0;
+}
+
+.litbox-config-controls .litbox-config-number {
+    width: 5.5rem;
+    flex-shrink: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
+.litbox-config-checkbox-row label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0;
+    color: var(--text-color);
+}
+
+.scene-select {
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
+/* Scene Properties panel (see scene_properties_panel.ts) - one row per scene-registered slider,
+   styled to match the denoiser tunables panel below. */
+.scene-properties {
+    margin-top: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+}
+
+.scene-properties summary {
+    cursor: pointer;
+    font-weight: bold;
+    color: var(--text-secondary-header);
+    padding: 0.25rem 0;
+}
+
+.scene-properties summary:hover {
+    color: var(--accent-color);
+}
+
+.scene-properties-empty {
+    margin: 0.5rem 0 0;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.scene-properties-list {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.scene-param label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.scene-param-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.scene-param-controls .scene-param-slider {
+    flex: 1;
+    min-width: 0;
+}
+
+.scene-param-controls .scene-param-number {
+    width: 5.5rem;
+    flex-shrink: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
 /* Denoiser tunables panel (see denoiser_tunables_panel.ts) - one row per DenoiserTunables field. */
 .denoiser-tunables {
     margin-top: 1rem;

@@ -53,6 +53,19 @@ fn clipSpaceToUv(pos: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(pos.x * 0.5 + 0.5, 0.5 - pos.y * 0.5);
 }
 
+// The sRGB opto-electronic transfer function (encode) - WGSL-side mirror of color_space.ts's
+// linearToSrgb. Needed at the tonemap pass's final swapchain write: navigator.gpu.
+// getPreferredCanvasFormat() (see litbox_scene_renderer.ts's configureCanvas) never returns an
+// "-srgb" texture format, so unlike a GPU-auto-encoded sRGB render target, nothing else in this
+// pipeline gamma-encodes a linear value before it reaches the (sRGB-interpreted-on-composite)
+// canvas - skipping this made the whole render display too dark, matching a plain sRGB decode
+// applied to values that were never encoded.
+fn linearToSrgb(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+
 // LUTs (lookup tables - see lut.ts/lut_resources.ts) are procedural, static textures sampled with
 // a texel-center remap: LUT-space u/v/w in [0,1] must land on the first/last texel's *center*,
 // not the texture edge. `texelCount` must always come from a #define supplied by the consuming

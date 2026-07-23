@@ -207,6 +207,11 @@ export class LitboxSceneRenderer {
         return this.simulationResources;
     }
 
+    /** The currently staged/active scene (see setScene), or null before one has been set. */
+    public getActiveScene(): LitboxScene | null {
+        return this.activeScene;
+    }
+
     /** Rendered frames/s, averaged over a rolling ~500ms window - see fpsCounter. 0 before the first window closes. */
     public getFps(): number {
         return this.fpsCounter.getRate();

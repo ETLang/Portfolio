@@ -290,7 +290,7 @@ export class SpriteResources {
         if (!resolved) {
             return;
         }
-        const shapeId = this.resolveShapeId(sprite);
+        const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
         this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
 
         const targetImage = sprite.image;
@@ -323,7 +323,19 @@ export class SpriteResources {
         if (!resolved) {
             return;
         }
+        // propertiesArray.markDynamic can relocate up to two entries: resolved's own (moving to
+        // the dynamic region) and whichever sprite currently occupies the last static slot
+        // (displaced to make the dynamic region contiguous - see PackedUniformArray.markDynamic).
+        // Every sprite's spriteIndices entry holds a *snapshot* of its propertiesEntry.index taken
+        // by rebuildDrawOrder - so either relocation leaves that snapshot stale (pointing at
+        // whatever now occupies the old slot) until the index buffer is rederived. Only do this
+        // on an actual (first-time) transition, so per-frame calls on an already-dynamic sprite
+        // (the common case - see LitboxSceneRenderer.applyDynamicSceneUpdates) stay a cheap no-op.
+        const wasStatic = resolved.propertiesEntry.index < this.propertiesArray.getStaticCount();
         this.propertiesArray.markDynamic(resolved.propertiesEntry);
+        if (wasStatic) {
+            this.rebuildDrawOrder();
+        }
     }
 
     public flush(): void {
@@ -335,7 +347,7 @@ export class SpriteResources {
     private async resolveSprite(sprite: SceneSprite, sceneGraph: SceneGraph, textureCache: TextureCache, transformResources: TransformResources): Promise<ResolvedSprite> {
         const isActive = sceneGraph.isActiveInHierarchy(sprite.ownerId);
         const { texture, uvTransform } = await textureCache.resolve(sprite.image, 'white');
-        const shapeId = this.resolveShapeId(sprite);
+        const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
 
         const transformEntry = transformResources.ensureEntry(sprite.ownerId, sceneGraph);
         const propertiesEntry = this.propertiesArray.insertStatic((view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
@@ -435,10 +447,6 @@ export class SpriteResources {
             ],
         });
         this.sharedBindGroupDirty = false;
-    }
-
-    private resolveShapeId(sprite: SceneSprite): number {
-        return resolvePrimitiveShapeId(sprite.primitiveShape, sprite.ownerId);
     }
 }
 

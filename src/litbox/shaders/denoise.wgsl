@@ -30,6 +30,11 @@ struct DenoiseUniforms {
     // Distance-bias split cutoff (this project's denoiser plan) - see shouldSplit()'s doc comment
     // for the exact normalization (node-relative texels, not seed-relative).
     maxSplitDistance: f32,
+    // Salts seedJitter's hash below so the dither pattern varies frame-to-frame ("film grain")
+    // instead of being a fixed function of pixel coordinate alone - see
+    // SimulationResources.frameIndex's doc comment for why that's safe here (no history buffer to
+    // disagree with a changing pattern, unlike typical TAA jitter).
+    frameIndex: f32,
 }
 @group(0) @binding(0) var<uniform> uniforms: DenoiseUniforms;
 
@@ -54,6 +59,14 @@ struct DenoiseUniforms {
 @group(2) @binding(0) var output: texture_storage_2d<rgba16float, write>;
 
 const SEED_RADIUS: i32 = 1; // 3x3 seed neighborhood at the chosen starting mip.
+
+// Cheap per-pixel hash (Hash without Sine, David Hoskins) backing the seed-placement jitter below -
+// see seedJitter's own doc comment for why this exists.
+fn hash2(p: vec2<f32>) -> vec2<f32> {
+    var p3 = fract(vec3<f32>(p.xyx) * vec3<f32>(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
+}
 
 // See this project's denoiser plan for the derivation: sized to survive Phase 1's forced-full-
 // split worst case (every one of the 9 seeds fully descending from maxBlurMip to mip 0 in a
@@ -101,20 +114,31 @@ fn decideBlurSize(centerVariance: f32, localLuminance: f32) -> f32 {
 // from any split heuristic, distance-based or otherwise.
 //
 // Distance bias rationale: as a candidate node's distance from the query pixel grows relative to
-// its OWN current footprint (not the fixed seed footprint decideWeight's spatialWeight uses - see
-// that function's own doc comment for why these two are deliberately different metrics), further
-// refining it matters less and less to the final weighted result, since spatialWeight will
-// heavily discount it regardless of how accurately its fine structure gets resolved - resolving
-// detail nobody's going to weight is wasted work. Node-relative normalization (dividing by the
-// CURRENT node's own texel size, which halves every split) rather than a fixed seed-relative one
-// is what makes this a genuinely depth-aware cutoff rather than a blunt per-seed-branch on/off
-// switch: a branch that starts near the query keeps a roughly constant, low distance-in-its-own-
-// texels ratio no matter how deep it descends (each split's children are offset from their parent
-// by a fixed fraction of the *parent's* footprint, and that fraction doesn't grow with depth), so
-// it's free to split as deep as the baked quadtree wants; a branch that starts far from the query
-// roughly *doubles* that ratio with every split (distance stays ~constant while its own footprint
-// keeps halving), so it gets cut off increasingly fast the farther out it already was - exactly
-// "fine detail far away doesn't matter, no matter how deep you'd have to go to see it."
+// the whole blur kernel's radius, further refining it matters less and less to the final weighted
+// result, since decideWeight's spatialWeight will heavily discount it regardless of how accurately
+// its fine structure gets resolved - resolving detail nobody's going to weight is wasted work.
+//
+// Bug fix: this used to normalize by the CURRENT node's own (shrinking) texel size instead of the
+// fixed seedTexelSize passed in now, on the theory that dividing by a shrinking footprint made the
+// cutoff "depth-aware": a branch starting AT the query (distance 0) keeps a ~0 ratio forever, so
+// that part checked out - but every other one of the 3x3 neighborhood's 8 seeds (see SEED_RADIUS)
+// starts a full node-width away, and a split's children are only ever offset from their parent by
+// a FIXED FRACTION of the *parent's* (not the query's) footprint - a geometric series that
+// converges, so any branch's descendants stay within a bounded distance of where their seed
+// started, no matter how deep they split. That means the numerator (true distance from the query)
+// stays roughly constant for an off-center seed while the old denominator (current node's texel
+// size) shrinks to 0 every split - the ratio was mathematically guaranteed to diverge to infinity
+// for every non-center seed, regardless of the threshold. Raising the threshold only bought a few
+// more split levels before the identical failure would recur one level deeper on a scene needing
+// more of them (a noisier/darker scene, or any change that pushes decideBlurSize's chosen mip
+// higher) - a strong sign the *formula*, not the constant, was wrong; the fix belongs here, not in
+// DEFAULT_DENOISER_TUNABLES.maxSplitDistance. Normalizing by the fixed
+// seedTexelSize instead - the same quantity decideWeight's spatialWeight already uses (see that
+// function's own doc comment) - gives every branch a stable, depth-independent ratio approximating
+// its true final distance from the query, so the cutoff now actually answers the question it's
+// supposed to ("will decideWeight care about this branch at all"), instead of one that happens to
+// answer "has this branch split more than ~log2(maxSplitDistance) times," which is a different
+// question that doesn't track real relevance.
 fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, texelSize: vec2<f32>) -> bool {
 #ifdef FORCE_FULL_SPLIT
     return mip > 0;
@@ -123,6 +147,8 @@ fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, texelSize: vec2<f32>
         return false;
     }
 
+    // The split distance condition scales with the texel size of each mip level.
+    // This is by design and works quite nicely.
     let nodeTexelSize = texelSize * f32(1u << u32(mip));
     let distanceInNodeTexels = length(uv - queryUv) / max(nodeTexelSize.x, nodeTexelSize.y);
     if (distanceInNodeTexels > uniforms.maxSplitDistance) {
@@ -146,11 +172,9 @@ fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, texelSize: vec2<f32>
 //   is already trustworthy, looser where it isn't) - reusing filter_variance.wgsl's validated
 //   pattern verbatim, so a genuinely noisy-but-flat region doesn't get rejected by its own MC
 //   noise.
-//   (spatialWeight is normalized by the fixed seedTexelSize deliberately, not the per-node texel
-//   size shouldSplit's distance bias uses - this one measures "how far from the query, relative to
-//   the whole blur kernel's radius," a question about the final weighted average; shouldSplit's own
-//   distance metric answers "is it worth resolving this branch any further," a different question
-//   that needs to scale with how deep the branch already is - see shouldSplit's doc comment.)
+//   (spatialWeight is normalized by the fixed seedTexelSize - the same metric shouldSplit's own
+//   distance bias now uses, see that function's doc comment for why an earlier, node-relative
+//   version of that cutoff was a bug, not a deliberate difference from this one.)
 // - node.size is a partition-of-unity area weight (4^-depth-below-seed), not stored on the node
 //   since it's a pure function of (startMip - node.mip): guarantees a region that fully resolves
 //   to mip 0 contributes the same total weight mass as it would have unsplit, so a heavily-
@@ -242,12 +266,35 @@ fn main(
     let centerLuminance = luminance(centerIrradiance);
 
     let seedTexelSize = texelSize * f32(1u << u32(startMip));
+    // All 9 seeds share the same seedTexelSize wherever startMip is locally constant (true across
+    // most of a flat, uniform-material region - see DecideBlurSize), so every seed's position (and
+    // therefore its "which quadtree cell am I in" state) advances in exact lockstep as the query
+    // pixel moves. Left unjittered, that state flips at a fixed, periodic pixel interval matching
+    // the quadtree's own grid pitch wherever the true (correctly smooth) signal happens to cross a
+    // cell boundary - visible as coherent banding on an otherwise perfectly flat surface (confirmed:
+    // RTRect's flat facets - see primitive_mesh.ts - show this clearly, since there's no real
+    // structure there to mask it). A per-pixel hash-based jitter, up to half a seed-texel, decorrelates
+    // neighboring pixels' seed positions so that same aliasing turns into unstructured
+    // high-frequency noise instead - noise reads as far less objectionable than coherent stripes,
+    // the standard fix for this class of discretization artifact (the same principle as dithering a
+    // banded gradient). Applied only to the top-level seed placement, not to recursive child
+    // splits - decideWeight's structural/radiance weighting already rejects a jittered seed that
+    // lands on the wrong side of a real material edge, so there's no correctness cost, only a
+    // small softening of genuine edges (acceptable - see DecideWeight's own weighting for why a
+    // seed that drifts across a real boundary still gets down-weighted there).
+    // uniforms.frameIndex is wrapped at a small bound on the JS side specifically so this offset
+    // stays tiny (see SimulationResources.frameIndex's doc comment) - large enough to decorrelate
+    // frame-to-frame, nowhere near f32's exact-integer precision cliff where it could instead
+    // collide adjacent pixels' hash inputs and undo the spatial decorrelation this jitter exists
+    // for in the first place.
+    let temporalOffset = vec2<f32>(uniforms.frameIndex * 37.0, uniforms.frameIndex * 17.0);
+    let seedJitter = (hash2(vec2<f32>(coords) + temporalOffset) - 0.5) * seedTexelSize;
     var stack: array<TreeSampleNode, STACK_SIZE>;
     var stackCount: u32 = 0u;
 
     for (var dy = -SEED_RADIUS; dy <= SEED_RADIUS; dy++) {
         for (var dx = -SEED_RADIUS; dx <= SEED_RADIUS; dx++) {
-            stack[stackCount] = TreeSampleNode(uv + vec2<f32>(f32(dx), f32(dy)) * seedTexelSize, startMip);
+            stack[stackCount] = TreeSampleNode(uv + vec2<f32>(f32(dx), f32(dy)) * seedTexelSize + seedJitter, startMip);
             stackCount++;
         }
     }

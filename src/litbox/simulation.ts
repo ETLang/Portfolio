@@ -12,6 +12,7 @@ import { DensityMipBlitResources } from './density_mip_blit.ts';
 import { ComputeVarianceAndMipsOperation } from './compute_variance_and_mips.ts';
 import { FilterVarianceOperation } from './filter_variance.ts';
 import { DenoiseOperation } from './denoise_operation.ts';
+import { DitherFilterOperation } from './dither_filter.ts';
 import { ComputeVolatilityOperation } from './compute_volatility.ts';
 import { BuildDenoiserQuadtreeOperation } from './build_denoiser_quadtree.ts';
 import {
@@ -150,7 +151,7 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     sigmaLuminanceLoose: 2.5,
     kLuminance: 2.0,
     // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
-    // doc comment for the node-relative-texels normalization this is measured in.
+    // doc comment for the seed-relative-texels normalization this is measured in.
     maxSplitDistance: 2.0,
     albedoLuminanceThreshold: 0.1,
     albedoChromaThreshold: 0.2,
@@ -220,6 +221,23 @@ export class SimulationResources {
      */
     public denoiserEnabled = true;
 
+    /**
+     * Salts denoise.wgsl's seedJitter hash so the dither pattern varies frame-to-frame ("film
+     * grain") instead of being a fixed function of pixel coordinate alone - see this project's
+     * denoiser plan. Safe because this renderer retraces from scratch every frame (photonBuffer is
+     * cleared each run(), never progressively accumulated - see tracePhotons), so there's no
+     * history buffer for a changing dither pattern to disagree with, unlike typical TAA jitter.
+     *
+     * Wrapped at a small bound (not just "large enough to not matter") because denoise.wgsl adds a
+     * frameIndex-scaled offset directly onto pixel coordinates before hashing: once that sum
+     * exceeds f32's exact-integer range (2^24), adjacent pixels' hash inputs could round to the
+     * same value and lose their spatial decorrelation, not just their temporal variation - a much
+     * worse artifact than the one this is meant to fix. 4096 frames (~68s at 60fps) is far more
+     * than needed for the repeat to be imperceptible as noise, with orders of magnitude of headroom
+     * to spare before that precision cliff.
+     */
+    private frameIndex = 0;
+
     /** Per-half HDR conversion of photonBuffer, mip0 only - see ConvertPhotonIrradianceToHdrOperation. */
     private irradianceA: ComputedTexture | null = null;
     private irradianceB: ComputedTexture | null = null;
@@ -228,6 +246,9 @@ export class SimulationResources {
     /** Relative variance from the (irradianceA, irradianceB) pair, quarter resolution (matches combinedIrradiance's mip2) - see ComputeVarianceAndMipsOperation. */
     private rawVariance: ComputedTexture | null = null;
     private filteredVariance: ComputedTexture | null = null;
+
+    /** DenoiseOperation's output when DitherFilterOperation is about to run over it (see run()'s use of this) - the not-yet-final, jittery denoised image, full G-Buffer resolution, single mip. DitherFilterOperation reads this and writes lightmap's mip0 directly, so no copy is ever needed to get the real final image into lightmap. */
+    private denoiseScratch: ComputedTexture | null = null;
 
     /** Normal-based edge detector feeding the quadtree bake, full G-Buffer resolution, mip0 only - see ComputeVolatilityOperation. */
     private volatility: ComputedTexture | null = null;
@@ -240,6 +261,7 @@ export class SimulationResources {
     private computeVarianceAndMips: ComputeVarianceAndMipsOperation;
     private filterVariance: FilterVarianceOperation;
     private denoise: DenoiseOperation;
+    private ditherFilter: DitherFilterOperation;
     private computeVolatility: ComputeVolatilityOperation;
     /** Permanently LEVEL0=true / LEVEL0=false respectively - never toggled per-frame, see build_denoiser_quadtree.wgsl's file header (a switch change is a full pipeline recompile). */
     private buildQuadtreeLevel0: BuildDenoiserQuadtreeOperation;
@@ -286,6 +308,7 @@ export class SimulationResources {
         this.computeVarianceAndMips = new ComputeVarianceAndMipsOperation(device);
         this.filterVariance = new FilterVarianceOperation(device);
         this.denoise = new DenoiseOperation(device);
+        this.ditherFilter = new DitherFilterOperation(device);
         this.computeVolatility = new ComputeVolatilityOperation(device);
         this.buildQuadtreeLevel0 = new BuildDenoiserQuadtreeOperation(device);
         this.buildQuadtreeIterate = new BuildDenoiserQuadtreeOperation(device);
@@ -432,6 +455,7 @@ export class SimulationResources {
         for (const texture of [
             this.irradianceA, this.irradianceB, this.combinedIrradiance, this.rawVariance, this.filteredVariance,
             this.volatility, this.albedoMin, this.albedoMax, this.densityMinMaxVolatility, this.quadtreeMustSplit,
+            this.denoiseScratch,
         ]) {
             if (texture) {
                 this.computedDataManager.releaseTexture(texture);
@@ -447,6 +471,7 @@ export class SimulationResources {
         this.albedoMax = null;
         this.densityMinMaxVolatility = null;
         this.quadtreeMustSplit = null;
+        this.denoiseScratch = null;
         const rawSimulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
@@ -497,6 +522,12 @@ export class SimulationResources {
         const mip2Height = Math.max(1, height >> 2);
         this.rawVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
         this.filteredVariance = this.computedDataManager.acquireTexture(mip2Width, mip2Height, VARIANCE_FORMAT, irradianceUsage);
+        // DenoiseOperation's output when DitherFilterOperation is about to run over it (see run()) -
+        // STORAGE_BINDING for denoise's write, TEXTURE_BINDING for the filter's textureLoad read.
+        // No COPY_SRC/COPY_DST - the filter writes its result straight to lightmap's mip0 (its real
+        // final destination), so this texture is never the source or destination of a GPU copy.
+        this.denoiseScratch = this.computedDataManager.acquireTexture(
+            width, height, LIGHTMAP_FORMAT, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
 
         // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - see field doc comments
         // above. albedoMin/Max/densityMinMaxVolatility/quadtreeMustSplit are allocated at HALF the
@@ -549,7 +580,7 @@ export class SimulationResources {
         lutResources: LutResources,
         sceneGraph: SceneGraph,
     ): void {
-        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance) {
+        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance || !this.denoiseScratch) {
             return;
         }
         if (!this.simulation || !this.photonBuffer) {
@@ -628,17 +659,40 @@ export class SimulationResources {
         // ShouldSplit() now consults the baked quadtree above instead of always splitting to mip
         // 0. Also where albedo/density finally get combined into the final lit image.
         this.denoise.updateSwitches({ combineAlbedoDensity: true, forceFullSplit: false });
+        this.frameIndex = (this.frameIndex + 1) % 4096;
         // denoiserTunables has more fields than DenoiseUniforms needs (the quadtree-bake ones) -
         // structurally fine to pass straight through, see DenoiserTunables' own doc comment.
         // maxBlurMip forced to 0 when disabled - see denoiserEnabled's doc comment for why that's
-        // sufficient to skip the blur entirely without a separate shader switch.
-        this.denoise.updateUniforms(this.denoiserEnabled ? this.denoiserTunables : { ...this.denoiserTunables, maxBlurMip: 0 });
+        // sufficient to skip the blur entirely without a separate shader switch. frameIndex is
+        // spread in separately since it isn't a DenoiserTunables field (not user-tunable).
+        this.denoise.updateUniforms(this.denoiserEnabled
+            ? { ...this.denoiserTunables, frameIndex: this.frameIndex }
+            : { ...this.denoiserTunables, maxBlurMip: 0, frameIndex: this.frameIndex });
         this.denoise.updateInputs(
             this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
             this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
         );
-        this.denoise.updateOutputs(this.lightmap.getMipView(0), width, height);
+        // Targets denoiseScratch (not lightmap directly) when the guided post-filter below is
+        // about to run over its result - lightmap's mip0 is the FINAL destination now, written
+        // once, by whichever pass produces the last word on this frame's image. When the denoiser
+        // (and therefore the filter) is off, that's still denoise itself, exactly as before - no
+        // extra buffer, no copy, matching what already happened pre-filter.
+        this.denoise.updateOutputs(this.denoiserEnabled ? this.denoiseScratch.view : this.lightmap.getMipView(0), width, height);
         this.denoise.execute(encoder);
+
+        // Guided post-filter over denoise's just-written result (see dither_filter.wgsl) -
+        // EXPERIMENTAL, see this project's denoiser plan/conversation history: temporal jitter
+        // alone already looked good enough that this may prove unnecessary. Gated on
+        // denoiserEnabled - when the denoiser is off, denoise wrote straight to lightmap above
+        // (see its own comment) and there's no jitter to clean up anyway. Reads from denoiseScratch
+        // (denoise's just-written, not-yet-final result) and writes directly to lightmap's mip0 -
+        // its real final destination, not a staging copy - so this frame never needs a
+        // copyTextureToTexture: each pass writes straight to wherever its result actually belongs.
+        if (this.denoiserEnabled) {
+            this.ditherFilter.updateInputs(this.denoiseScratch.view, albedoView, normalRoughnessView, densityView);
+            this.ditherFilter.updateOutputs(this.lightmap.getMipView(0), width, height);
+            this.ditherFilter.execute(encoder);
+        }
 
         // Regenerate the final lightmap's own higher mips from its just-denoised mip0 (whatever
         // later samples the lightmap across mips, e.g. sprites, needs a real chain, not a clear) -
