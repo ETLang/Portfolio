@@ -49,9 +49,16 @@ export interface DenoiseUniforms {
      * branches keep resolving fine structure the final weighted average will barely use.
      */
     maxSplitDistance: number;
+    /**
+     * Salts seedJitter's hash (see denoise.wgsl) so the dither pattern varies frame-to-frame
+     * instead of being a fixed function of pixel coordinate alone - see SimulationResources'
+     * frameIndex doc comment. Not user-tunable (unlike every other field here), so it's expected
+     * to differ on essentially every call - see updateUniforms' dirty-check comment below.
+     */
+    frameIndex: number;
 }
 
-const UNIFORM_FIELD_COUNT = 10;
+const UNIFORM_FIELD_COUNT = 11;
 
 /**
  * Hierarchical guided blur over combinedIrradiance - see denoise.wgsl and this project's denoiser
@@ -94,7 +101,11 @@ export class DenoiseOperation extends ComputeOperation {
             && this.lastUniforms.sigmaLuminanceTight === uniforms.sigmaLuminanceTight
             && this.lastUniforms.sigmaLuminanceLoose === uniforms.sigmaLuminanceLoose
             && this.lastUniforms.kLuminance === uniforms.kLuminance
-            && this.lastUniforms.maxSplitDistance === uniforms.maxSplitDistance) {
+            && this.lastUniforms.maxSplitDistance === uniforms.maxSplitDistance
+            // frameIndex is expected to differ on essentially every call (see its own doc
+            // comment), so including it here means this dirty-check effectively never skips a
+            // write - intentional, since the whole point is a fresh jitter salt every frame.
+            && this.lastUniforms.frameIndex === uniforms.frameIndex) {
             return;
         }
         // Snapshot into a fresh object, not a reference to `uniforms` itself - callers may pass a
@@ -117,6 +128,7 @@ export class DenoiseOperation extends ComputeOperation {
             uniforms.sigmaLuminanceLoose,
             uniforms.kLuminance,
             uniforms.maxSplitDistance,
+            uniforms.frameIndex,
         ]));
     }
 

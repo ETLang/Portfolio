@@ -220,6 +220,23 @@ export class SimulationResources {
      */
     public denoiserEnabled = true;
 
+    /**
+     * Salts denoise.wgsl's seedJitter hash so the dither pattern varies frame-to-frame ("film
+     * grain") instead of being a fixed function of pixel coordinate alone - see this project's
+     * denoiser plan. Safe because this renderer retraces from scratch every frame (photonBuffer is
+     * cleared each run(), never progressively accumulated - see tracePhotons), so there's no
+     * history buffer for a changing dither pattern to disagree with, unlike typical TAA jitter.
+     *
+     * Wrapped at a small bound (not just "large enough to not matter") because denoise.wgsl adds a
+     * frameIndex-scaled offset directly onto pixel coordinates before hashing: once that sum
+     * exceeds f32's exact-integer range (2^24), adjacent pixels' hash inputs could round to the
+     * same value and lose their spatial decorrelation, not just their temporal variation - a much
+     * worse artifact than the one this is meant to fix. 4096 frames (~68s at 60fps) is far more
+     * than needed for the repeat to be imperceptible as noise, with orders of magnitude of headroom
+     * to spare before that precision cliff.
+     */
+    private frameIndex = 0;
+
     /** Per-half HDR conversion of photonBuffer, mip0 only - see ConvertPhotonIrradianceToHdrOperation. */
     private irradianceA: ComputedTexture | null = null;
     private irradianceB: ComputedTexture | null = null;
@@ -628,11 +645,15 @@ export class SimulationResources {
         // ShouldSplit() now consults the baked quadtree above instead of always splitting to mip
         // 0. Also where albedo/density finally get combined into the final lit image.
         this.denoise.updateSwitches({ combineAlbedoDensity: true, forceFullSplit: false });
+        this.frameIndex = (this.frameIndex + 1) % 4096;
         // denoiserTunables has more fields than DenoiseUniforms needs (the quadtree-bake ones) -
         // structurally fine to pass straight through, see DenoiserTunables' own doc comment.
         // maxBlurMip forced to 0 when disabled - see denoiserEnabled's doc comment for why that's
-        // sufficient to skip the blur entirely without a separate shader switch.
-        this.denoise.updateUniforms(this.denoiserEnabled ? this.denoiserTunables : { ...this.denoiserTunables, maxBlurMip: 0 });
+        // sufficient to skip the blur entirely without a separate shader switch. frameIndex is
+        // spread in separately since it isn't a DenoiserTunables field (not user-tunable).
+        this.denoise.updateUniforms(this.denoiserEnabled
+            ? { ...this.denoiserTunables, frameIndex: this.frameIndex }
+            : { ...this.denoiserTunables, maxBlurMip: 0, frameIndex: this.frameIndex });
         this.denoise.updateInputs(
             this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
             this.quadtreeMustSplit?.view ?? this.filteredVariance.view,

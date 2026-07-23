@@ -30,6 +30,11 @@ struct DenoiseUniforms {
     // Distance-bias split cutoff (this project's denoiser plan) - see shouldSplit()'s doc comment
     // for the exact normalization (node-relative texels, not seed-relative).
     maxSplitDistance: f32,
+    // Salts seedJitter's hash below so the dither pattern varies frame-to-frame ("film grain")
+    // instead of being a fixed function of pixel coordinate alone - see
+    // SimulationResources.frameIndex's doc comment for why that's safe here (no history buffer to
+    // disagree with a changing pattern, unlike typical TAA jitter).
+    frameIndex: f32,
 }
 @group(0) @binding(0) var<uniform> uniforms: DenoiseUniforms;
 
@@ -277,7 +282,13 @@ fn main(
     // lands on the wrong side of a real material edge, so there's no correctness cost, only a
     // small softening of genuine edges (acceptable - see DecideWeight's own weighting for why a
     // seed that drifts across a real boundary still gets down-weighted there).
-    let seedJitter = (hash2(vec2<f32>(coords)) - 0.5) * seedTexelSize;
+    // uniforms.frameIndex is wrapped at a small bound on the JS side specifically so this offset
+    // stays tiny (see SimulationResources.frameIndex's doc comment) - large enough to decorrelate
+    // frame-to-frame, nowhere near f32's exact-integer precision cliff where it could instead
+    // collide adjacent pixels' hash inputs and undo the spatial decorrelation this jitter exists
+    // for in the first place.
+    let temporalOffset = vec2<f32>(uniforms.frameIndex * 37.0, uniforms.frameIndex * 17.0);
+    let seedJitter = (hash2(vec2<f32>(coords) + temporalOffset) - 0.5) * seedTexelSize;
     var stack: array<TreeSampleNode, STACK_SIZE>;
     var stackCount: u32 = 0u;
 
