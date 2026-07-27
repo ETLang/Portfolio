@@ -268,9 +268,19 @@ export class LitboxSceneRenderer {
             // device to be usable; request it opportunistically since not every GPU/browser
             // supports it (mobile GPUs typically don't) - TextureCache falls back gracefully
             // when it's absent.
-            const requiredFeatures: GPUFeatureName[] = adapter.features.has('texture-compression-bc')
-                ? ['texture-compression-bc']
-                : [];
+            const requiredFeatures: GPUFeatureName[] = [];
+            if (adapter.features.has('texture-compression-bc')) {
+                requiredFeatures.push('texture-compression-bc');
+            }
+            // RFloat/RgbaFloat atlas textures (see TextureCache's .exr loading) are sampled
+            // through the same filtering sampler as every other atlas texture (RaytracedResources/
+            // SpriteResources' shared bind group), which requires rgba32float to be filterable -
+            // not true by default in core WebGPU. Request opportunistically like the BC1 feature
+            // above; unlike BC1 there's currently no graceful fallback if it's absent, since the
+            // exporter has no lower-precision path for those two format buckets.
+            if (adapter.features.has('float32-filterable')) {
+                requiredFeatures.push('float32-filterable');
+            }
             this.device = await this.adapter.requestDevice({ requiredFeatures });
             this.device.addEventListener('uncapturederror', (event) => {
                 console.error('WebGPU device error:', (event as GPUUncapturedErrorEvent).error.message);
@@ -551,9 +561,6 @@ export class LitboxSceneRenderer {
             return null;
         }
         const scene = this.activeScene.data;
-        if (scene.cameras.length !== 1) {
-            console.warn(`Litbox: expected exactly 1 camera, found ${scene.cameras.length}; using the first active one.`);
-        }
         const sceneGraph = this.sceneGraph;
         const camera = scene.cameras.find((c: SceneCamera) => sceneGraph.isActiveInHierarchy(c.ownerId));
         if (!camera) {
