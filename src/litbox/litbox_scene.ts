@@ -9,6 +9,7 @@ import {
     type PointLight,
     type RaytracedObject,
     type Scene,
+    type SceneCamera,
     type SceneObject,
     type SceneSprite,
     type Spotlight,
@@ -255,6 +256,25 @@ export abstract class LitboxScene {
      */
     public getObject(name: string): SceneObject {
         return this.resolvePath(name);
+    }
+
+    /**
+     * Makes the named object's camera the one LitboxSceneRenderer.getActiveCamera picks, by
+     * moving it to the front of `data.cameras` (that method takes the first camera whose owner
+     * is active in the hierarchy). Needed because a Unity-exported scene's camera order reflects
+     * whatever order Unity happened to serialize its Camera components in, not which one is meant
+     * to be the "real" one - e.g. a UI-overlay camera (a perf display's Canvas) can easily end up
+     * ordered before the actual scene camera. Call from onLoad(); every scene exported from Unity
+     * names its main camera "Main Camera", so `setActiveCamera('Main Camera')` is the expected
+     * call for most scenes.
+     */
+    public setActiveCamera(name: string): void {
+        const obj = this.resolvePath(name);
+        const camera = this.data.cameras.find(c => c.ownerId === obj.id);
+        if (!camera) {
+            throw new Error(`Litbox scene: object "${obj.name}" (id ${obj.id}) owns no camera.`);
+        }
+        this.data.cameras = [camera, ...this.data.cameras.filter((c: SceneCamera) => c !== camera)];
     }
 
     /**
