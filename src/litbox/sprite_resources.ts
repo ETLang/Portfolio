@@ -72,6 +72,15 @@ export class SpriteResources {
     private textureCache: TextureCache | null = null;
     private transformResources: TransformResources | null = null;
 
+    /**
+     * True while loadFromScene/removeSprite/removeByOwnerIds is already mid-flight - each of
+     * those always finishes with its own rebuildDrawOrder() call against fully consistent state,
+     * so a relocation-triggered rebuild during that window is both redundant and unsafe (it would
+     * run against `this.sprites`/`this.indexEntries` mid-mutation - see registerTransformResources'
+     * onOwnerRelocated listener).
+     */
+    private bulkOpInProgress = false;
+
     constructor(device: GPUDevice) {
         this.device = device;
         this.vertexBuffer = getQuadVertexBuffer(device);
@@ -149,27 +158,32 @@ export class SpriteResources {
         this.textureCache = textureCache;
         this.registerTransformResources(transformResources);
 
-        for (const entry of this.indexEntries) {
-            this.indexArray.remove(entry);
-        }
-        for (const resolved of this.sprites) {
-            this.propertiesArray.remove(resolved.propertiesEntry);
-            this.atlasArray.remove(resolved.atlasEntry);
-            transformResources.releaseEntry(resolved.ownerId);
-        }
-        this.sprites = [];
-        this.indexEntries = [];
+        this.bulkOpInProgress = true;
+        try {
+            for (const entry of this.indexEntries) {
+                this.indexArray.remove(entry);
+            }
+            for (const resolved of this.sprites) {
+                this.propertiesArray.remove(resolved.propertiesEntry);
+                this.atlasArray.remove(resolved.atlasEntry);
+                transformResources.releaseEntry(resolved.ownerId);
+            }
+            this.sprites = [];
+            this.indexEntries = [];
 
-        const lightmapView = simulationResources.getLightmapView();
-        this.lightmapBindGroup = this.device.createBindGroup({
-            layout: this.lightmapBindGroupLayout,
-            entries: [
-                { binding: 0, resource: lightmapView ?? textureCache.getBlackTexture().createView() },
-                { binding: 1, resource: simulationResources.getSampler() },
-            ],
-        });
+            const lightmapView = simulationResources.getLightmapView();
+            this.lightmapBindGroup = this.device.createBindGroup({
+                layout: this.lightmapBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: lightmapView ?? textureCache.getBlackTexture().createView() },
+                    { binding: 1, resource: simulationResources.getSampler() },
+                ],
+            });
 
-        this.sprites = await Promise.all(scene.sprites.map(sprite => this.resolveSprite(sprite, sceneGraph, textureCache, transformResources)));
+            this.sprites = await Promise.all(scene.sprites.map(sprite => this.resolveSprite(sprite, sceneGraph, textureCache, transformResources)));
+        } finally {
+            this.bulkOpInProgress = false;
+        }
         this.rebuildDrawOrder();
     }
 
@@ -253,10 +267,15 @@ export class SpriteResources {
         if (index === -1) {
             return;
         }
-        const [removed] = this.sprites.splice(index, 1);
-        this.propertiesArray.remove(removed.propertiesEntry);
-        this.atlasArray.remove(removed.atlasEntry);
-        transformResources.releaseEntry(removed.ownerId);
+        this.bulkOpInProgress = true;
+        try {
+            const [removed] = this.sprites.splice(index, 1);
+            this.propertiesArray.remove(removed.propertiesEntry);
+            this.atlasArray.remove(removed.atlasEntry);
+            transformResources.releaseEntry(removed.ownerId);
+        } finally {
+            this.bulkOpInProgress = false;
+        }
         this.rebuildDrawOrder();
     }
 
@@ -268,17 +287,22 @@ export class SpriteResources {
     public removeByOwnerIds(ownerIds: Set<number>, transformResources: TransformResources): void {
         const kept: ResolvedSprite[] = [];
         let removedAny = false;
-        for (const resolved of this.sprites) {
-            if (!ownerIds.has(resolved.ownerId)) {
-                kept.push(resolved);
-                continue;
+        this.bulkOpInProgress = true;
+        try {
+            for (const resolved of this.sprites) {
+                if (!ownerIds.has(resolved.ownerId)) {
+                    kept.push(resolved);
+                    continue;
+                }
+                this.propertiesArray.remove(resolved.propertiesEntry);
+                this.atlasArray.remove(resolved.atlasEntry);
+                transformResources.releaseEntry(resolved.ownerId);
+                removedAny = true;
             }
-            this.propertiesArray.remove(resolved.propertiesEntry);
-            this.atlasArray.remove(resolved.atlasEntry);
-            transformResources.releaseEntry(resolved.ownerId);
-            removedAny = true;
+            this.sprites = kept;
+        } finally {
+            this.bulkOpInProgress = false;
         }
-        this.sprites = kept;
         if (removedAny) {
             this.rebuildDrawOrder();
         }
@@ -296,7 +320,7 @@ export class SpriteResources {
         const targetImage = sprite.image;
         if (targetImage !== resolved.lastResolvedImage && resolved.pendingImage !== targetImage) {
             resolved.pendingImage = targetImage;
-            void this.refreshTexture(resolved);
+            this.refreshTexture(resolved).catch((error) => console.error('Litbox: SpriteResources.refreshTexture failed:', error));
         }
     }
 
@@ -430,6 +454,18 @@ export class SpriteResources {
         }
         this.transformResources = transformResources;
         transformResources.onBufferReplaced(() => { this.sharedBindGroupDirty = true; });
+        // indexArray bakes each sprite's transformEntry.index as of rebuildDrawOrder() time (see
+        // writeIndexData) - if that owner's entry later relocates for a reason outside this
+        // sprite's own control (see TransformResources.onOwnerRelocated's doc - e.g. some other
+        // owner's transform being marked dynamic), the baked index goes stale and the draw
+        // silently samples a different object's transform. A full rebuildDrawOrder() re-bakes
+        // every entry from its current (fresh) index; scenes here are small enough that this is
+        // cheap even though only one sprite's index actually changed.
+        transformResources.onOwnerRelocated((ownerId) => {
+            if (!this.bulkOpInProgress && this.sprites.some(resolved => resolved.ownerId === ownerId)) {
+                this.rebuildDrawOrder();
+            }
+        });
     }
 
     private rebuildSharedBindGroup(): void {

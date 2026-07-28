@@ -50,6 +50,7 @@ export class PackedUniformArray<T = unknown> {
     private dirtyMin = -1;
     private dirtyMax = -1;
     private bufferReplacedCallbacks: (() => void)[] = [];
+    private entryRelocatedCallbacks: ((entry: Entry) => void)[] = [];
 
     constructor(device: GPUDevice, strideBytes: number, initialCapacity = 16) {
         this.device = device;
@@ -68,6 +69,24 @@ export class PackedUniformArray<T = unknown> {
     /** Registers a callback fired synchronously whenever growth swaps in a new GPUBuffer, so a cached bind group referencing the old one can be invalidated. */
     public onBufferReplaced(cb: () => void): void {
         this.bufferReplacedCallbacks.push(cb);
+    }
+
+    /**
+     * Registers a callback fired synchronously with `entry` whenever ITS `.index` changes as a
+     * side effect of some OTHER entry's insertStatic/remove/markDynamic call (see Entry's class
+     * doc: `.index` must always be read fresh, never cached). A caller that has baked `.index`
+     * into a byte offset inside some OTHER buffer (e.g. a "which transform slot does this draw
+     * call read" foreign-key-style reference) must use this to re-bake that reference - otherwise
+     * it silently goes stale and ends up pointing at whatever entry now occupies the old slot.
+     */
+    public onEntryRelocated(cb: (entry: Entry) => void): void {
+        this.entryRelocatedCallbacks.push(cb);
+    }
+
+    private notifyRelocated(entry: Entry): void {
+        for (const cb of this.entryRelocatedCallbacks) {
+            cb(entry);
+        }
     }
 
     public getStaticCount(): number {
@@ -178,6 +197,7 @@ export class PackedUniformArray<T = unknown> {
         entry.index = newIndex;
         this.entries[newIndex] = entry;
         this.markDirtyRange(newOffset, this.strideBytes);
+        this.notifyRelocated(entry);
     }
 
     /** Exchanges the byte content (and handles) of two entries. No-op if they're the same entry. */
@@ -201,6 +221,8 @@ export class PackedUniformArray<T = unknown> {
 
         this.markDirtyRange(aOffset, this.strideBytes);
         this.markDirtyRange(bOffset, this.strideBytes);
+        this.notifyRelocated(a);
+        this.notifyRelocated(b);
     }
 
     private markDirtyRange(byteOffset: number, length: number): void {
