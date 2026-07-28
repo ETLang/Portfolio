@@ -14,8 +14,8 @@ export interface BuildDenoiserQuadtreeUniforms {
     volatilityThreshold: number;
     detailThreshold: number;
     varianceGateScale: number;
-    /** G-Buffer/irradiance-space mip this dispatch is building evidence for (this operation's own output mip + 1). */
-    currentGBufferMip: number;
+    /** See build_denoiser_quadtree.wgsl's irradiance range check - shared with DenoiseUniforms' identically-named field, both floor the same log-luminance singularity at 0. */
+    darknessNoiseFloor: number;
 }
 
 const UNIFORM_FIELD_COUNT = 7;
@@ -32,11 +32,9 @@ const DEFAULT_SWITCHES: BuildDenoiserQuadtreeSwitches = { level0: true };
  */
 export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
     private uniformBuffer: GPUBuffer;
-    private linearSampler: GPUSampler;
 
     constructor(device: GPUDevice) {
         super(device, preprocessShader(shaderCode, toDefines(DEFAULT_SWITCHES)), 'main');
-        this.linearSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
         this.uniformBuffer = device.createBuffer({
             size: UNIFORM_FIELD_COUNT * 4,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -49,7 +47,6 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
         this.setShaderCode(preprocessShader(shaderCode, toDefines(switches)));
     }
 
-    /** currentGBufferMip changes every call in the per-frame chain loop, so this always writes (no dedupe cache, unlike most other operations' updateUniforms). */
     public updateUniforms(uniforms: BuildDenoiserQuadtreeUniforms): void {
         this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([
             uniforms.albedoLuminanceThreshold,
@@ -58,7 +55,7 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
             uniforms.volatilityThreshold,
             uniforms.detailThreshold,
             uniforms.varianceGateScale,
-            uniforms.currentGBufferMip,
+            uniforms.darknessNoiseFloor,
         ]));
     }
 
@@ -76,17 +73,19 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
             { binding: 2, resource: volatilityMip0 },
             { binding: 3, resource: combinedIrradiance },
             { binding: 4, resource: filteredVariance },
-            { binding: 5, resource: this.linearSampler },
         ]);
     }
 
-    /** Iterative variant's inputs - the previous level's own min/max/volatility/mustSplit outputs. */
+    /**
+     * Iterative variant's inputs - the previous level's own min/max/volatility/mustSplit outputs.
+     * prevAlbedoMin/Max's alpha channel doubles as the previous level's irradiance-luma min/max
+     * (see the shader's file header for why this rides along instead of getting its own texture).
+     */
     public updateInputsIterate(
         prevAlbedoMin: GPUTextureView,
         prevAlbedoMax: GPUTextureView,
         prevDensityMinMaxVolatility: GPUTextureView,
         prevQuadtreeMustSplit: GPUTextureView,
-        combinedIrradiance: GPUTextureView,
         filteredVariance: GPUTextureView,
     ): void {
         this.setInputs([
@@ -94,12 +93,11 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
             { binding: 1, resource: prevAlbedoMax },
             { binding: 2, resource: prevDensityMinMaxVolatility },
             { binding: 3, resource: prevQuadtreeMustSplit },
-            { binding: 4, resource: combinedIrradiance },
-            { binding: 5, resource: filteredVariance },
-            { binding: 6, resource: this.linearSampler },
+            { binding: 4, resource: filteredVariance },
         ]);
     }
 
+    /** albedoMin/Max's alpha channel carries the irradiance-luma min/max (see the shader's file header) - no dedicated output texture. */
     public updateOutputs(
         albedoMin: GPUTextureView,
         albedoMax: GPUTextureView,

@@ -141,6 +141,35 @@ fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, texelSize: vec2<f32>
 #endif
 }
 
+// Same baked-quadtree lookup as shouldSplit() above, but answering a different question: not "should
+// THIS CANDIDATE NODE keep splitting" (per-node, during traversal), but "does the QUERY pixel itself
+// sit near real, detected detail" (once, before gathering starts) - see main()'s use of this for
+// sigmaAdaptive. Needed because centerVariance can't tell "real feature" apart from "plain MC noise"
+// once it's saturated near its ceiling, which happens almost everywhere in a sparsely-lit scene (a
+// laser through haze, say) - see this project's denoiser plan and CLAUDE.md's sigmaLuminanceLoose
+// note. The quadtree's mustSplit evidence (albedo/density/normal range + the irradiance-detail
+// trigger) is a materially different signal from variance, so it's what actually distinguishes them.
+//
+// Deliberately always reads level 0 (the finest, half-G-Buffer-resolution level), never a level
+// tied to startMip: mustSplit ORs upward from level 0 into every coarser level (see
+// build_denoiser_quadtree.wgsl), which is the right bias for shouldSplit()'s "when in doubt, keep
+// splitting" traversal decision (a false positive there only wastes compute), but reusing that same
+// coarse, OR-broadened flag here would flag an entire wide cell as "near detail" merely because a
+// real edge sits somewhere inside it, forcing every pixel in that cell onto the tight sigma - not a
+// free "when in doubt" choice for THIS use, since it visibly reintroduces noise anywhere the flag
+// spuriously covers (confirmed: using startMip-1 here left a band of noise across an unrelated
+// object's whole bounding region, not just its actual edge). Level 0 stays spatially precise
+// regardless of how deep decideBlurSize decided to blur.
+fn hasNearbyDetail(uv: vec2<f32>) -> bool {
+#ifdef FORCE_FULL_SPLIT
+    return false;
+#else
+    let quadSize = vec2<i32>(textureDimensions(quadtreeMustSplit, 0));
+    let quadCoords = clamp(vec2<i32>(uv * vec2<f32>(quadSize)), vec2<i32>(0), quadSize - vec2<i32>(1));
+    return textureLoad(quadtreeMustSplit, quadCoords, 0).r != 0.0;
+#endif
+}
+
 // spatialWeight * structuralWeight * radianceWeight * node.size - see the denoiser plan for the
 // full justification of each term; summary:
 // - structuralWeight (G-Buffer similarity) rejects cross-material bleed (hard edges,
@@ -182,15 +211,33 @@ fn decideWeight(
     var wAlbedo = 1.0 - saturate(albedoDiff / uniforms.albedoSensitivity);
     wAlbedo *= wAlbedo;
 
+    // heightScale: 0 (a deliberately flat/bump-free raytraced object - see raytraced_gbuffer.wgsl's
+    // `normal * props.heightScale`) stores an exact zero vector in the G-Buffer, not a unit normal.
+    // normalize(vec3(0)) is NaN (0/0 per component), which would otherwise poison wNormal ->
+    // structuralWeight -> this function's whole return value -> accumulated.a in main(), silently
+    // defeating the blur for every pixel touched by such an object (confirmed: battle_scene's
+    // background haze rect has heightScale=0 and covers ~99.9% of the frame - decideWeight NaNed
+    // out almost everywhere, and `accumulated.a > 0.0` is false for NaN, so main() fell back to
+    // raw, unblurred centerIrradiance for virtually the whole image). compute_volatility.wgsl
+    // already treats a near-zero normal as "no orientation data" (dot(n,n) < 0.1) rather than
+    // normalizing it blindly - mirror that guard here. Absent any real orientation signal, there's
+    // no basis to penalize a normal "mismatch", so this term is a pass-through (1.0), not a reject.
+    let hasNormalData = dot(centerNormal, centerNormal) >= 0.1 && dot(sampleNormal, sampleNormal) >= 0.1;
     let normalDot = saturate(dot(normalize(centerNormal), normalize(sampleNormal)));
-    let wNormal = pow(normalDot, uniforms.normalSensitivity);
+    let wNormal = select(1.0, pow(normalDot, uniforms.normalSensitivity), hasNormalData);
 
     let opticalDepthDiff = abs(centerOpticalDepth - opticalDepth(sampleDensityValue));
     var wDensity = 1.0 - saturate(opticalDepthDiff / uniforms.densitySensitivity);
     wDensity *= wDensity;
 
     let structuralWeight = wAlbedo * wNormal * wDensity;
-    let radianceWeight = gaussianWeight(abs(centerLuminance - sampleLuminance), sigmaAdaptive);
+    // Log-domain comparison (see LitboxCommon.wgsl's logLuminance): a raw linear-luminance
+    // difference against a FIXED sigma only means the same thing across scenes if their absolute
+    // brightness scales are similar. Comparing in log space instead makes it a ratio, which a fixed
+    // sigma can mean consistently regardless of a scene's overall light energy - a smaller,
+    // independent robustness improvement alongside the wNormal fix above (this one wasn't confirmed
+    // to be the reported bug's root cause, but doesn't regress cornell_square either).
+    let radianceWeight = gaussianWeight(abs(logLuminance(centerLuminance, uniforms.darknessNoiseFloor) - logLuminance(sampleLuminance, uniforms.darknessNoiseFloor)), sigmaAdaptive);
 
     let distanceInSeeds = length(node.uv - queryUv) / max(seedTexelSize.x, seedTexelSize.y);
     let spatialWeight = exp(-distanceInSeeds * distanceInSeeds);
@@ -241,8 +288,20 @@ fn main(
         return;
     }
 
-    let sigmaAdaptive = mix(uniforms.sigmaLuminanceTight, uniforms.sigmaLuminanceLoose,
-        smoothstep(0.0, 1.0 / uniforms.kLuminance, centerVariance));
+    // Prefer the quadtree's detail evidence over centerVariance where they disagree: variance
+    // alone can't distinguish "there's a real feature here" from "this is just noisy" once it's
+    // saturated (the common case in a sparse/dark scene - see hasNearbyDetail's doc comment), so a
+    // query pixel the quadtree already flagged as sitting near real detail is kept at the tight
+    // sigma regardless of what its own variance says - prioritizing not smearing a genuine edge
+    // over suppressing noise there. Confirmed necessary: raising sigmaLuminanceLoose (see
+    // DEFAULT_DENOISER_TUNABLES in simulation.ts) to fix battle_scene's noisy haze halo also
+    // started dissolving the laser beam itself into that same halo, since decideWeight had no
+    // signal other than variance (saturated near the beam too) to tell the two apart.
+    let sigmaAdaptive = select(
+        mix(uniforms.sigmaLuminanceTight, uniforms.sigmaLuminanceLoose,
+            smoothstep(0.0, 1.0 / uniforms.kLuminance, centerVariance)),
+        uniforms.sigmaLuminanceTight,
+        hasNearbyDetail(uv));
     let centerLuminance = luminance(centerIrradiance);
 
     let seedTexelSize = texelSize * f32(1u << u32(startMip));

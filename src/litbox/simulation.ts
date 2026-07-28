@@ -146,9 +146,19 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     densitySensitivity: 1.0,
     normalSensitivity: 8.0,
     // Matches filter_variance.wgsl's SIGMA_LUMINANCE_TIGHT/LOOSE/K_LUMINANCE exactly - same
-    // adaptive-sigma pattern, reused rather than re-derived (see denoise.wgsl).
+    // adaptive-sigma pattern, reused rather than re-derived (see denoise.wgsl). Both sigmas are now
+    // compared against a log-luminance difference (see denoise.wgsl's decideWeight), not raw
+    // linear luminance - sigmaLuminanceLoose was raised from 2.5 to 6.0 to match: centerVariance
+    // saturates near its ceiling almost everywhere in practice (confirmed via readback), so
+    // decideWeight's adaptive sigma is essentially always at the "loose" end in real use, and 2.5
+    // log2-units was still tight enough to reject most neighbors in a scene with a much wider
+    // brightness range than cornell_square (a laser scene's beam-adjacent halo, ~100x cornell's
+    // peak brightness) - visible as residual salt-and-pepper noise specifically in that halo, even
+    // after the wNormal NaN fix. 6.0 was picked empirically (screenshot comparison against both
+    // scenes): it cleans up the halo without visibly softening cornell_square's real edges (the
+    // rotated cube's silhouette, the sphere's rim) - 10.0 started softening those edges.
     sigmaLuminanceTight: 0.05,
-    sigmaLuminanceLoose: 2.5,
+    sigmaLuminanceLoose: 6.0,
     kLuminance: 2.0,
     // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
     // doc comment for the seed-relative-texels normalization this is measured in.
@@ -766,11 +776,12 @@ export class SimulationResources {
 
         // Thresholds come from denoiserTunables (TBD/tunable - see this project's denoiser plan),
         // shared across every level of the chain (both the LEVEL0 and iterative passes apply the
-        // same comparison, per the Unity reference this was ported from) - only currentGBufferMip
-        // changes per level, so it's overridden fresh on each call below.
+        // same comparison, per the Unity reference this was ported from) - unlike before, nothing
+        // here needs to change per level, since the irradiance range check no longer depends on
+        // which absolute mip is being examined (see build_denoiser_quadtree.wgsl).
         const level0Width = Math.max(1, width >> 1);
         const level0Height = Math.max(1, height >> 1);
-        this.buildQuadtreeLevel0.updateUniforms({ ...this.denoiserTunables, currentGBufferMip: 1 });
+        this.buildQuadtreeLevel0.updateUniforms({ ...this.denoiserTunables });
         this.buildQuadtreeLevel0.updateInputsLevel0(
             albedoView, densityView, this.volatility.getMipView(0), this.combinedIrradiance.view, this.filteredVariance.view,
         );
@@ -783,11 +794,11 @@ export class SimulationResources {
         for (let level = 1; level < this.quadtreeMustSplit.mipLevelCount; level++) {
             const levelWidth = Math.max(1, width >> (level + 1));
             const levelHeight = Math.max(1, height >> (level + 1));
-            this.buildQuadtreeIterate.updateUniforms({ ...this.denoiserTunables, currentGBufferMip: level + 1 });
+            this.buildQuadtreeIterate.updateUniforms({ ...this.denoiserTunables });
             this.buildQuadtreeIterate.updateInputsIterate(
                 this.albedoMin.getMipView(level - 1), this.albedoMax.getMipView(level - 1),
                 this.densityMinMaxVolatility.getMipView(level - 1), this.quadtreeMustSplit.getMipView(level - 1),
-                this.combinedIrradiance.view, this.filteredVariance.view,
+                this.filteredVariance.view,
             );
             this.buildQuadtreeIterate.updateOutputs(
                 this.albedoMin.getMipView(level), this.albedoMax.getMipView(level), this.densityMinMaxVolatility.getMipView(level), this.quadtreeMustSplit.getMipView(level),
