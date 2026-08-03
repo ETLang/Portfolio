@@ -65,6 +65,16 @@ export interface CreateLightOptions extends CreateObjectOptions {
     bounces?: number;
 }
 
+/** The subset of CreateObjectOptions that makes sense to override on a cloneObject() call - `name` is inherited from the template, not chosen. */
+export interface CloneObjectOptions {
+    parent?: string;
+    position?: Vector2;
+    depth?: number;
+    rotation?: number;
+    scale?: Vector2;
+    active?: boolean;
+}
+
 /** CreateLightOptions plus the one field unique to spotlights. */
 export interface CreateSpotlightOptions extends CreateLightOptions {
     pinch?: number;
@@ -222,24 +232,29 @@ export abstract class LitboxScene {
         return entry;
     }
 
-    /** Marks the named object's transform dirty (re-derived/re-uploaded for exactly one frame). No-op if already dynamic. */
-    public markTransformDirty(name: string): void {
-        this.transformFlags.markDirty(this.resolvePath(name));
+    /**
+     * Marks the named (or directly referenced) object's transform dirty (re-derived/re-uploaded
+     * for exactly one frame). No-op if already dynamic. Pass a direct SceneObject reference
+     * (e.g. one returned by cloneObject) instead of a name/path once more than one object shares
+     * that name, since resolvePath can no longer find it unambiguously.
+     */
+    public markTransformDirty(target: string | SceneObject): void {
+        this.transformFlags.markDirty(typeof target === 'string' ? this.resolvePath(target) : target);
     }
 
-    /** Marks the named object's Nth owned light dirty. No-op if already dynamic. */
-    public markLightDirty(name: string, index = 0): void {
-        this.lightFlags.markDirty(this.findLightByOwner(this.resolvePath(name), index));
+    /** Marks the named (or directly referenced) object's Nth owned light dirty - see markTransformDirty for the reference form. No-op if already dynamic. */
+    public markLightDirty(target: string | AnyLight, index = 0): void {
+        this.lightFlags.markDirty(typeof target === 'string' ? this.findLightByOwner(this.resolvePath(target), index) : target);
     }
 
-    /** Marks the named object's Nth owned sprite dirty. No-op if already dynamic. */
-    public markSpriteDirty(name: string, index = 0): void {
-        this.spriteFlags.markDirty(this.findSpriteByOwner(this.resolvePath(name), index));
+    /** Marks the named (or directly referenced) object's Nth owned sprite dirty - see markTransformDirty for the reference form. No-op if already dynamic. */
+    public markSpriteDirty(target: string | SceneSprite, index = 0): void {
+        this.spriteFlags.markDirty(typeof target === 'string' ? this.findSpriteByOwner(this.resolvePath(target), index) : target);
     }
 
-    /** Marks the named object's Nth owned raytraced entry dirty. No-op if already dynamic. */
-    public markRayTracedDirty(name: string, index = 0): void {
-        this.raytracedFlags.markDirty(this.findRaytracedByOwner(this.resolvePath(name), index));
+    /** Marks the named (or directly referenced) object's Nth owned raytraced entry dirty - see markTransformDirty for the reference form. No-op if already dynamic. */
+    public markRayTracedDirty(target: string | RaytracedObject, index = 0): void {
+        this.raytracedFlags.markDirty(typeof target === 'string' ? this.findRaytracedByOwner(this.resolvePath(target), index) : target);
     }
 
     // --- Configuration UI API. Lets a subclass expose bespoke, scene-specific tunables (a
@@ -256,6 +271,35 @@ export abstract class LitboxScene {
      */
     public getObject(name: string): SceneObject {
         return this.resolvePath(name);
+    }
+
+    /**
+     * Resolves a "/"-separated path of direct-child names, rooted at a specific object reference
+     * rather than a globally unique name - use this instead of getObject's name-only path once
+     * more than one object shares a name (e.g. several cloneObject() instances of the same
+     * template, which all keep the template's object names).
+     */
+    public resolveRelativePath(root: SceneObject, path: string): SceneObject {
+        let current = root;
+        for (const segment of path.split('/')) {
+            current = this.resolveChildByName(current, segment);
+        }
+        return current;
+    }
+
+    /** Returns `owner`'s Nth owned sprite, without marking it dynamic/dirty - see resolveRelativePath for why a reference (not a name) is needed for a cloneObject() instance. */
+    public getSprite(owner: SceneObject, index = 0): SceneSprite {
+        return this.findSpriteByOwner(owner, index);
+    }
+
+    /** Returns `owner`'s Nth owned raytraced entry, without marking it dynamic/dirty - see getSprite. */
+    public getRaytraced(owner: SceneObject, index = 0): RaytracedObject {
+        return this.findRaytracedByOwner(owner, index);
+    }
+
+    /** Returns `owner`'s Nth owned light (combined across all kinds), without marking it dynamic/dirty - see getSprite. */
+    public getLight(owner: SceneObject, index = 0): AnyLight {
+        return this.findLightByOwner(owner, index);
     }
 
     /**
@@ -393,6 +437,126 @@ export abstract class LitboxScene {
         return obj;
     }
 
+    /**
+     * Deep-clones `target`'s whole subtree (the object plus every descendant, and anything each
+     * one owns - a sprite, a raytraced entry, a light) as a fresh set of objects, and returns the
+     * cloned root. Every cloned object below the root keeps the source's relative transform
+     * verbatim; `options` overrides just the root's own transform/parent/active fields (e.g. to
+     * place a newly spawned instance), mirroring createObject's options shape.
+     *
+     * `target` accepts a name/path (as elsewhere) or a direct SceneObject reference - a reference
+     * is required once more than one clone of the same template exists, since the template's own
+     * name is no longer unique enough for resolvePath to find it unambiguously.
+     */
+    public cloneObject(target: string | SceneObject, options: CloneObjectOptions = {}): SceneObject {
+        const template = typeof target === 'string' ? this.resolvePath(target) : target;
+        const sourceIds = [template.id, ...this.collectDescendantIds(template.id)];
+        const idMap = new Map<number, number>();
+        const clones: SceneObject[] = [];
+
+        for (const sourceId of sourceIds) {
+            const source = this.data.objects.find(o => o.id === sourceId)!;
+            const isRoot = sourceId === template.id;
+            const parentId = isRoot
+                ? (options.parent ? this.resolvePath(options.parent).id : source.parentId)
+                : idMap.get(source.parentId)!;
+            const clone: SceneObject = {
+                active: isRoot ? (options.active ?? source.active) : source.active,
+                id: this.nextObjectId++,
+                name: source.name,
+                parentId,
+                position: isRoot ? (options.position ?? { ...source.position }) : { ...source.position },
+                depth: isRoot ? (options.depth ?? source.depth) : source.depth,
+                rotation: isRoot ? (options.rotation ?? source.rotation) : source.rotation,
+                scale: isRoot ? (options.scale ?? { ...source.scale }) : { ...source.scale },
+            };
+            idMap.set(sourceId, clone.id);
+            this.data.objects.push(clone);
+            const matches = this.nameIndex.get(clone.name);
+            if (matches) {
+                matches.push(clone);
+            } else {
+                this.nameIndex.set(clone.name, [clone]);
+            }
+            clones.push(clone);
+        }
+
+        for (let i = 0; i < sourceIds.length; i++) {
+            const sourceId = sourceIds[i];
+            const clone = clones[i];
+
+            const sourceSprite = this.data.sprites.find(s => s.ownerId === sourceId);
+            const clonedSprite = sourceSprite ? this.cloneSprite(sourceSprite, clone.id) : undefined;
+            if (clonedSprite) {
+                this.data.sprites.push(clonedSprite);
+            }
+
+            const sourceRaytraced = this.data.raytraced.find(r => r.ownerId === sourceId);
+            const clonedRaytraced = sourceRaytraced ? this.cloneRaytraced(sourceRaytraced, clone.id) : undefined;
+            if (clonedRaytraced) {
+                this.data.raytraced.push(clonedRaytraced);
+            }
+
+            const sourceLight = this.findLightWithKindByOwnerId(sourceId);
+            let clonedLight: AnyLight | undefined;
+            let lightKind: LightKind | undefined;
+            if (sourceLight) {
+                clonedLight = { ...sourceLight.light, ownerId: clone.id, color: { ...sourceLight.light.color } };
+                lightKind = sourceLight.kind;
+                switch (lightKind) {
+                    case 'point': this.data.pointLights.push(clonedLight as PointLight); break;
+                    case 'spot': this.data.spotlights.push(clonedLight as Spotlight); break;
+                    case 'laser': this.data.laserLights.push(clonedLight as LaserLight); break;
+                    case 'directional': this.data.directionalLights.push(clonedLight as DirectionalLight); break;
+                    case 'ambient': this.data.ambientLights.push(clonedLight as AmbientLight); break;
+                }
+            }
+
+            this.pendingStructuralOps.push({
+                type: 'create',
+                object: clone,
+                sprite: clonedSprite,
+                raytraced: clonedRaytraced,
+                light: clonedLight,
+                lightKind,
+            });
+        }
+
+        return clones[0];
+    }
+
+    /** Deep-copies a SceneSprite's own Color fields (never shares them with the source) for a new owner - shared by cloneObject. */
+    private cloneSprite(source: SceneSprite, ownerId: number): SceneSprite {
+        return {
+            ...source,
+            ownerId,
+            colorMod: { ...source.colorMod },
+            ambient: { ...source.ambient },
+            emissive: { ...source.emissive },
+            simContribution: { ...source.simContribution },
+        };
+    }
+
+    /** Deep-copies a RaytracedObject's own Color field for a new owner - shared by cloneObject. */
+    private cloneRaytraced(source: RaytracedObject, ownerId: number): RaytracedObject {
+        return { ...source, ownerId, albedo: { ...source.albedo } };
+    }
+
+    /** Finds whichever of the 5 light arrays owns `ownerId`, and which kind it is - shared by cloneObject (StructuralOp needs the kind alongside the light itself). */
+    private findLightWithKindByOwnerId(ownerId: number): { light: AnyLight; kind: LightKind } | undefined {
+        const point = this.data.pointLights.find(l => l.ownerId === ownerId);
+        if (point) return { light: point, kind: 'point' };
+        const spot = this.data.spotlights.find(l => l.ownerId === ownerId);
+        if (spot) return { light: spot, kind: 'spot' };
+        const laser = this.data.laserLights.find(l => l.ownerId === ownerId);
+        if (laser) return { light: laser, kind: 'laser' };
+        const directional = this.data.directionalLights.find(l => l.ownerId === ownerId);
+        if (directional) return { light: directional, kind: 'directional' };
+        const ambient = this.data.ambientLights.find(l => l.ownerId === ownerId);
+        if (ambient) return { light: ambient, kind: 'ambient' };
+        return undefined;
+    }
+
     /** Constructs and registers (in `data.objects` and `nameIndex`) a new SceneObject; shared by createObject/createSprite/createRaytraced/create<Light>. */
     private buildObject(options: CreateObjectOptions): SceneObject {
         if (options.name.includes('/')) {
@@ -439,10 +603,11 @@ export abstract class LitboxScene {
      * (sprites, lights, raytraced entries) - from `data`, and drops any dynamic/dirty flags on
      * them. Throws without mutating anything if the cascade would remove a camera or simulation
      * owner; there's no supported way to recover the renderer's cached camera/simulation state
-     * from that.
+     * from that. `target` accepts a name/path or a direct SceneObject reference - see
+     * markTransformDirty for why a reference is needed once more than one object shares a name.
      */
-    public destroyObject(name: string): void {
-        const root = this.resolvePath(name);
+    public destroyObject(target: string | SceneObject): void {
+        const root = typeof target === 'string' ? this.resolvePath(target) : target;
         const cascade = this.collectDescendantIds(root.id);
         cascade.unshift(root.id);
         const cascadeIds = new Set(cascade);
