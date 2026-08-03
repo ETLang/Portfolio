@@ -237,6 +237,17 @@ async function main() {
                 return;
             }
 
+            if (req.method === 'POST' && req.url === '/shutdown') {
+                // Respond before tearing down, not after - shutdown() closes this very server's
+                // underlying resources (browser, dev server) and exits the process, which would
+                // otherwise race the response write. The stop-server skill polls /health afterward
+                // to confirm teardown actually completed rather than trusting this response alone.
+                res.writeHead(200, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ ok: true }));
+                setImmediate(() => shutdown('requested via /shutdown endpoint'));
+                return;
+            }
+
             const body = await readBody(req);
             let result;
             if (req.method === 'POST' && req.url === '/select-scene') {

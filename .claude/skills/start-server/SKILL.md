@@ -1,6 +1,6 @@
 ---
 name: start-server
-description: Start the persistent Litbox automation server - a headless Edge browser with WebGPU rendering the app, backed by its own independent dev server - that the select-scene, select-debug-view, set-config-property, and take-screenshot skills all act on. Run this once before using any of those; it stays running in the background and self-shuts-down after a period of inactivity, so it does not need to be stopped manually.
+description: Start the persistent Litbox automation server - a headless Edge browser with WebGPU rendering the app, backed by its own independent dev server - that the select-scene, select-debug-view, set-config-property, and take-screenshot skills all act on. Run this once before using any of those; it stays running in the background and self-shuts-down after a period of inactivity, or can be stopped immediately with the stop-server skill.
 ---
 
 # Start the Litbox automation server
@@ -42,8 +42,10 @@ Spawns a detached background process (`daemon.mjs`) that:
    a safety net independent of the idle timer.
 
 This process is deliberately **not** tied to the lifetime of the tool call that started it - it has
-to survive across every separate `node ...` invocation the other skills make. There is no
-Stop-Server skill by design; it cleans itself up on the idle timer.
+to survive across every separate `node ...` invocation the other skills make. It cleans itself up on
+the idle timer by default, or can be stopped immediately with [stop-server](../stop-server/SKILL.md)
+once you're done with a batch of Litbox visual work and don't want it competing for the GPU any
+longer than necessary.
 
 ## Why no fixed port
 

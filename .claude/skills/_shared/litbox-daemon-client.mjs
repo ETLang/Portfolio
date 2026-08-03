@@ -14,7 +14,7 @@ import path from 'node:path';
 // daemon for its own).
 const STATE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'start-server', 'state', 'daemon-state.json');
 
-function bestEffortKill(pid) {
+export function bestEffortKill(pid) {
     if (!pid) return;
     try {
         if (process.platform === 'win32') {
@@ -27,7 +27,7 @@ function bestEffortKill(pid) {
     }
 }
 
-async function healthCheck(port) {
+export async function healthCheck(port) {
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 2000);
