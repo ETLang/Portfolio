@@ -22,6 +22,7 @@ export const DENOISER_TUNABLE_KEYS = [
     'sigmaLuminanceLoose',
     'kLuminance',
     'maxSplitDistance',
+    'detailMaxSplitDistance',
     'albedoLuminanceThreshold',
     'albedoChromaThreshold',
     'logDensityThreshold',
