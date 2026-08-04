@@ -10,11 +10,15 @@ node .claude/skills/take-screenshot/take-screenshot.mjs [--out <path>] [--settle
 ```
 
 - Requires [start-server](../start-server/SKILL.md) to already be running.
-- The screenshot always lands at `.claude/skills/take-screenshot/output/render.png` unless `--out`
-  overrides it - a fixed path, overwritten on every run, so the same literal command line can be
-  allowlisted once. `--out`, if given, must be a native Windows path (`C:\...`), not a Git-Bash-style
-  path (`/c/...`) - this is a plain Windows Node process, so a `/c/...` path silently gets
-  reinterpreted as relative instead of erroring.
+- Each call lands at a fresh, timestamped file in `.claude/skills/take-screenshot/output/` (e.g.
+  `render-20260804-143022-517.png`) unless `--out` overrides it - screenshots accumulate there
+  across a session rather than one call silently overwriting the last one. Run
+  [clear-screenshots](../clear-screenshots/SKILL.md) to clean that folder out once you're done with
+  a batch of visual work. `--out`, if given, must be a native Windows path (`C:\...`), not a
+  Git-Bash-style path (`/c/...`) - this is a plain Windows Node process, so a `/c/...` path silently
+  gets reinterpreted as relative instead of erroring (this is also exactly how a mangled path once
+  leaked a stray screenshot into the repo root - prefer the timestamped default over hand-rolling
+  `--out` unless you specifically need a stable, memorable name).
 - **No `--scene` flag** - that's [select-scene](../select-scene/SKILL.md)'s job now. Run that first
   if you need a specific scene; this skill only screenshots whatever's currently loaded.
 - `--settle-ms` (default 5000) is how long to let photon accumulation run before capturing. This is

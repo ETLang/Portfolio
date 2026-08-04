@@ -25,8 +25,10 @@ node .claude/skills/stop-server/stop-server.mjs
 
 ## When to call this vs. just leaving it
 
-The daemon self-shuts-down on an idle timer by design (see `start-server/SKILL.md`), so calling this
-is never required for correctness - only for freeing the GPU/CPU sooner than the idle timeout would.
-Call it once you're confident you're done with Litbox visual work for the current task, not after
-every individual screenshot/scene-switch (the other skills all reuse the same daemon across calls;
-stopping it between every call would just force a slow restart on the next one).
+A `Stop` hook (`.claude/settings.json`) already calls this automatically at the end of every Claude
+Code turn, so the server never sits idle on the GPU waiting for a human to notice - you shouldn't
+normally need to call this yourself. Manual calls are still useful mid-turn if you're confident a
+whole batch of Litbox visual work (screenshots/scene switches/debug views/config tweaks) is done and
+want the GPU freed before the turn ends, or when debugging the server itself. The daemon's own idle
+timer (30s, see `start-server/SKILL.md`) is a backstop for cases the hook can't reach (a
+crashed/killed session), not the primary teardown path anymore.

@@ -6,14 +6,14 @@ description: Start the persistent Litbox automation server - a headless Edge bro
 # Start the Litbox automation server
 
 This is the entry point for the atomized Litbox skill library (select-scene, select-debug-view,
-set-config-property, take-screenshot, crop-zoom, diff-screenshots). Run it once at the start of a
+set-config-property, take-screenshot, crop-zoom, diff-screenshots, clear-screenshots). Run it once at the start of a
 session of Litbox visual work; the other skills will fail with a clear error telling you to run this
 first if you skip it or if the server has since idled out.
 
 ## How to run it
 
 ```
-node .claude/skills/start-server/start-server.mjs [--idle-timeout-ms 600000] [--width 1280] [--height 800]
+node .claude/skills/start-server/start-server.mjs [--idle-timeout-ms 30000] [--width 1280] [--height 800]
 ```
 
 - **Idempotent - safe to call redundantly.** If a healthy server is already running, this returns
@@ -23,7 +23,12 @@ node .claude/skills/start-server/start-server.mjs [--idle-timeout-ms 600000] [--
 - `--width`/`--height` only take effect on a fresh start (they set the browser's initial viewport);
   they're ignored on an `alreadyRunning: true` response. `take-screenshot` can still change the
   viewport per-shot later.
-- `--idle-timeout-ms` (default 10 minutes) only takes effect on a fresh start too.
+- `--idle-timeout-ms` (default 30 seconds) only takes effect on a fresh start too. Deliberately
+  short - this is a real Edge process doing real WebGPU rendering, so it shouldn't sit idle on the
+  GPU waiting out a long timer. A `Stop` hook (see `.claude/settings.json`) also calls
+  `stop-server` immediately after every Claude Code turn, so this timeout is mainly a backstop for
+  when that hook doesn't get to run (e.g. a crashed/killed session) rather than the primary way the
+  server gets torn down.
 
 ## What this actually does
 

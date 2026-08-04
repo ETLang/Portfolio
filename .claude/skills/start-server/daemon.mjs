@@ -31,7 +31,7 @@ function log(...args) {
 }
 
 function parseArgs(argv) {
-    const args = { idleTimeoutMs: 10 * 60 * 1000, width: 1280, height: 800 };
+    const args = { idleTimeoutMs: 30 * 1000, width: 1280, height: 800 };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--idle-timeout-ms') args.idleTimeoutMs = Number(argv[++i]);
