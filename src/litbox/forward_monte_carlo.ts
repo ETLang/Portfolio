@@ -17,9 +17,10 @@ const LIGHT_KIND_DEFINE: Record<LightKind, string> = {
 // Must match the Uniforms struct layout in forward_monte_carlo.wgsl exactly (WGSL's default
 // uniform-address-space struct layout rules: mat4x4 at 0 (64 bytes), vec3 at 64 (padded to 16),
 // bounces/seedBase/halfIndex (u32) packed into that vec3's trailing padding at 76/80/84,
-// directionalLightDirection (vec2, 8-byte aligned) at 88, lightPinch at 96, then two f32 at
-// 104/108 - total 112 bytes).
-const UNIFORMS_SIZE_BYTES = 112;
+// directionalLightDirection (vec2, 8-byte aligned) at 88, lightPinch at 96, two f32 at 104/108,
+// then directionalLightSegmentStart/Vector (vec2 each, 8-byte aligned) at 112/120 - total 128
+// bytes).
+const UNIFORMS_SIZE_BYTES = 128;
 
 export interface ForwardMonteCarloSwitches {
     /**
@@ -51,6 +52,10 @@ export interface ForwardMonteCarloUniforms {
     /** 0 or 1 - which half of the two-way variance-estimation split this dispatch writes into - see forward_monte_carlo.wgsl's Uniforms.halfIndex. */
     halfIndex: number;
     directionalLightDirection: readonly [number, number];
+    /** Directional kind only - one endpoint of the sampling segment, see computeDirectionalLightSegment. */
+    directionalLightSegmentStart: readonly [number, number];
+    /** Directional kind only - the segment's full extent (end - start), see computeDirectionalLightSegment. */
+    directionalLightSegmentVector: readonly [number, number];
     /** (pinch^2, atan(pinch^2)) - spot kind only. */
     lightPinch: readonly [number, number];
     integrationInterval: number;
@@ -73,7 +78,18 @@ export interface ForwardMonteCarloUniforms {
  * Unity uses plain bilinear for all of those, so one shared linear sampler covers them all).
  */
 export class ForwardMonteCarloOperation extends ComputeOperation {
-    private uniformBuffer: GPUBuffer;
+    /**
+     * One small uniform buffer per dispatch within the current frame, not a single buffer reused
+     * across calls - see updateUniforms's doc comment for why a single shared buffer is actually
+     * incorrect here, unlike every other ComputeOperation subclass in this codebase (which only
+     * ever dispatch once per frame, so reuse is safe for them). Grows lazily (nextSlot climbing
+     * past the pool's current length allocates one more buffer) and is capped at whatever the
+     * largest per-frame dispatch count has been so far - beginFrame() resets nextSlot to 0 without
+     * shrinking the pool, so steady-state operation allocates nothing once the pool has grown to
+     * cover a typical frame's dispatch count.
+     */
+    private uniformBufferPool: GPUBuffer[] = [];
+    private nextSlot = 0;
     private pointSampler: GPUSampler;
     private linearSampler: GPUSampler;
 
@@ -104,12 +120,6 @@ export class ForwardMonteCarloOperation extends ComputeOperation {
         }), 'main');
         this.baseDefines = baseDefines;
 
-        this.uniformBuffer = device.createBuffer({
-            size: UNIFORMS_SIZE_BYTES,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        this.setUniforms([{ binding: 0, resource: { buffer: this.uniformBuffer } }]);
-
         this.pointSampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest', mipmapFilter: 'nearest' });
         this.linearSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'nearest' });
     }
@@ -126,6 +136,38 @@ export class ForwardMonteCarloOperation extends ComputeOperation {
         this.setShaderCode(preprocessShader(shaderCode, defines));
     }
 
+    /**
+     * Resets the uniform-buffer-pool slot cursor - call once per frame, before this light kind's
+     * first updateUniforms() call that frame (see SimulationResources.tracePhotons). Reusing slot
+     * 0 again is safe even though the GPU may still be processing last frame's submitted work
+     * referencing that same buffer: WebGPU orders queue.writeBuffer() strictly relative to
+     * queue.submit() calls on the same queue, so a write issued after last frame's submit() (which
+     * this always is, since render() submits synchronously before the next frame's render() call
+     * can begin) is guaranteed to only be visible to subsequently submitted work, never to
+     * corrupt whatever the GPU is still executing from last frame - no extra N-buffering needed
+     * for that reason, unlike RingBufferedUniform's cross-frame-overlap concern.
+     */
+    public beginFrame(): void {
+        this.nextSlot = 0;
+    }
+
+    /**
+     * Writes into a FRESH slot of uniformBufferPool for every call, never a shared/reused buffer
+     * within the same frame. This is a deliberate deviation from every other ComputeOperation
+     * subclass in this codebase (which all write a single persistent uniform buffer, safe because
+     * they dispatch at most once per frame): SimulationResources.tracePhotons calls
+     * updateUniforms()+execute() on this SAME operation instance once per (light instance, A/B
+     * half) - often many times per frame - all recorded into one shared GPUCommandEncoder that
+     * isn't submitted until the very end of the frame. GPUQueue.writeBuffer() and
+     * GPUQueue.submit() are ordered strictly by JS call order on the queue's timeline, but
+     * recording a compute pass into an encoder does NOT snapshot a bound buffer's contents - the
+     * pass only reads whatever the buffer holds once the GPU actually reaches it, which is after
+     * every writeBuffer() call issued before that frame's single submit(). A single reused buffer
+     * therefore left every earlier dispatch silently reading the LAST dispatch's uniforms (same
+     * seedBase/halfIndex/lightEnergy) once the frame actually ran - confirmed by giving each
+     * dispatch its own buffer and watching the 'irradiance-a' debug view go from flat zero
+     * (every dispatch silently colliding into halfIndex 1's slot) to real per-pixel noise.
+     */
     public updateUniforms(uniforms: ForwardMonteCarloUniforms): void {
         const data = new ArrayBuffer(UNIFORMS_SIZE_BYTES);
         new Float32Array(data, 0, 16).set(uniforms.lightToTarget as Float32Array);
@@ -142,7 +184,26 @@ export class ForwardMonteCarloOperation extends ComputeOperation {
         view.setFloat32(100, uniforms.lightPinch[1], true);
         view.setFloat32(104, uniforms.integrationInterval, true);
         view.setFloat32(108, uniforms.integrationIntervalSquared, true);
-        this.device.queue.writeBuffer(this.uniformBuffer, 0, data);
+        view.setFloat32(112, uniforms.directionalLightSegmentStart[0], true);
+        view.setFloat32(116, uniforms.directionalLightSegmentStart[1], true);
+        view.setFloat32(120, uniforms.directionalLightSegmentVector[0], true);
+        view.setFloat32(124, uniforms.directionalLightSegmentVector[1], true);
+
+        let buffer = this.uniformBufferPool[this.nextSlot];
+        if (!buffer) {
+            buffer = this.device.createBuffer({
+                size: UNIFORMS_SIZE_BYTES,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            this.uniformBufferPool[this.nextSlot] = buffer;
+        }
+        this.nextSlot++;
+        this.device.queue.writeBuffer(buffer, 0, data);
+        // A distinct buffer object per slot (not a shared one at varying offsets) so
+        // ComputeOperation's own entriesEqual/resourceIdentity dirty-check - which only compares
+        // buffer object identity, not offset - correctly rebuilds the bind group every time the
+        // slot actually changes, with no changes needed to that shared base-class logic.
+        this.setUniforms([{ binding: 0, resource: { buffer } }]);
 
         // Deliberate deviation from the usual ComputeOperation convention (dispatch extent
         // normally derives from updateOutputs' resource size): here the dispatch extent is this
@@ -238,12 +299,47 @@ export function computeLightToTarget(pixelsFromWorld: mat4, worldFromLight: mat4
     return lightToTarget;
 }
 
-/** Directional-kind-only: transforms local "down" (0,-1,0) as a direction (w=0, translation-free) through `lightToTarget` and normalizes. */
-export function computeDirectionalLightDirection(lightToTarget: mat4): [number, number] {
+/** ComputeDirectionalLightSegment's small safety margin, purely against rounding error: pushing
+ *  the segment back by exactly the rect's half-diagonal already clears every corner in theory, but
+ *  a grazing ray at that exact distance could clip one under floating-point error. */
+const DIRECTIONAL_LIGHT_SEGMENT_MARGIN = 1.02;
+
+export interface DirectionalLightSegment {
+    /** Unit ray direction in target-pixel space. */
+    direction: readonly [number, number];
+    /** One endpoint of the perpendicular sampling segment, in target-pixel space. */
+    segmentStart: readonly [number, number];
+    /** The segment's full extent (segmentEnd - segmentStart). */
+    segmentVector: readonly [number, number];
+    /** |segmentVector| - used to scale this light's per-photon energy so total emitted power stays independent of the target's resolution. */
+    length: number;
+}
+
+/**
+ * Directional-kind-only: transforms local "down" (0,-1,0) as a direction (w=0, translation-free)
+ * through `lightToTarget` and normalizes, then builds a line segment perpendicular to that
+ * direction which is guaranteed to clear the [0,width]x[0,height] target rect from any direction -
+ * a random point on it is a valid ray origin "just out of view" of the simulation area. The rect's
+ * half-diagonal is the smallest distance that works for every direction (no point in the rect is
+ * farther from its center than that), so it's used both as the segment's half-length and as how
+ * far back to push it from the rect's center along the incoming direction.
+ */
+export function computeDirectionalLightSegment(lightToTarget: mat4, width: number, height: number): DirectionalLightSegment {
     const transformed = vec4.create();
     vec4.transformMat4(transformed, [0, -1, 0, 0], lightToTarget);
-    const length = Math.hypot(transformed[0], transformed[1]);
-    return length > 0 ? [transformed[0] / length, transformed[1] / length] : [0, 0];
+    const rawLength = Math.hypot(transformed[0], transformed[1]);
+    const direction: [number, number] = rawLength > 0 ? [transformed[0] / rawLength, transformed[1] / rawLength] : [0, -1];
+
+    const perp: [number, number] = [-direction[1], direction[0]];
+    const halfDiagonal = 0.5 * Math.hypot(width, height) * DIRECTIONAL_LIGHT_SEGMENT_MARGIN;
+
+    const centerX = width * 0.5 - direction[0] * halfDiagonal;
+    const centerY = height * 0.5 - direction[1] * halfDiagonal;
+
+    const segmentStart: [number, number] = [centerX - perp[0] * halfDiagonal, centerY - perp[1] * halfDiagonal];
+    const segmentVector: [number, number] = [perp[0] * 2 * halfDiagonal, perp[1] * 2 * halfDiagonal];
+
+    return { direction, segmentStart, segmentVector, length: 2 * halfDiagonal };
 }
 
 /** Combines the write counter's 2 u32 readback values (see SimulationResources.getWriteCount) into the manual-uint64 they represent - `lo` is the wrapping low 32 bits, `hi` is the overflow/carry count. */

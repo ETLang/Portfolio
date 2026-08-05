@@ -19,9 +19,28 @@ interface OwnerRecord {
 export class TransformResources {
     private array: PackedUniformArray<mat4>;
     private owners = new Map<number, OwnerRecord>();
+    private ownerRelocatedCallbacks: ((ownerId: number) => void)[] = [];
 
     constructor(device: GPUDevice) {
         this.array = new PackedUniformArray<mat4>(device, TRANSFORM_STRIDE_BYTES);
+        // Translates the array's per-Entry relocation event (see PackedUniformArray.
+        // onEntryRelocated) into the ownerId space consumers actually think in - light/raytraced/
+        // sprite resources bake `ensureEntry(...).index` into their own buffers (a "which
+        // transform slot" foreign key), which goes stale the moment that entry moves due to some
+        // OTHER owner's markDynamic/insertStatic/remove call. Without this, that staleness is
+        // silent: the transform buffer itself always stays internally consistent (see
+        // PackedUniformArray's swap/relocateTo, which move the byte content along with the
+        // index), so nothing errors - a draw just quietly samples a different object's transform.
+        this.array.onEntryRelocated((entry) => {
+            for (const [ownerId, record] of this.owners) {
+                if (record.entry === entry) {
+                    for (const cb of this.ownerRelocatedCallbacks) {
+                        cb(ownerId);
+                    }
+                    return;
+                }
+            }
+        });
     }
 
     public getBuffer(): GPUBuffer {
@@ -30,6 +49,16 @@ export class TransformResources {
 
     public onBufferReplaced(cb: () => void): void {
         this.array.onBufferReplaced(cb);
+    }
+
+    /**
+     * Registers a callback fired with `ownerId` whenever that owner's transform entry's `.index`
+     * changes for a reason outside that owner's own control (see the constructor's comment) - a
+     * consumer that baked `ensureEntry(ownerId, ...).index` into one of its own buffers must
+     * re-bake it in response, or that reference silently goes stale.
+     */
+    public onOwnerRelocated(cb: (ownerId: number) => void): void {
+        this.ownerRelocatedCallbacks.push(cb);
     }
 
     /** Gets (or creates) `ownerId`'s transform entry, incrementing its reference count. */

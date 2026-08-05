@@ -111,6 +111,16 @@ export class RaytracedResources {
     private textureCache: TextureCache | null = null;
     private transformResources: TransformResources | null = null;
 
+    /**
+     * True while loadFromScene/removeRaytraced/removeByOwnerIds is already mid-flight - each of
+     * those always finishes with its own rebuildDrawOrder() call against fully consistent state,
+     * so a relocation-triggered rebuild during that window is both redundant and unsafe (it would
+     * run against `this.objects`/`this.indexEntries` mid-mutation, e.g. objects already released
+     * from transformResources but not yet spliced out of `this.objects` - see
+     * registerTransformResources' onOwnerRelocated listener).
+     */
+    private bulkOpInProgress = false;
+
     private cameraUniformBuffer: GPUBuffer;
 
     private albedoGBuffer: ComputedTexture | null = null;
@@ -223,58 +233,63 @@ export class RaytracedResources {
         this.textureCache = textureCache;
         this.registerTransformResources(transformResources);
 
-        for (const entry of this.indexEntries) {
-            this.indexArray.remove(entry);
-        }
-        for (const resolved of this.objects) {
-            this.propertiesArray.remove(resolved.propertiesEntry);
-            this.atlasArray.remove(resolved.atlasEntry);
-            this.atlasArray.remove(resolved.logDensityAtlasEntry);
-            this.atlasArray.remove(resolved.sdfNormalAtlasEntry);
-            transformResources.releaseEntry(resolved.ownerId);
-        }
-        this.objects = [];
-        this.indexEntries = [];
+        this.bulkOpInProgress = true;
+        try {
+            for (const entry of this.indexEntries) {
+                this.indexArray.remove(entry);
+            }
+            for (const resolved of this.objects) {
+                this.propertiesArray.remove(resolved.propertiesEntry);
+                this.atlasArray.remove(resolved.atlasEntry);
+                this.atlasArray.remove(resolved.logDensityAtlasEntry);
+                this.atlasArray.remove(resolved.sdfNormalAtlasEntry);
+                transformResources.releaseEntry(resolved.ownerId);
+            }
+            this.objects = [];
+            this.indexEntries = [];
 
-        if (this.albedoGBuffer) {
-            this.computedDataManager.releaseTexture(this.albedoGBuffer);
-            this.albedoGBuffer = null;
-        }
-        if (this.densityGBuffer) {
-            this.computedDataManager.releaseTexture(this.densityGBuffer);
-            this.densityGBuffer = null;
-        }
-        if (this.normalRoughnessGBuffer) {
-            this.computedDataManager.releaseTexture(this.normalRoughnessGBuffer);
-            this.normalRoughnessGBuffer = null;
-        }
-        this.hasGBufferTarget = false;
-        this.simulationOwnerId = simulationResources.getOwnerId();
+            if (this.albedoGBuffer) {
+                this.computedDataManager.releaseTexture(this.albedoGBuffer);
+                this.albedoGBuffer = null;
+            }
+            if (this.densityGBuffer) {
+                this.computedDataManager.releaseTexture(this.densityGBuffer);
+                this.densityGBuffer = null;
+            }
+            if (this.normalRoughnessGBuffer) {
+                this.computedDataManager.releaseTexture(this.normalRoughnessGBuffer);
+                this.normalRoughnessGBuffer = null;
+            }
+            this.hasGBufferTarget = false;
+            this.simulationOwnerId = simulationResources.getOwnerId();
 
-        // Sourced from simulationResources (device-profile-scaled), not scene.simulations[0]
-        // directly (the scene's raw, unscaled config) - this G-Buffer must match the simulation's
-        // actual target resolution exactly, since forward_monte_carlo.wgsl samples both at the
-        // same target pixel coordinates - see SimulationResources.getEffectiveResolution.
-        const resolution = simulationResources.getEffectiveResolution();
-        if (!resolution) {
-            return;
-        }
-        // Mip chains feed the denoiser's evidence gathering (this project's denoiser plan) - same
-        // level-count formula as SimulationResources' lightmap. Albedo/NormalRoughness get
-        // STORAGE_BINDING so MipDownsampleOperation can textureStore into their higher mips;
-        // Density (rg16float) can't - not a valid WGSL storage-texture format - so its mips are
-        // generated via a render-attachment blit instead (DensityMipBlitResources), for which
-        // RENDER_ATTACHMENT (already present below) is sufficient.
-        const mipLevelCount = Math.floor(Math.log2(Math.max(resolution.width, resolution.height))) + 1;
-        const storageUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING;
-        const renderOnlyUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
-        this.albedoGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, ALBEDO_FORMAT, storageUsage, mipLevelCount);
-        this.densityGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, DENSITY_FORMAT, renderOnlyUsage, mipLevelCount);
-        this.normalRoughnessGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, NORMAL_ROUGHNESS_FORMAT, storageUsage, mipLevelCount);
-        this.hasGBufferTarget = true;
+            // Sourced from simulationResources (device-profile-scaled), not scene.simulations[0]
+            // directly (the scene's raw, unscaled config) - this G-Buffer must match the simulation's
+            // actual target resolution exactly, since forward_monte_carlo.wgsl samples both at the
+            // same target pixel coordinates - see SimulationResources.getEffectiveResolution.
+            const resolution = simulationResources.getEffectiveResolution();
+            if (!resolution) {
+                return;
+            }
+            // Mip chains feed the denoiser's evidence gathering (this project's denoiser plan) - same
+            // level-count formula as SimulationResources' lightmap. Albedo/NormalRoughness get
+            // STORAGE_BINDING so MipDownsampleOperation can textureStore into their higher mips;
+            // Density (rg16float) can't - not a valid WGSL storage-texture format - so its mips are
+            // generated via a render-attachment blit instead (DensityMipBlitResources), for which
+            // RENDER_ATTACHMENT (already present below) is sufficient.
+            const mipLevelCount = Math.floor(Math.log2(Math.max(resolution.width, resolution.height))) + 1;
+            const storageUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING;
+            const renderOnlyUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
+            this.albedoGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, ALBEDO_FORMAT, storageUsage, mipLevelCount);
+            this.densityGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, DENSITY_FORMAT, renderOnlyUsage, mipLevelCount);
+            this.normalRoughnessGBuffer = this.computedDataManager.acquireTexture(resolution.width, resolution.height, NORMAL_ROUGHNESS_FORMAT, storageUsage, mipLevelCount);
+            this.hasGBufferTarget = true;
 
-        this.objects = await Promise.all(scene.raytraced.map(entry => this.resolveRaytraced(entry, sceneGraph, textureCache, transformResources)));
-        this.refreshViewProjection(sceneGraph);
+            this.objects = await Promise.all(scene.raytraced.map(entry => this.resolveRaytraced(entry, sceneGraph, textureCache, transformResources)));
+            this.refreshViewProjection(sceneGraph);
+        } finally {
+            this.bulkOpInProgress = false;
+        }
         this.rebuildDrawOrder();
     }
 
@@ -369,12 +384,17 @@ export class RaytracedResources {
         if (index === -1) {
             return;
         }
-        const [removed] = this.objects.splice(index, 1);
-        this.propertiesArray.remove(removed.propertiesEntry);
-        this.atlasArray.remove(removed.atlasEntry);
-        this.atlasArray.remove(removed.logDensityAtlasEntry);
-        this.atlasArray.remove(removed.sdfNormalAtlasEntry);
-        transformResources.releaseEntry(removed.ownerId);
+        this.bulkOpInProgress = true;
+        try {
+            const [removed] = this.objects.splice(index, 1);
+            this.propertiesArray.remove(removed.propertiesEntry);
+            this.atlasArray.remove(removed.atlasEntry);
+            this.atlasArray.remove(removed.logDensityAtlasEntry);
+            this.atlasArray.remove(removed.sdfNormalAtlasEntry);
+            transformResources.releaseEntry(removed.ownerId);
+        } finally {
+            this.bulkOpInProgress = false;
+        }
         this.rebuildDrawOrder();
     }
 
@@ -382,19 +402,24 @@ export class RaytracedResources {
     public removeByOwnerIds(ownerIds: Set<number>, transformResources: TransformResources): void {
         const kept: ResolvedRaytracedEntry[] = [];
         let removedAny = false;
-        for (const resolved of this.objects) {
-            if (!ownerIds.has(resolved.ownerId)) {
-                kept.push(resolved);
-                continue;
+        this.bulkOpInProgress = true;
+        try {
+            for (const resolved of this.objects) {
+                if (!ownerIds.has(resolved.ownerId)) {
+                    kept.push(resolved);
+                    continue;
+                }
+                this.propertiesArray.remove(resolved.propertiesEntry);
+                this.atlasArray.remove(resolved.atlasEntry);
+                this.atlasArray.remove(resolved.logDensityAtlasEntry);
+                this.atlasArray.remove(resolved.sdfNormalAtlasEntry);
+                transformResources.releaseEntry(resolved.ownerId);
+                removedAny = true;
             }
-            this.propertiesArray.remove(resolved.propertiesEntry);
-            this.atlasArray.remove(resolved.atlasEntry);
-            this.atlasArray.remove(resolved.logDensityAtlasEntry);
-            this.atlasArray.remove(resolved.sdfNormalAtlasEntry);
-            transformResources.releaseEntry(resolved.ownerId);
-            removedAny = true;
+            this.objects = kept;
+        } finally {
+            this.bulkOpInProgress = false;
         }
-        this.objects = kept;
         if (removedAny) {
             this.rebuildDrawOrder();
         }
@@ -413,7 +438,7 @@ export class RaytracedResources {
         const targetImage = raytraced.albedoMap;
         if (targetImage !== resolved.lastResolvedImage && resolved.pendingImage !== targetImage) {
             resolved.pendingImage = targetImage;
-            void this.refreshTexture(resolved);
+            this.refreshTexture(resolved).catch((error) => console.error('Litbox: RaytracedResources.refreshTexture failed:', error));
         }
     }
 
@@ -438,7 +463,20 @@ export class RaytracedResources {
         if (!resolved) {
             return;
         }
+        // propertiesArray.markDynamic can relocate up to two entries: resolved's own (moving to
+        // the dynamic region) and whichever object currently occupies the last static slot
+        // (displaced to make the dynamic region contiguous - see PackedUniformArray.markDynamic).
+        // Every object's indexArray entry holds a *snapshot* of its propertiesEntry.index taken by
+        // rebuildDrawOrder - so either relocation leaves that snapshot stale (pointing at whatever
+        // now occupies the old slot) until the index buffer is rederived. Only do this on an
+        // actual (first-time) transition, so per-frame calls on an already-dynamic object (the
+        // common case - see LitboxSceneRenderer.applyDynamicSceneUpdates) stay a cheap no-op -
+        // mirrors SpriteResources.markDynamic's identical guard.
+        const wasStatic = resolved.propertiesEntry.index < this.propertiesArray.getStaticCount();
         this.propertiesArray.markDynamic(resolved.propertiesEntry);
+        if (wasStatic) {
+            this.rebuildDrawOrder();
+        }
     }
 
     /**
@@ -625,6 +663,17 @@ export class RaytracedResources {
         }
         this.transformResources = transformResources;
         transformResources.onBufferReplaced(() => { this.sharedBindGroupDirty = true; });
+        // indexArray bakes each object's transformEntry.index as of rebuildDrawOrder() time (see
+        // writeIndexData) - if that owner's entry later relocates for a reason outside this
+        // object's own control (see TransformResources.onOwnerRelocated's doc), the baked index
+        // goes stale and the draw silently samples a different object's transform. A full
+        // rebuildDrawOrder() re-bakes every entry from its current (fresh) index; scenes here are
+        // small enough that this is cheap even though only one object's index actually changed.
+        transformResources.onOwnerRelocated((ownerId) => {
+            if (!this.bulkOpInProgress && this.objects.some(resolved => resolved.ownerId === ownerId)) {
+                this.rebuildDrawOrder();
+            }
+        });
     }
 
     private rebuildSharedBindGroup(): void {

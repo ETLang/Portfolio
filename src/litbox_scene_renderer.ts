@@ -21,6 +21,10 @@ const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // bytes), matching CameraUniform in sprite.wgsl.
 const CAMERA_UNIFORM_SIZE_BYTES = 4 * 16 * 2 + 16;
 const FRAMES_IN_FLIGHT = 2;
+// requestAnimationFrame is throttled/paused while the tab is hidden, so the first frame after
+// it becomes visible again can report a multi-minute delta - clamped here (once, for every
+// scene's onFrame) rather than trusting each scene to defend against it independently.
+const MAX_DELTA_TIME_SECONDS = 0.1;
 // Mirrors tonemap.wgsl's toneMapDefaultShape() - used when there's no active camera, or when a
 // scene predates blackPointLog/whitePointLog and the loaded JSON doesn't carry them.
 const DEFAULT_WHITE_POINT_LOG: Vector3 = { x: 2, y: 2, z: 2 };
@@ -79,6 +83,13 @@ export class LitboxSceneRenderer {
     private activeScene: LitboxScene | null = null;
     private lastFrameTimeMs: number | null = null;
 
+    /**
+     * Serializes rebuildFromScene() calls (see queueRebuild) - never resolves to a rejection
+     * itself (queueRebuild always catches), so chaining onto it never leaves the queue stuck on a
+     * failed link.
+     */
+    private sceneLoadQueue: Promise<void> = Promise.resolve();
+
     /** Rendered-frames-per-second, averaged over a rolling window - see getFps(). */
     private fpsCounter = new RollingRateCounter(500);
 
@@ -101,9 +112,11 @@ export class LitboxSceneRenderer {
      * When set (to a key registered in debugViews - currently 'albedo', 'density', 'normal',
      * 'roughness' from the raytraced G-Buffer; 'lightmap' from the simulation's final HDR image;
      * 'irradiance-a'/'irradiance-b' (the two independent, uncombined per-half HDR estimates -
-     * see this project's denoiser plan), 'combined-irradiance' (their mean, pre-denoise), and
-     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline, see
-     * createSharedResources), replaces the entire normal render (simulation/sprites/tonemap) with
+     * see this project's denoiser plan), 'combined-irradiance' (their mean, pre-denoise),
+     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline, and
+     * 'gradient-coherence' (prototype structural-detail evidence, not yet consumed by any
+     * decision - see compute_gradient_coherence.wgsl), see createSharedResources), replaces the
+     * entire normal render (simulation/sprites/tonemap) with
      * a direct blit of that view's source texture to the swapchain, transformed for actual
      * legibility (see debug_view_blit.wgsl) - a diagnostic aid for verifying render-target
      * contents before anything downstream consumes them. Mipmapped sources (G-Buffer, lightmap,
@@ -170,7 +183,7 @@ export class LitboxSceneRenderer {
         this.createSharedResources();
 
         if (this.activeScene) {
-            await this.rebuildFromScene();
+            await this.queueRebuild(this.activeScene);
         }
 
         this.render = this.render.bind(this);
@@ -184,8 +197,45 @@ export class LitboxSceneRenderer {
         this.activeScene = scene;
         scene.onLoad(this);
         if (this.device) {
-            await this.rebuildFromScene();
+            await this.queueRebuild(scene);
         }
+    }
+
+    /**
+     * Runs rebuildFromScene() for `scene`, serialized against every other queueRebuild() call so
+     * at most one is ever running at a time. Necessary because rebuildFromScene does synchronous
+     * teardown of the *previous* scene's GPU resources followed by an *async* rebuild (texture
+     * fetches, EXR decode, etc.) of the new one - two overlapping calls would interleave their
+     * teardown/rebuild against the same shared TransformResources/light/raytraced/sprite resource
+     * managers, corrupting them (this is what "switch scenes a couple of times and it looks wrong
+     * until it settles" turned out to be: a slow scene load (e.g. one with a large EXR texture)
+     * still in flight when the user picks another scene before it finishes).
+     *
+     * Skips the rebuild entirely if `scene` is no longer `this.activeScene` by the time its turn
+     * comes up (superseded by a later setScene() call while this one was queued) - both because
+     * building a scene that's about to be replaced is wasted GPU work, and because it's what makes
+     * rapid switching converge on the *last* selection instead of transiently rendering every
+     * intermediate one in sequence.
+     */
+    private queueRebuild(scene: LitboxScene): Promise<void> {
+        const task = this.sceneLoadQueue.then(async () => {
+            if (this.activeScene === scene) {
+                await this.rebuildFromScene();
+            }
+        });
+        // Logged here unconditionally - not every caller of setScene() bothers to await/catch it
+        // (e.g. main.ts's initial `SCENE_REGISTRY[...].load().then(scene => renderer.setScene(scene))`
+        // has no .catch() at all), so without this a failed rebuild would otherwise only ever
+        // surface as a bare, contextless "Uncaught (in promise)" in the browser console - or worse,
+        // nothing at all if something upstream happens to swallow it.
+        const logged = task.catch((error) => {
+            console.error(`Litbox: failed to load scene "${scene.baseUrl}":`, error);
+        });
+        // Derived from `logged`, not `task` directly: keeps the queue moving even when this
+        // rebuild fails, without masking the error from this call's own caller, which awaits
+        // `task` (still rejects normally) rather than this internal bookkeeping promise.
+        this.sceneLoadQueue = logged;
+        return task;
     }
 
     /**
@@ -229,19 +279,27 @@ export class LitboxSceneRenderer {
      * loop: getWriteCount() awaits an async GPU readback, which would otherwise stall frame timing.
      */
     private async pollPhotonWriteRate(): Promise<void> {
-        if (this.simulationResources.hasSimulation()) {
-            const count = await this.simulationResources.getWriteCount();
-            const nowMs = performance.now();
-            if (this.lastPhotonWriteCount !== null && this.lastPhotonWriteTimeMs !== null) {
-                const deltaCount = Number(count - this.lastPhotonWriteCount);
-                this.photonWritesPerSecond = computeRateFromDelta(deltaCount, nowMs - this.lastPhotonWriteTimeMs);
+        try {
+            if (this.simulationResources.hasSimulation()) {
+                const count = await this.simulationResources.getWriteCount();
+                const nowMs = performance.now();
+                if (this.lastPhotonWriteCount !== null && this.lastPhotonWriteTimeMs !== null) {
+                    const deltaCount = Number(count - this.lastPhotonWriteCount);
+                    this.photonWritesPerSecond = computeRateFromDelta(deltaCount, nowMs - this.lastPhotonWriteTimeMs);
+                }
+                this.lastPhotonWriteCount = count;
+                this.lastPhotonWriteTimeMs = nowMs;
+            } else {
+                this.photonWritesPerSecond = 0;
+                this.lastPhotonWriteCount = null;
+                this.lastPhotonWriteTimeMs = null;
             }
-            this.lastPhotonWriteCount = count;
-            this.lastPhotonWriteTimeMs = nowMs;
-        } else {
-            this.photonWritesPerSecond = 0;
-            this.lastPhotonWriteCount = null;
-            this.lastPhotonWriteTimeMs = null;
+        } catch (error) {
+            // Logged, not rethrown: this is a self-rescheduling background poll (see the class
+            // doc above), not something any caller awaits - swallowing silently here would just
+            // stop the poll loop forever on its first bad read (getWriteCount's mapAsync readback
+            // can fail transiently), with no trace of why the FPS panel's photon rate went stale.
+            console.error('Litbox: pollPhotonWriteRate failed:', error);
         }
         setTimeout(() => void this.pollPhotonWriteRate(), LitboxSceneRenderer.PHOTON_METRICS_POLL_INTERVAL_MS);
     }
@@ -268,9 +326,19 @@ export class LitboxSceneRenderer {
             // device to be usable; request it opportunistically since not every GPU/browser
             // supports it (mobile GPUs typically don't) - TextureCache falls back gracefully
             // when it's absent.
-            const requiredFeatures: GPUFeatureName[] = adapter.features.has('texture-compression-bc')
-                ? ['texture-compression-bc']
-                : [];
+            const requiredFeatures: GPUFeatureName[] = [];
+            if (adapter.features.has('texture-compression-bc')) {
+                requiredFeatures.push('texture-compression-bc');
+            }
+            // RFloat/RgbaFloat atlas textures (see TextureCache's .exr loading) are sampled
+            // through the same filtering sampler as every other atlas texture (RaytracedResources/
+            // SpriteResources' shared bind group), which requires rgba32float to be filterable -
+            // not true by default in core WebGPU. Request opportunistically like the BC1 feature
+            // above; unlike BC1 there's currently no graceful fallback if it's absent, since the
+            // exporter has no lower-precision path for those two format buckets.
+            if (adapter.features.has('float32-filterable')) {
+                requiredFeatures.push('float32-filterable');
+            }
             this.device = await this.adapter.requestDevice({ requiredFeatures });
             this.device.addEventListener('uncapturederror', (event) => {
                 console.error('WebGPU device error:', (event as GPUUncapturedErrorEvent).error.message);
@@ -350,6 +418,11 @@ export class LitboxSceneRenderer {
         this.debugViews.set('combined-irradiance', { getSourceView: () => this.simulationResources.getCombinedIrradianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('raw-variance', { getSourceView: () => this.simulationResources.getRawVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('filtered-variance', { getSourceView: () => this.simulationResources.getFilteredVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        // Prototype structural-detail evidence (this project's denoiser plan) - gradient-direction
+        // coherence between irradiance-a/b, signed [-1,1] (black=anti-correlated,
+        // mid-gray=uncorrelated/noise, white=coherent/real edge). See
+        // compute_gradient_coherence.wgsl. Not consumed by any denoiser decision yet.
+        this.debugViews.set('gradient-coherence', { getSourceView: () => this.simulationResources.getGradientCoherenceView(), mode: DEBUG_VIEW_MODE.SIGNED_R_AS_LUMINANCE });
 
         this.createHdrFrameTexture();
     }
@@ -410,10 +483,12 @@ export class LitboxSceneRenderer {
             if (op.type === 'create') {
                 sceneGraph.addObject(op.object);
                 if (op.sprite) {
-                    void this.spriteResources.addSprite(op.sprite, sceneGraph, this.textureCache, this.transformResources);
+                    this.spriteResources.addSprite(op.sprite, sceneGraph, this.textureCache, this.transformResources)
+                        .catch((error) => console.error('Litbox: SpriteResources.addSprite failed:', error));
                 }
                 if (op.raytraced) {
-                    void this.raytracedResources.addRaytraced(op.raytraced, sceneGraph, this.textureCache, this.transformResources);
+                    this.raytracedResources.addRaytraced(op.raytraced, sceneGraph, this.textureCache, this.transformResources)
+                        .catch((error) => console.error('Litbox: RaytracedResources.addRaytraced failed:', error));
                 }
                 if (op.light && op.lightKind) {
                     this.lightResources.addLight(op.lightKind, op.light, sceneGraph, this.transformResources);
@@ -551,9 +626,6 @@ export class LitboxSceneRenderer {
             return null;
         }
         const scene = this.activeScene.data;
-        if (scene.cameras.length !== 1) {
-            console.warn(`Litbox: expected exactly 1 camera, found ${scene.cameras.length}; using the first active one.`);
-        }
         const sceneGraph = this.sceneGraph;
         const camera = scene.cameras.find((c: SceneCamera) => sceneGraph.isActiveInHierarchy(c.ownerId));
         if (!camera) {
@@ -636,7 +708,8 @@ export class LitboxSceneRenderer {
             return;
         }
 
-        const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
+        const rawDeltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
+        const deltaTimeSeconds = Math.min(Math.max(rawDeltaTimeSeconds, 0), MAX_DELTA_TIME_SECONDS);
         this.lastFrameTimeMs = timeMs;
         this.fpsCounter.tick(timeMs);
         this.activeScene?.onFrame(deltaTimeSeconds);

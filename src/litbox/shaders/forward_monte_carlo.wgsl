@@ -36,6 +36,11 @@ struct Uniforms {
     lightPinch: vec2<f32>,
     integrationInterval: f32,
     integrationIntervalSquared: f32,
+    // Directional kind only - a line segment perpendicular to directionalLightDirection, computed
+    // CPU-side (computeDirectionalLightSegment) so it clears the target rect from any direction;
+    // lightEnergy is pre-divided by its length so total emitted power stays resolution-independent.
+    directionalLightSegmentStart: vec2<f32>,
+    directionalLightSegmentVector: vec2<f32>,
 }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -460,13 +465,9 @@ fn emitLight(rand: ptr<function, Random>) -> Ray {
 
 #ifdef LIGHT_KIND_DIRECTIONAL
 fn emitLight(rand: ptr<function, Random>) -> Ray {
-    let targetSize = vec2<f32>(textureDimensions(albedo));
-    var perp = uniforms.directionalLightDirection.yx;
-    perp.y *= -1.0;
-
     var emitted: Ray;
     emitted.direction = uniforms.directionalLightDirection;
-    emitted.origin = (vec2<f32>(0.5, 0.5) - uniforms.directionalLightDirection + perp * (randomNext(rand) * 1.415 - 0.7075)) * targetSize;
+    emitted.origin = uniforms.directionalLightSegmentStart + uniforms.directionalLightSegmentVector * randomNext(rand);
     emitted.energy = uniforms.lightEnergy;
     return emitted;
 }

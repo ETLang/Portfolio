@@ -25,6 +25,19 @@ fn opticalDepth(densityValue: f32) -> f32 {
     return -log(max(1e-6, 1.0 - densityValue));
 }
 
+// Log-domain luminance - same perceptual-nonlinearity argument as opticalDepth() above, applied to
+// luminance instead of density: a FIXED absolute threshold/sigma (e.g. denoise.wgsl's
+// sigmaLuminanceTight/Loose, build_denoiser_quadtree.wgsl's detailThreshold) tuned against one
+// scene's brightness range silently stops meaning anything once compared against a scene two
+// orders of magnitude brighter or darker (a whisper-dim haze scene vs. one with a blinding laser).
+// Taking the log of luminance before comparing turns an absolute-magnitude difference into a
+// ratio, which a fixed constant CAN mean consistently across scenes. `floor` guards log2's
+// singularity at 0 - pass whatever absolute darkness floor is already in scope (e.g.
+// DenoiserTunables.darknessNoiseFloor) rather than introducing a second, redundant constant.
+fn logLuminance(l: f32, floor: f32) -> f32 {
+    return log2(max(l, 0.0) + floor);
+}
+
 // Deliberately not array-indexed: some mobile GPU drivers (confirmed on a Pixel 10 Pro, both
 // Chrome and Brave) silently corrupt geometry when a fullscreen quad's positions come from a
 // WGSL array indexed by vertex_index. Branching instead of indexing works around it - see this

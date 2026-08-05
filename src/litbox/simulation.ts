@@ -22,7 +22,7 @@ import {
     resolveBounces,
     computeWorldToTargetPixels,
     computeLightToTarget,
-    computeDirectionalLightDirection,
+    computeDirectionalLightSegment,
     combineWriteCount,
 } from './forward_monte_carlo.ts';
 import compositeShaderCode from './shaders/simulation_composite.wgsl?raw';
@@ -139,20 +139,34 @@ export interface DenoiserTunables {
 }
 
 export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
-    varianceScale: 8.0,
-    darknessNoiseFloor: 0.002,
-    maxBlurMip: 5.0,
+    // Re-tuned (live, via the tunables panel) after two fixes landed together: the
+    // ForwardMonteCarloOperation shared-uniform-buffer clobber (forward_monte_carlo.ts's
+    // uniformBufferPool/beginFrame - centerVariance used to read saturated almost everywhere from
+    // that bug alone, not real scene noise) and the quadtree's irradiance-detail signal switching
+    // from luminance(mean(A,B)) to min(lumaA, lumaB) (build_denoiser_quadtree.wgsl - stops a
+    // one-sided firefly from reading as confirmed "real detail"). Both fixes change what
+    // centerVariance/hasNearbyDetail actually mean, so the old defaults (tuned against the
+    // pre-fix, corrupted signals) no longer apply - these values reflect the post-fix scene.
+    varianceScale: 10.0,
+    darknessNoiseFloor: 0.1,
+    maxBlurMip: 6.0,
     albedoSensitivity: 0.3,
     densitySensitivity: 1.0,
     normalSensitivity: 8.0,
     // Matches filter_variance.wgsl's SIGMA_LUMINANCE_TIGHT/LOOSE/K_LUMINANCE exactly - same
-    // adaptive-sigma pattern, reused rather than re-derived (see denoise.wgsl).
-    sigmaLuminanceTight: 0.05,
+    // adaptive-sigma pattern, reused rather than re-derived (see denoise.wgsl). Both sigmas are
+    // compared against a log-luminance difference (see denoise.wgsl's decideWeight), not raw linear
+    // luminance. sigmaLuminanceTight no longer needs to be razor-thin now that the quadtree's
+    // min(A,B) detail signal (see the comment above) rejects one-sided fireflies before
+    // hasNearbyDetail ever forces decideWeight onto this branch - false positives it used to have to
+    // guard against on its own are structurally gone, so it can sit much looser without fireflies
+    // creeping back in.
+    sigmaLuminanceTight: 1.0,
     sigmaLuminanceLoose: 2.5,
     kLuminance: 2.0,
     // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
     // doc comment for the seed-relative-texels normalization this is measured in.
-    maxSplitDistance: 2.0,
+    maxSplitDistance: 1.5,
     albedoLuminanceThreshold: 0.1,
     albedoChromaThreshold: 0.2,
     logDensityThreshold: 0.05,
@@ -208,34 +222,7 @@ export class SimulationResources {
     /** Live-editable copy of every denoiser threshold - see DenoiserTunables' own doc comment. */
     public denoiserTunables: DenoiserTunables = { ...DEFAULT_DENOISER_TUNABLES };
 
-    /**
-     * When false, run() skips generateEvidenceMips, filterVariance, and buildDenoiserQuadtree
-     * entirely (the deeper G-Buffer/combinedIrradiance mips, variance filtering, and the
-     * multi-level quadtree bake are only ever consulted by the guided blur below) and forces
-     * denoise's maxBlurMip uniform to 0 - see run()'s use of this flag for why that's sufficient
-     * on its own to make denoise.wgsl take its cheap centerIrradiance * albedo * density path for
-     * every pixel (decideBlurSize's result is `maxBlurMip * max(...)`, so maxBlurMip=0 collapses
-     * it to startMip=0 regardless of actual variance/luminance) without needing a separate
-     * shader switch. combinedIrradiance's mip0 (the mean(A,B) full-quality photon-traced image)
-     * is still always computed - it's the base render, not denoiser-only.
-     */
     public denoiserEnabled = true;
-
-    /**
-     * Salts denoise.wgsl's seedJitter hash so the dither pattern varies frame-to-frame ("film
-     * grain") instead of being a fixed function of pixel coordinate alone - see this project's
-     * denoiser plan. Safe because this renderer retraces from scratch every frame (photonBuffer is
-     * cleared each run(), never progressively accumulated - see tracePhotons), so there's no
-     * history buffer for a changing dither pattern to disagree with, unlike typical TAA jitter.
-     *
-     * Wrapped at a small bound (not just "large enough to not matter") because denoise.wgsl adds a
-     * frameIndex-scaled offset directly onto pixel coordinates before hashing: once that sum
-     * exceeds f32's exact-integer range (2^24), adjacent pixels' hash inputs could round to the
-     * same value and lose their spatial decorrelation, not just their temporal variation - a much
-     * worse artifact than the one this is meant to fix. 4096 frames (~68s at 60fps) is far more
-     * than needed for the repeat to be imperceptible as noise, with orders of magnitude of headroom
-     * to spare before that precision cliff.
-     */
     private frameIndex = 0;
 
     /** Per-half HDR conversion of photonBuffer, mip0 only - see ConvertPhotonIrradianceToHdrOperation. */
@@ -502,7 +489,7 @@ export class SimulationResources {
             width,
             height,
             LIGHTMAP_FORMAT,
-            GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.STORAGE_BINDING,
+            GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
             mipLevelCount,
         );
 
@@ -606,21 +593,40 @@ export class SimulationResources {
         this.convertToHdr.updateOutputs(this.irradianceA.getMipView(0), this.irradianceB.getMipView(0), width, height);
         this.convertToHdr.execute(encoder);
 
-        // Fused mean/variance/mip pass - combinedIrradiance mip0-2 + rawVariance at mip2 (quarter
-        // resolution). Capped at mip2, not the 5 levels a 16x16 tile could in principle reduce to
-        // in one pass, by WebGPU's guaranteed-minimum maxStorageTexturesPerShaderStage of 4 (see
-        // ComputeVarianceAndMipsOperation) - only attempt it when combinedIrradiance actually has
-        // that many mip levels (tiny simulation resolutions might not; a real fix for that edge
-        // case is deferred, not a concern for realistic scene sizes).
+        // Fused mean/variance/mip pass. Capped at mip2, not the 5 levels a 16x16 tile could in
+        // principle reduce to in one pass, by WebGPU's guaranteed-minimum
+        // maxStorageTexturesPerShaderStage of 4 (see ComputeVarianceAndMipsOperation) - only
+        // attempt it when there are actually that many mip levels to write (tiny simulation
+        // resolutions might not; a real fix for that edge case is deferred, not a concern for
+        // realistic scene sizes - when the denoiser is also disabled, this means lightmap's mip0
+        // goes unwritten this frame too, same tolerance).
+        //
+        // combineAlbedoDensity switches combinedMip0/1/2's target AND meaning when the denoiser is
+        // fully off (see ComputeVarianceAndMipsSwitches' own doc comment): irradiance itself is
+        // never the wanted output in that mode, so this dispatch writes directly into lightmap's
+        // own top 3 mip levels, each holding mean * albedo * density (with albedo/density
+        // box-filtered down through the same shared-memory reduction the mean itself uses) rather
+        // than combinedIrradiance's raw irradiance mips - no separate dispatch (DenoiseOperation's
+        // combine-only fast path) or later mip-regeneration work is spent on what this pass already
+        // computes for free (see run()'s mip-regen loop below, which starts at mip 3 in this case).
+        this.computeVarianceAndMips.updateSwitches({ combineAlbedoDensity: !this.denoiserEnabled });
+        const combinedMip0 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(0) : this.lightmap.getMipView(0);
+        const combinedMip1 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(1) : this.lightmap.getMipView(1);
+        const combinedMip2 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(2) : this.lightmap.getMipView(2);
+        const wroteLightmapMipsThroughTwo = !this.denoiserEnabled && this.lightmap.mipLevelCount >= 3;
         if (this.combinedIrradiance.mipLevelCount >= 3) {
-            this.computeVarianceAndMips.updateInputs(this.irradianceA.getMipView(0), this.irradianceB.getMipView(0));
+            this.computeVarianceAndMips.updateInputs(
+                this.irradianceA.getMipView(0), this.irradianceB.getMipView(0),
+                this.denoiserEnabled ? undefined : albedoView,
+                this.denoiserEnabled ? undefined : densityView,
+            );
             this.computeVarianceAndMips.updateOutputs(
-                this.combinedIrradiance.getMipView(0),
-                this.combinedIrradiance.getMipView(1),
-                this.combinedIrradiance.getMipView(2),
-                this.rawVariance.getMipView(0),
+                combinedMip0,
+                combinedMip1,
+                combinedMip2,
                 width,
                 height,
+                this.denoiserEnabled ? this.rawVariance.getMipView(0) : undefined,
             );
             this.computeVarianceAndMips.execute(encoder);
         }
@@ -648,57 +654,44 @@ export class SimulationResources {
             // irradiance-detail trigger gates on filteredVariance) and before denoise below. See
             // build_denoiser_quadtree.wgsl.
             this.buildDenoiserQuadtree(encoder, raytracedResources);
-        }
-        // When denoiserEnabled is false, none of the three passes above ran this frame, so
-        // filteredVariance/quadtreeMustSplit/the deeper G-Buffer & combinedIrradiance mips hold
-        // stale (or, on a fresh scene load, zero-initialized) data - harmless, since forcing
-        // maxBlurMip to 0 below makes denoise.wgsl take its startMip==0 fast path for every pixel,
-        // which never reads any of them for its output (see denoiserEnabled's own doc comment).
 
-        // Hierarchical guided blur (see this project's denoiser plan). forceFullSplit is off -
-        // ShouldSplit() now consults the baked quadtree above instead of always splitting to mip
-        // 0. Also where albedo/density finally get combined into the final lit image.
-        this.denoise.updateSwitches({ combineAlbedoDensity: true, forceFullSplit: false });
-        this.frameIndex = (this.frameIndex + 1) % 4096;
-        // denoiserTunables has more fields than DenoiseUniforms needs (the quadtree-bake ones) -
-        // structurally fine to pass straight through, see DenoiserTunables' own doc comment.
-        // maxBlurMip forced to 0 when disabled - see denoiserEnabled's doc comment for why that's
-        // sufficient to skip the blur entirely without a separate shader switch. frameIndex is
-        // spread in separately since it isn't a DenoiserTunables field (not user-tunable).
-        this.denoise.updateUniforms(this.denoiserEnabled
-            ? { ...this.denoiserTunables, frameIndex: this.frameIndex }
-            : { ...this.denoiserTunables, maxBlurMip: 0, frameIndex: this.frameIndex });
-        this.denoise.updateInputs(
-            this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
-            this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
-        );
-        // Targets denoiseScratch (not lightmap directly) when the guided post-filter below is
-        // about to run over its result - lightmap's mip0 is the FINAL destination now, written
-        // once, by whichever pass produces the last word on this frame's image. When the denoiser
-        // (and therefore the filter) is off, that's still denoise itself, exactly as before - no
-        // extra buffer, no copy, matching what already happened pre-filter.
-        this.denoise.updateOutputs(this.denoiserEnabled ? this.denoiseScratch.view : this.lightmap.getMipView(0), width, height);
-        this.denoise.execute(encoder);
+            // Hierarchical guided blur (see this project's denoiser plan). forceFullSplit is off -
+            // ShouldSplit() now consults the baked quadtree above instead of always splitting to
+            // mip 0. Writes denoiseScratch, not lightmap directly - the guided post-filter below
+            // always runs immediately after (both are only ever reached inside this same
+            // denoiserEnabled branch), and its output is what actually belongs in lightmap.
+            this.denoise.updateSwitches({ combineAlbedoDensity: true, forceFullSplit: false });
+            this.frameIndex = (this.frameIndex + 1) % 4096;
+            this.denoise.updateUniforms({ ...this.denoiserTunables, frameIndex: this.frameIndex });
+            this.denoise.updateInputs(
+                this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
+                this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
+            );
+            this.denoise.updateOutputs(this.denoiseScratch.view, width, height);
+            this.denoise.execute(encoder);
 
-        // Guided post-filter over denoise's just-written result (see dither_filter.wgsl) -
-        // EXPERIMENTAL, see this project's denoiser plan/conversation history: temporal jitter
-        // alone already looked good enough that this may prove unnecessary. Gated on
-        // denoiserEnabled - when the denoiser is off, denoise wrote straight to lightmap above
-        // (see its own comment) and there's no jitter to clean up anyway. Reads from denoiseScratch
-        // (denoise's just-written, not-yet-final result) and writes directly to lightmap's mip0 -
-        // its real final destination, not a staging copy - so this frame never needs a
-        // copyTextureToTexture: each pass writes straight to wherever its result actually belongs.
-        if (this.denoiserEnabled) {
+            // Guided post-filter over denoise's just-written result (see dither_filter.wgsl) -
+            // EXPERIMENTAL, see this project's denoiser plan/conversation history: temporal jitter
+            // alone already looked good enough that this may prove unnecessary. Reads
+            // denoiseScratch (denoise's just-written, not-yet-final result) and writes directly to
+            // lightmap's mip0 - its real final destination, not a staging copy - so this frame
+            // never needs a copyTextureToTexture: each pass writes straight to wherever its result
+            // actually belongs.
             this.ditherFilter.updateInputs(this.denoiseScratch.view, albedoView, normalRoughnessView, densityView);
             this.ditherFilter.updateOutputs(this.lightmap.getMipView(0), width, height);
             this.ditherFilter.execute(encoder);
         }
+        // When denoiserEnabled is false, denoise/ditherFilter never dispatch at all - lightmap's
+        // mip0 was already written directly above by computeVarianceAndMips's combined output.
 
-        // Regenerate the final lightmap's own higher mips from its just-denoised mip0 (whatever
+        // Regenerate the final lightmap's own higher mips from its just-written mip0 (whatever
         // later samples the lightmap across mips, e.g. sprites, needs a real chain, not a clear) -
         // independent of combinedIrradiance's own chain, since this one reflects the final lit
-        // (albedo/density-combined) image, not raw irradiance.
-        for (let mip = 1; mip < this.lightmap.mipLevelCount; mip++) {
+        // (albedo/density-combined) image, not raw irradiance. Starts at mip 3, not 1, when
+        // computeVarianceAndMips just wrote lightmap's mip0-2 directly above (denoiser disabled) -
+        // regenerating them again here would just recompute what that pass already produced.
+        const mipRegenStart = wroteLightmapMipsThroughTwo ? 3 : 1;
+        for (let mip = mipRegenStart; mip < this.lightmap.mipLevelCount; mip++) {
             const mipWidth = Math.max(1, width >> mip);
             const mipHeight = Math.max(1, height >> mip);
             this.mipDownsample.updateInputs(this.lightmap.getMipView(mip - 1));
@@ -787,11 +780,12 @@ export class SimulationResources {
 
         // Thresholds come from denoiserTunables (TBD/tunable - see this project's denoiser plan),
         // shared across every level of the chain (both the LEVEL0 and iterative passes apply the
-        // same comparison, per the Unity reference this was ported from) - only currentGBufferMip
-        // changes per level, so it's overridden fresh on each call below.
+        // same comparison, per the Unity reference this was ported from) - unlike before, nothing
+        // here needs to change per level, since the irradiance range check no longer depends on
+        // which absolute mip is being examined (see build_denoiser_quadtree.wgsl).
         const level0Width = Math.max(1, width >> 1);
         const level0Height = Math.max(1, height >> 1);
-        this.buildQuadtreeLevel0.updateUniforms({ ...this.denoiserTunables, currentGBufferMip: 1 });
+        this.buildQuadtreeLevel0.updateUniforms({ ...this.denoiserTunables });
         this.buildQuadtreeLevel0.updateInputsLevel0(
             albedoView, densityView, this.volatility.getMipView(0), this.combinedIrradiance.view, this.filteredVariance.view,
         );
@@ -804,11 +798,11 @@ export class SimulationResources {
         for (let level = 1; level < this.quadtreeMustSplit.mipLevelCount; level++) {
             const levelWidth = Math.max(1, width >> (level + 1));
             const levelHeight = Math.max(1, height >> (level + 1));
-            this.buildQuadtreeIterate.updateUniforms({ ...this.denoiserTunables, currentGBufferMip: level + 1 });
+            this.buildQuadtreeIterate.updateUniforms({ ...this.denoiserTunables });
             this.buildQuadtreeIterate.updateInputsIterate(
                 this.albedoMin.getMipView(level - 1), this.albedoMax.getMipView(level - 1),
                 this.densityMinMaxVolatility.getMipView(level - 1), this.quadtreeMustSplit.getMipView(level - 1),
-                this.combinedIrradiance.view, this.filteredVariance.view,
+                this.filteredVariance.view,
             );
             this.buildQuadtreeIterate.updateOutputs(
                 this.albedoMin.getMipView(level), this.albedoMax.getMipView(level), this.densityMinMaxVolatility.getMipView(level), this.quadtreeMustSplit.getMipView(level),
@@ -841,6 +835,15 @@ export class SimulationResources {
         // Clear every frame - matches Unity's Realtime-mode per-frame Clear()/NewScene() (this is a
         // single-pass, non-accumulating integration - see this project's plan).
         this.device.queue.writeBuffer(this.photonBuffer.buffer, 0, this.photonBufferClearData);
+
+        // Reset each light kind's per-frame uniform-buffer-slot cursor - see
+        // ForwardMonteCarloOperation.beginFrame's doc comment. Unconditional (even for a kind with
+        // no active lights this frame) since it's just a counter reset, no allocation.
+        this.pointOperation.beginFrame();
+        this.spotOperation.beginFrame();
+        this.laserOperation.beginFrame();
+        this.directionalOperation.beginFrame();
+        this.ambientOperation.beginFrame();
 
         const { width, height, raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces } = this.simulation;
         const maxIntegrationSteps = computeMaxIntegrationSteps(width, height);
@@ -902,9 +905,16 @@ export class SimulationResources {
 
             const lightWorldTransform = sceneGraph.getWorldTransform(light.ownerId);
             const lightToTarget = computeLightToTarget(worldToTargetPixels, lightWorldTransform);
-            const directionalLightDirection: [number, number] = kind === 'directional'
-                ? computeDirectionalLightDirection(lightToTarget)
-                : [0, 0];
+            const directionalSegment = kind === 'directional'
+                ? computeDirectionalLightSegment(lightToTarget, width, height)
+                : null;
+            const directionalLightDirection: readonly [number, number] = directionalSegment?.direction ?? [0, 0];
+            const directionalLightSegmentStart: readonly [number, number] = directionalSegment?.segmentStart ?? [0, 0];
+            const directionalLightSegmentVector: readonly [number, number] = directionalSegment?.segmentVector ?? [0, 0];
+            // Divides out the segment's own length so this light's total emitted power stays
+            // independent of the target's resolution (see computeDirectionalLightSegment) - the
+            // segment is only a sampling aperture, not a physical property of the light.
+            const directionalEnergyScale = directionalSegment ? 1 / directionalSegment.length : 1;
             const pinchSquared = pinch * pinch;
             const lightPinch: [number, number] = kind === 'spot' ? [pinchSquared, Math.atan(pinchSquared)] : [0, 0];
             const bounces = resolveBounces(photonBounces, light.bounces);
@@ -939,7 +949,7 @@ export class SimulationResources {
                 // Normalized from this half's own ray count, not rays[i] - so each half
                 // independently is an unbiased estimator of the same signal on its own, matching
                 // Unity's TracerPostProcessing.compute's mean(sample_a, sample_b) equivalence.
-                const photonEnergyScale = 0xFFFFFFFF / half.rays / integrationInterval;
+                const photonEnergyScale = 0xFFFFFFFF / half.rays / integrationInterval * directionalEnergyScale;
                 const lightEnergy: [number, number, number] = [
                     energyRgb[0] * photonEnergyScale,
                     energyRgb[1] * photonEnergyScale,
@@ -952,6 +962,8 @@ export class SimulationResources {
                     seedBase: half.seedBase,
                     halfIndex: half.halfIndex,
                     directionalLightDirection,
+                    directionalLightSegmentStart,
+                    directionalLightSegmentVector,
                     lightPinch,
                     integrationInterval,
                     integrationIntervalSquared,

@@ -48,6 +48,7 @@ interface LightRecord {
 export class LightResources {
     private array: PackedUniformArray<LightRecord>;
     private records = new Map<AnyLight, LightRecord>();
+    private transformResources: TransformResources | null = null;
 
     private pointLights: PointLight[] = [];
     private spotlights: Spotlight[] = [];
@@ -57,6 +58,28 @@ export class LightResources {
 
     constructor(device: GPUDevice) {
         this.array = new PackedUniformArray<LightRecord>(device, LIGHT_PROPERTIES_STRIDE_BYTES);
+    }
+
+    /**
+     * Registers this manager's interest in `transformResources`' relocation events, exactly once
+     * per distinct instance (mirrors RaytracedResources/SpriteResources' identical guard).
+     * writeProperties bakes each light's transformEntry.index as of addLight()/refreshProperties()
+     * time - if that owner's entry later relocates for a reason outside this light's own control
+     * (see TransformResources.onOwnerRelocated's doc), the baked index goes stale and the
+     * simulation silently reads a different object's transform for this light.
+     */
+    private registerTransformResources(transformResources: TransformResources): void {
+        if (this.transformResources === transformResources) {
+            return;
+        }
+        this.transformResources = transformResources;
+        transformResources.onOwnerRelocated((ownerId) => {
+            for (const light of this.records.keys()) {
+                if (light.ownerId === ownerId) {
+                    this.refreshProperties(light, transformResources);
+                }
+            }
+        });
     }
 
     public getBuffer(): GPUBuffer {
@@ -98,6 +121,7 @@ export class LightResources {
      * refreshProperties instead.
      */
     public loadFromScene(scene: Scene, sceneGraph: SceneGraph, transformResources: TransformResources): void {
+        this.registerTransformResources(transformResources);
         for (const light of [...this.records.keys()]) {
             this.removeLight(light, transformResources);
         }
@@ -121,6 +145,7 @@ export class LightResources {
      * loadFromScene's full rebuild.
      */
     public addLight(kind: LightKind, light: AnyLight, sceneGraph: SceneGraph, transformResources: TransformResources): void {
+        this.registerTransformResources(transformResources);
         const transformEntry = transformResources.ensureEntry(light.ownerId, sceneGraph);
         const kindValue = LIGHT_KIND[kind];
         const propertiesEntry = this.array.insertStatic(

@@ -1,0 +1,438 @@
+{
+    "simulations": [
+        {
+            "ownerId": 53558,
+            "width": 256,
+            "height": 256,
+            "raysPerFrame": 65536,
+            "integrationInterval": 0.03999999910593033,
+            "photonBounces": -1
+        }
+    ],
+    "objects": [
+        {
+            "active": true,
+            "id": 53470,
+            "name": "Lights",
+            "parentId": -1,
+            "position": {
+                "x": -1.824282169342041,
+                "y": -0.8140425682067871
+            },
+            "depth": 0.0058406139723956589,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": false,
+            "id": 53508,
+            "name": "LaserLight",
+            "parentId": 53470,
+            "position": {
+                "x": 0.09000000357627869,
+                "y": -3.549999952316284
+            },
+            "depth": -0.0058406139723956589,
+            "rotation": 197.8000030517578,
+            "scale": {
+                "x": 0.009999999776482582,
+                "y": 0.48184987902641299
+            }
+        },
+        {
+            "active": true,
+            "id": -30260,
+            "name": "Image",
+            "parentId": -30250,
+            "position": {
+                "x": 661.0,
+                "y": 292.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 53558,
+            "name": "Simulation",
+            "parentId": -1,
+            "position": {
+                "x": -3.5399999618530275,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 10.0,
+                "y": 10.0
+            }
+        },
+        {
+            "active": true,
+            "id": 53542,
+            "name": "PointLight",
+            "parentId": 53470,
+            "position": {
+                "x": 0.7699999809265137,
+                "y": 4.409999847412109
+            },
+            "depth": -0.0058406139723956589,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.08876967430114746,
+                "y": 0.11769632995128632
+            }
+        },
+        {
+            "active": true,
+            "id": 53516,
+            "name": "Cloud",
+            "parentId": 53528,
+            "position": {
+                "x": -3.8399999141693117,
+                "y": -0.3499999940395355
+            },
+            "depth": -0.5,
+            "rotation": 29.132238388061525,
+            "scale": {
+                "x": 6.159999847412109,
+                "y": 6.533928394317627
+            }
+        },
+        {
+            "active": true,
+            "id": -30244,
+            "name": "PerfDisplay",
+            "parentId": -1,
+            "position": {
+                "x": 925.9810791015625,
+                "y": 509.7575378417969
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -30232,
+            "name": "TestSubstrate",
+            "parentId": 53528,
+            "position": {
+                "x": -3.5236001014709474,
+                "y": -0.01730000041425228
+            },
+            "depth": -0.20000000298023225,
+            "rotation": 0.0,
+            "scale": {
+                "x": 10.134446144104004,
+                "y": 10.218595504760743
+            }
+        },
+        {
+            "active": true,
+            "id": -30268,
+            "name": "PerfDisplay Text",
+            "parentId": -30250,
+            "position": {
+                "x": 651.0,
+                "y": 282.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": false,
+            "id": 53474,
+            "name": "Triangle",
+            "parentId": 53528,
+            "position": {
+                "x": -1.9548063278198243,
+                "y": -1.5638642311096192
+            },
+            "depth": 4.977919161319733e-7,
+            "rotation": 63.522857666015628,
+            "scale": {
+                "x": 4.071272850036621,
+                "y": 5.6831536293029789
+            }
+        },
+        {
+            "active": false,
+            "id": 53534,
+            "name": "SpotLight",
+            "parentId": 53470,
+            "position": {
+                "x": -4.960000038146973,
+                "y": 4.03000020980835
+            },
+            "depth": -0.0058406139723956589,
+            "rotation": 55.700035095214847,
+            "scale": {
+                "x": 0.10726184397935868,
+                "y": 0.33272427320480349
+            }
+        },
+        {
+            "active": true,
+            "id": 53482,
+            "name": "Background",
+            "parentId": 53528,
+            "position": {
+                "x": -3.5262999534606935,
+                "y": -0.012500000186264515
+            },
+            "depth": -0.00214485265314579,
+            "rotation": 0.0,
+            "scale": {
+                "x": 10.10219669342041,
+                "y": 10.18741226196289
+            }
+        },
+        {
+            "active": true,
+            "id": 53484,
+            "name": "Main Camera",
+            "parentId": -1,
+            "position": {
+                "x": -1.2999999523162842,
+                "y": 0.0
+            },
+            "depth": -10.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 53528,
+            "name": "Stuff",
+            "parentId": -1,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.10000000149011612,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -30250,
+            "name": "Canvas",
+            "parentId": -30244,
+            "position": {
+                "x": -264.9810791015625,
+                "y": -217.75753784179688
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 53550,
+            "name": "Diagnostic A",
+            "parentId": 53558,
+            "position": {
+                "x": 0.7599999904632568,
+                "y": 0.25
+            },
+            "depth": -0.5,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.5,
+                "y": 0.5
+            }
+        },
+        {
+            "active": true,
+            "id": 53554,
+            "name": "Diagnostic B",
+            "parentId": 53558,
+            "position": {
+                "x": 0.7599999904632568,
+                "y": -0.24899999797344209
+            },
+            "depth": -0.5,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.5,
+                "y": 0.5
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "ownerId": -30244,
+            "verticalSize": 6.3379621505737309,
+            "exposure": 0.0,
+            "blackPointLog": {
+                "x": -3.0,
+                "y": -3.0,
+                "z": -3.0
+            },
+            "whitePointLog": {
+                "x": 3.0,
+                "y": 3.0,
+                "z": 3.0
+            }
+        },
+        {
+            "ownerId": 53484,
+            "verticalSize": 5.0,
+            "exposure": 0.0,
+            "blackPointLog": {
+                "x": -4.0,
+                "y": -4.0,
+                "z": -4.0
+            },
+            "whitePointLog": {
+                "x": 2.0,
+                "y": 2.0,
+                "z": 2.0
+            }
+        }
+    ],
+    "raytraced": [
+        {
+            "ownerId": 53516,
+            "sortOrder": 0,
+            "logDensity": -0.33000001311302187,
+            "roughness": 1.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.8901960849761963,
+                "g": 1.0,
+                "b": 0.6901960968971252,
+                "a": 1.0
+            },
+            "albedoMap": "Cloud",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -30232,
+            "sortOrder": 0,
+            "logDensity": -1.2000000476837159,
+            "roughness": 1.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": 53482,
+            "sortOrder": 0,
+            "logDensity": -2.5,
+            "roughness": 1.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 0.0470588244497776,
+                "g": 0.10588235408067703,
+                "b": 0.800000011920929,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": 53474,
+            "sortOrder": 0,
+            "logDensity": 0.0,
+            "roughness": 1.0,
+            "heightScale": 1.0,
+            "albedo": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": ""
+        }
+    ],
+    "sprites": [],
+    "pointLights": [
+        {
+            "ownerId": 53542,
+            "color": {
+                "r": 1.0,
+                "g": 0.9607843160629273,
+                "b": 0.45098039507865908,
+                "a": 0.0
+            },
+            "intensity": 6.656399726867676,
+            "bounces": 4
+        }
+    ],
+    "spotlights": [
+        {
+            "ownerId": 53534,
+            "color": {
+                "r": 0.8496375679969788,
+                "g": 0.7411832809448242,
+                "b": 0.5572184920310974,
+                "a": 0.0
+            },
+            "intensity": 9.0,
+            "pinch": 0.009999999776482582,
+            "bounces": 3
+        }
+    ],
+    "laserLights": [
+        {
+            "ownerId": 53508,
+            "color": {
+                "r": 1.0,
+                "g": 0.003921568859368563,
+                "b": 0.003921568859368563,
+                "a": 0.0
+            },
+            "intensity": 2.01639986038208,
+            "bounces": 4
+        }
+    ],
+    "directionalLights": [],
+    "ambientLights": [],
+    "textureAtlasKeys": [
+        {
+            "textureName": "Cloud",
+            "atlasName": "basic_atlases/atlas_rgba_float_0.exr",
+            "uvTransform": "[[0.5, 0, 0.0004882813], [0, 0.5, 0.0004882813]]"
+        }
+    ]
+}

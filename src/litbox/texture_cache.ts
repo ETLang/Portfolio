@@ -1,4 +1,5 @@
 import type { TextureAtlasKey, UvTransform } from './scene.ts';
+import { decodeExr } from './exr_loader.ts';
 
 const IDENTITY_UV_TRANSFORM: UvTransform = { a: 1, b: 0, c: 0, d: 0, e: 1, f: 0 };
 
@@ -30,10 +31,11 @@ interface AtlasKeyEntry {
  * loadScene) into GPUTextures and caches them by name, and tracks which atlas (if any) each
  * name has been packed into - see scene.ts's TextureAtlasKey - so callers get both the right
  * GPUTexture and the right sub-rectangle of it from a single lookup. A name ending in ".bc1"
- * is loaded as a BC1/DXT1-compressed texture (see loadBc1Texture); everything else goes
- * through the browser's own image decoder. Also provides 1x1 white/black default textures,
- * matching the Unity reference shader's own material defaults (_MainTex = "white", _LightMap
- * = "black").
+ * is loaded as a BC1/DXT1-compressed texture (see loadBc1Texture); a name ending in ".exr" is
+ * decoded via exr_loader.ts's decodeExr (the browser has no native EXR decoder, unlike every
+ * other format this pipeline exports); everything else goes through the browser's own image
+ * decoder. Also provides 1x1 white/black default textures, matching the Unity reference
+ * shader's own material defaults (_MainTex = "white", _LightMap = "black").
  */
 export class TextureCache {
     private device: GPUDevice;
@@ -110,23 +112,33 @@ export class TextureCache {
             return fallback === 'white' ? this.whiteTexture : this.blackTexture;
         }
 
-        const cached = this.cache.get(name);
+        // Keyed by baseUrl+name, not name alone: the exporter names atlas files generically
+        // ("atlas_rgba32_srgb_0.png", "atlas_rgba_float_0.exr", ...), so the same name is reused
+        // across different scenes' own atlas directories. A name-only key would resolve a newly
+        // loaded scene's atlas to whatever GPUTexture a previously loaded scene happened to cache
+        // under that same name - not a decodable failure, just silently the wrong image, which is
+        // why this was so easy to mistake for stale/out-of-sync transforms when scene-switching.
+        const cacheKey = this.baseUrl + name;
+        const cached = this.cache.get(cacheKey);
         if (cached) {
             return cached;
         }
 
         try {
             const url = `${import.meta.env.BASE_URL}${this.baseUrl}${name}`;
-            const texture = name.toLowerCase().endsWith('.bc1')
+            const lowerName = name.toLowerCase();
+            const texture = lowerName.endsWith('.bc1')
                 ? await this.loadBc1Texture(url, name)
-                : await this.loadImageTexture(url);
+                : lowerName.endsWith('.exr')
+                    ? await this.loadExrTexture(url)
+                    : await this.loadImageTexture(url);
 
-            this.cache.set(name, texture);
+            this.cache.set(cacheKey, texture);
             return texture;
         } catch (error) {
             console.error(`Litbox texture cache: failed to load "${name}":`, error);
             const fallbackTexture = fallback === 'white' ? this.whiteTexture : this.blackTexture;
-            this.cache.set(name, fallbackTexture);
+            this.cache.set(cacheKey, fallbackTexture);
             return fallbackTexture;
         }
     }
@@ -156,6 +168,26 @@ export class TextureCache {
             pixels,
             { bytesPerRow: bitmap.width * 4, rowsPerImage: bitmap.height },
             [bitmap.width, bitmap.height],
+        );
+        return texture;
+    }
+
+    /** Loads a ".exr" file (see exr_loader.ts) as an rgba32float GPUTexture. */
+    private async loadExrTexture(url: string): Promise<GPUTexture> {
+        const response = await fetch(url);
+        const buffer = await response.arrayBuffer();
+        const { width, height, pixels } = await decodeExr(buffer);
+
+        const texture = this.device.createTexture({
+            size: [width, height],
+            format: 'rgba32float',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        this.device.queue.writeTexture(
+            { texture },
+            pixels,
+            { bytesPerRow: width * 16, rowsPerImage: height },
+            [width, height],
         );
         return texture;
     }

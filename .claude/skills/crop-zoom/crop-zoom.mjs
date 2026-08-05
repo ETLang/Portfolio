@@ -1,13 +1,13 @@
-// Crops and nearest-neighbor-zooms a region of a PNG (typically screenshot.mjs's own output) for
-// closer visual inspection. Uses Playwright's own bundled Chromium (not the msedge channel
-// screenshot.mjs needs) since this only touches a 2D canvas - no WebGPU device involved, so none of
-// that skill's dxil.dll workaround is needed here.
+// Crops and nearest-neighbor-zooms a region of a PNG (typically take-screenshot's own output) for
+// closer visual inspection. Uses Playwright's own bundled Chromium (not the msedge channel the
+// daemon needs) since this only touches a 2D canvas - no WebGPU device involved. No daemon
+// dependency at all - operates purely on an already-saved PNG file.
 //
-// Output path is fixed (like screenshot.mjs's own render.png) so the same literal command line
+// Output path is fixed (like take-screenshot's own render.png) so the same literal command line
 // works on every invocation regardless of which region is being cropped - only the numeric args
 // change, which keeps this allowlist-able in permission settings.
 import { chromium } from 'playwright';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 

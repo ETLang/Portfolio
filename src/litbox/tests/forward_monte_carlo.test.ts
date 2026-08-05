@@ -6,7 +6,7 @@ import {
     resolveBounces,
     computeWorldToTargetPixels,
     computeLightToTarget,
-    computeDirectionalLightDirection,
+    computeDirectionalLightSegment,
     combineWriteCount,
 } from '../forward_monte_carlo.ts';
 
@@ -75,9 +75,9 @@ describe('forward_monte_carlo pure per-light math', () => {
         });
     });
 
-    describe('computeDirectionalLightDirection', () => {
+    describe('computeDirectionalLightSegment', () => {
         it('passes local "down" through unchanged under an identity transform', () => {
-            expect(computeDirectionalLightDirection(mat4.create())).toEqual([0, -1]);
+            expect(computeDirectionalLightSegment(mat4.create(), 100, 200).direction).toEqual([0, -1]);
         });
 
         it('rotates local "down" by the light\'s own rotation', () => {
@@ -85,9 +85,31 @@ describe('forward_monte_carlo pure per-light math', () => {
             mat4.fromZRotation(rotated, Math.PI / 2);
 
             // Rotating (0,-1) by +90 degrees around Z gives (1,0): x' = x*cos-y*sin = 1, y' = x*sin+y*cos = 0.
-            const [x, y] = computeDirectionalLightDirection(rotated);
+            const [x, y] = computeDirectionalLightSegment(rotated, 100, 200).direction;
             expect(x).toBeCloseTo(1);
             expect(y).toBeCloseTo(0);
+        });
+
+        it('builds a segment perpendicular to the direction, with length matching its own segmentVector', () => {
+            const { direction, segmentVector, length } = computeDirectionalLightSegment(mat4.create(), 100, 200);
+
+            expect(direction[0] * segmentVector[0] + direction[1] * segmentVector[1]).toBeCloseTo(0);
+            expect(length).toBeCloseTo(Math.hypot(segmentVector[0], segmentVector[1]));
+        });
+
+        it('places the whole segment outside the [0,width]x[0,height] target rect, for every direction', () => {
+            for (const angle of [0, Math.PI / 6, Math.PI / 2, Math.PI, 3.4]) {
+                const rotated = mat4.create();
+                mat4.fromZRotation(rotated, angle);
+                const { segmentStart, segmentVector } = computeDirectionalLightSegment(rotated, 100, 200);
+
+                for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+                    const x = segmentStart[0] + segmentVector[0] * t;
+                    const y = segmentStart[1] + segmentVector[1] * t;
+                    const outside = x < 0 || x > 100 || y < 0 || y > 200;
+                    expect(outside).toBe(true);
+                }
+            }
         });
     });
 

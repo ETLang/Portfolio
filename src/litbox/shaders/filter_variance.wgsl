@@ -18,8 +18,13 @@
 const SIGMA_SPATIAL: f32 = 1.2;
 const SIGMA_ALBEDO: f32 = 0.05;
 const SIGMA_LUMINANCE_TIGHT: f32 = 0.05;
-const SIGMA_LUMINANCE_LOOSE: f32 = 2.5;
+const SIGMA_LUMINANCE_LOOSE: f32 = 6.0;
 const K_LUMINANCE: f32 = 2.0;
+// Mirrors DEFAULT_DENOISER_TUNABLES.darknessNoiseFloor's default - this shader has no uniforms of
+// its own to plumb the live tunable through (see filter_variance.ts), so it's a local copy rather
+// than a wired-through value. Floors logLuminance()'s singularity at 0, same role it plays in
+// denoise.wgsl/build_denoiser_quadtree.wgsl.
+const LUMINANCE_FLOOR: f32 = 0.002;
 // gaussianWeight/luminance/LUMINANCE_WEIGHTS live in LitboxCommon.wgsl - denoise.wgsl reuses them
 // too (its darkness-evidence and radiance-similarity terms), see this project's denoiser plan.
 
@@ -55,7 +60,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
             let spatialWeight = gaussianWeight(length(vec2<f32>(offset)), SIGMA_SPATIAL);
             let albedoWeight = gaussianWeight(length(centerAlbedo - sampleAlbedo), SIGMA_ALBEDO);
-            let luminanceWeight = gaussianWeight(abs(centerLuminance - sampleLuminance), sigmaAdaptive);
+            // Log-domain (see LitboxCommon.wgsl's logLuminance) - a fixed sigma compared against a
+            // raw linear-luminance difference only means the same thing across scenes whose
+            // absolute brightness scales are similar; comparing in log space makes it a ratio
+            // instead, consistent with denoise.wgsl's identical fix to its own radianceWeight.
+            let luminanceWeight = gaussianWeight(abs(logLuminance(centerLuminance, LUMINANCE_FLOOR) - logLuminance(sampleLuminance, LUMINANCE_FLOOR)), sigmaAdaptive);
             let sampleWeight = spatialWeight * albedoWeight * luminanceWeight;
 
             accumulated += sampleVariance * sampleWeight;

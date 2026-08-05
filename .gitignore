@@ -24,4 +24,7 @@ dist-ssr
 *.sw?
 GEMINI.MD
 .claude/settings.json
-.claude/skills/screenshot-litbox/output/
+.claude/skills/take-screenshot/output/
+.claude/skills/crop-zoom/output/
+.claude/skills/diff-screenshots/output/
+.claude/skills/start-server/state/
