@@ -17,7 +17,7 @@ const DENOISER_PARAMS: DenoiserParamMeta[] = [
     { key: 'albedoSensitivity', label: 'Albedo Sensitivity', min: 0, max: 2, step: 0.01 },
     { key: 'densitySensitivity', label: 'Density Sensitivity', min: 0, max: 5, step: 0.05 },
     { key: 'normalSensitivity', label: 'Normal Sensitivity', min: 0, max: 32, step: 0.5 },
-    { key: 'sigmaLuminanceTight', label: 'Sigma Luminance (Tight)', min: 0, max: 1, step: 0.01 },
+    { key: 'sigmaLuminanceTight', label: 'Sigma Luminance (Tight)', min: 0, max: 5, step: 0.01 },
     { key: 'sigmaLuminanceLoose', label: 'Sigma Luminance (Loose)', min: 0, max: 10, step: 0.1 },
     { key: 'kLuminance', label: 'K Luminance', min: 0.1, max: 10, step: 0.1 },
     { key: 'maxSplitDistance', label: 'Max Split Distance', min: 0, max: 8, step: 0.1 },

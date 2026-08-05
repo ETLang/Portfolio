@@ -139,30 +139,34 @@ export interface DenoiserTunables {
 }
 
 export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
-    varianceScale: 8.0,
-    darknessNoiseFloor: 0.002,
-    maxBlurMip: 5.0,
+    // Re-tuned (live, via the tunables panel) after two fixes landed together: the
+    // ForwardMonteCarloOperation shared-uniform-buffer clobber (forward_monte_carlo.ts's
+    // uniformBufferPool/beginFrame - centerVariance used to read saturated almost everywhere from
+    // that bug alone, not real scene noise) and the quadtree's irradiance-detail signal switching
+    // from luminance(mean(A,B)) to min(lumaA, lumaB) (build_denoiser_quadtree.wgsl - stops a
+    // one-sided firefly from reading as confirmed "real detail"). Both fixes change what
+    // centerVariance/hasNearbyDetail actually mean, so the old defaults (tuned against the
+    // pre-fix, corrupted signals) no longer apply - these values reflect the post-fix scene.
+    varianceScale: 10.0,
+    darknessNoiseFloor: 0.1,
+    maxBlurMip: 6.0,
     albedoSensitivity: 0.3,
     densitySensitivity: 1.0,
     normalSensitivity: 8.0,
     // Matches filter_variance.wgsl's SIGMA_LUMINANCE_TIGHT/LOOSE/K_LUMINANCE exactly - same
-    // adaptive-sigma pattern, reused rather than re-derived (see denoise.wgsl). Both sigmas are now
-    // compared against a log-luminance difference (see denoise.wgsl's decideWeight), not raw
-    // linear luminance - sigmaLuminanceLoose was raised from 2.5 to 6.0 to match: centerVariance
-    // saturates near its ceiling almost everywhere in practice (confirmed via readback), so
-    // decideWeight's adaptive sigma is essentially always at the "loose" end in real use, and 2.5
-    // log2-units was still tight enough to reject most neighbors in a scene with a much wider
-    // brightness range than cornell_square (a laser scene's beam-adjacent halo, ~100x cornell's
-    // peak brightness) - visible as residual salt-and-pepper noise specifically in that halo, even
-    // after the wNormal NaN fix. 6.0 was picked empirically (screenshot comparison against both
-    // scenes): it cleans up the halo without visibly softening cornell_square's real edges (the
-    // rotated cube's silhouette, the sphere's rim) - 10.0 started softening those edges.
-    sigmaLuminanceTight: 0.05,
-    sigmaLuminanceLoose: 6.0,
+    // adaptive-sigma pattern, reused rather than re-derived (see denoise.wgsl). Both sigmas are
+    // compared against a log-luminance difference (see denoise.wgsl's decideWeight), not raw linear
+    // luminance. sigmaLuminanceTight no longer needs to be razor-thin now that the quadtree's
+    // min(A,B) detail signal (see the comment above) rejects one-sided fireflies before
+    // hasNearbyDetail ever forces decideWeight onto this branch - false positives it used to have to
+    // guard against on its own are structurally gone, so it can sit much looser without fireflies
+    // creeping back in.
+    sigmaLuminanceTight: 1.0,
+    sigmaLuminanceLoose: 2.5,
     kLuminance: 2.0,
     // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
     // doc comment for the seed-relative-texels normalization this is measured in.
-    maxSplitDistance: 2.0,
+    maxSplitDistance: 1.5,
     albedoLuminanceThreshold: 0.1,
     albedoChromaThreshold: 0.2,
     logDensityThreshold: 0.05,
