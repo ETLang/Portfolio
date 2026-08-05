@@ -418,11 +418,6 @@ export class LitboxSceneRenderer {
         this.debugViews.set('combined-irradiance', { getSourceView: () => this.simulationResources.getCombinedIrradianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('raw-variance', { getSourceView: () => this.simulationResources.getRawVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('filtered-variance', { getSourceView: () => this.simulationResources.getFilteredVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
-        // Prototype structural-detail evidence (this project's denoiser plan) - gradient-direction
-        // coherence between irradiance-a/b, signed [-1,1] (black=anti-correlated,
-        // mid-gray=uncorrelated/noise, white=coherent/real edge). See
-        // compute_gradient_coherence.wgsl. Not consumed by any denoiser decision yet.
-        this.debugViews.set('gradient-coherence', { getSourceView: () => this.simulationResources.getGradientCoherenceView(), mode: DEBUG_VIEW_MODE.SIGNED_R_AS_LUMINANCE });
 
         this.createHdrFrameTexture();
     }
