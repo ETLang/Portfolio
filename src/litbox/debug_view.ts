@@ -19,6 +19,7 @@ export const DEBUG_VIEW_MODE = {
     NORMAL_REMAP: 2,
     ALPHA_AS_LUMINANCE: 3,
     HDR_SCALED: 4,
+    SIGNED_R_AS_LUMINANCE: 5,
 } as const;
 
 /**
