@@ -126,7 +126,6 @@ fn vertex_main(@builtin(instance_index) instanceIndex: u32, @location(0) localPo
 // reference's behavior.
 fn insideShape(shapeId: u32, uv: vec2<f32>) -> bool {
     if (shapeId == 2u) {
-        discard;
         let centered = (uv - vec2<f32>(0.5, 0.5));
         return dot(centered, centered) <= 0.25;
     }

@@ -39,19 +39,19 @@ export const QUAD_REGION_VERTICES: number[] = [
 export const RECT_REGION_VERTICES: number[] = [
     // Left triangle: normal (-1,0,0)
     -0.5, 0.5, -1, 0, 0,
-    0, 0, -1, 0, 0,
+    0, 0, 0, 0, 1,
     -0.5, -0.5, -1, 0, 0,
     // Top triangle: normal (0,1,0)
     0.5, 0.5, 0, 1, 0,
-    0, 0, 0, 1, 0,
+    0, 0, 0, 0, 1,
     -0.5, 0.5, 0, 1, 0,
     // Right triangle: normal (1,0,0)
     0.5, -0.5, 1, 0, 0,
-    0, 0, 1, 0, 0,
+    0, 0, 0, 0, 1,
     0.5, 0.5, 1, 0, 0,
     // Bottom triangle: normal (0,-1,0)
     -0.5, -0.5, 0, -1, 0,
-    0, 0, 0, -1, 0,
+    0, 0, 0, 0, 1,
     0.5, -0.5, 0, -1, 0,
 ];
 
