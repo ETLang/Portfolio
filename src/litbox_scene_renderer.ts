@@ -21,6 +21,10 @@ const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 // bytes), matching CameraUniform in sprite.wgsl.
 const CAMERA_UNIFORM_SIZE_BYTES = 4 * 16 * 2 + 16;
 const FRAMES_IN_FLIGHT = 2;
+// requestAnimationFrame is throttled/paused while the tab is hidden, so the first frame after
+// it becomes visible again can report a multi-minute delta - clamped here (once, for every
+// scene's onFrame) rather than trusting each scene to defend against it independently.
+const MAX_DELTA_TIME_SECONDS = 0.1;
 // Mirrors tonemap.wgsl's toneMapDefaultShape() - used when there's no active camera, or when a
 // scene predates blackPointLog/whitePointLog and the loaded JSON doesn't carry them.
 const DEFAULT_WHITE_POINT_LOG: Vector3 = { x: 2, y: 2, z: 2 };
@@ -108,9 +112,11 @@ export class LitboxSceneRenderer {
      * When set (to a key registered in debugViews - currently 'albedo', 'density', 'normal',
      * 'roughness' from the raytraced G-Buffer; 'lightmap' from the simulation's final HDR image;
      * 'irradiance-a'/'irradiance-b' (the two independent, uncombined per-half HDR estimates -
-     * see this project's denoiser plan), 'combined-irradiance' (their mean, pre-denoise), and
-     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline, see
-     * createSharedResources), replaces the entire normal render (simulation/sprites/tonemap) with
+     * see this project's denoiser plan), 'combined-irradiance' (their mean, pre-denoise),
+     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline, and
+     * 'gradient-coherence' (prototype structural-detail evidence, not yet consumed by any
+     * decision - see compute_gradient_coherence.wgsl), see createSharedResources), replaces the
+     * entire normal render (simulation/sprites/tonemap) with
      * a direct blit of that view's source texture to the swapchain, transformed for actual
      * legibility (see debug_view_blit.wgsl) - a diagnostic aid for verifying render-target
      * contents before anything downstream consumes them. Mipmapped sources (G-Buffer, lightmap,
@@ -412,6 +418,11 @@ export class LitboxSceneRenderer {
         this.debugViews.set('combined-irradiance', { getSourceView: () => this.simulationResources.getCombinedIrradianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('raw-variance', { getSourceView: () => this.simulationResources.getRawVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('filtered-variance', { getSourceView: () => this.simulationResources.getFilteredVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        // Prototype structural-detail evidence (this project's denoiser plan) - gradient-direction
+        // coherence between irradiance-a/b, signed [-1,1] (black=anti-correlated,
+        // mid-gray=uncorrelated/noise, white=coherent/real edge). See
+        // compute_gradient_coherence.wgsl. Not consumed by any denoiser decision yet.
+        this.debugViews.set('gradient-coherence', { getSourceView: () => this.simulationResources.getGradientCoherenceView(), mode: DEBUG_VIEW_MODE.SIGNED_R_AS_LUMINANCE });
 
         this.createHdrFrameTexture();
     }
@@ -697,7 +708,8 @@ export class LitboxSceneRenderer {
             return;
         }
 
-        const deltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
+        const rawDeltaTimeSeconds = this.lastFrameTimeMs !== null ? (timeMs - this.lastFrameTimeMs) / 1000 : 0;
+        const deltaTimeSeconds = Math.min(Math.max(rawDeltaTimeSeconds, 0), MAX_DELTA_TIME_SECONDS);
         this.lastFrameTimeMs = timeMs;
         this.fpsCounter.tick(timeMs);
         this.activeScene?.onFrame(deltaTimeSeconds);

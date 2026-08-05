@@ -7,6 +7,7 @@ const SPAWN_INTERVAL_MAX_SECONDS = 1.2;
 const CROSSING_TIME_MIN_SECONDS = 3;
 const CROSSING_TIME_MAX_SECONDS = 6;
 const MAX_ANGLE_VARIATION_DEGREES = 30;
+const SPEED_MULTIPLIER = 0.8; // 20% slower than the crossing-time range alone would produce
 const FLOOR_MARGIN_FRACTION = 0.1; // fraction of screen height, from the bottom, UFOs avoid flying into
 const OFFSCREEN_MARGIN = 1.5; // world units beyond the screen edge to spawn/despawn at
 const WOBBLE_AMPLITUDE_MIN = 0.05;
@@ -51,6 +52,8 @@ interface UfoInstance {
     wobbleFrequencyHz: number;
     wobblePhase: number;
     firing: boolean;
+    /** The UFO this one is currently shooting at - re-aimed at every frame while firing so the beam tracks its movement. Null while not firing. */
+    firingTarget: UfoInstance | null;
     fireTimeRemaining: number;
     fireElapsed: number;
 }
@@ -127,7 +130,7 @@ export class BattleScene extends LitboxScene {
 
         // horizontalSpeed alone crosses the screen in crossingSeconds; speed is scaled up so its
         // horizontal component still matches that, regardless of how steep angleRadians turned out.
-        const horizontalSpeed = screenWidth / crossingSeconds;
+        const horizontalSpeed = (screenWidth / crossingSeconds) * SPEED_MULTIPLIER;
         const speed = horizontalSpeed / Math.cos(angleRadians);
         const directionSign = fromLeft ? 1 : -1;
         const velocityX = directionSign * speed * Math.cos(angleRadians);
@@ -170,6 +173,7 @@ export class BattleScene extends LitboxScene {
             wobbleFrequencyHz: randomRange(WOBBLE_FREQUENCY_MIN_HZ, WOBBLE_FREQUENCY_MAX_HZ),
             wobblePhase: Math.random() * Math.PI * 2,
             firing: false,
+            firingTarget: null,
             fireTimeRemaining: 0,
             fireElapsed: 0,
         });
@@ -191,9 +195,13 @@ export class BattleScene extends LitboxScene {
         ufo.fireTimeRemaining -= deltaTimeSeconds;
         if (ufo.fireTimeRemaining <= 0) {
             ufo.firing = false;
+            ufo.firingTarget = null;
             ufo.laser.active = false;
             this.markTransformDirty(ufo.laser);
             return;
+        }
+        if (ufo.firingTarget) {
+            this.aimGimbalAt(ufo, ufo.firingTarget);
         }
         // Oscillates between baseLaserIntensity/2 (low) and baseLaserIntensity (high, the template's own value).
         const oscillation = 0.5 + 0.5 * Math.sin(2 * Math.PI * LASER_FLICKER_FREQUENCY_HZ * ufo.fireElapsed);
@@ -227,20 +235,34 @@ export class BattleScene extends LitboxScene {
         const targets = this.ufos.filter(u => u !== shooter);
         const target = targets[Math.floor(Math.random() * targets.length)];
 
-        // Gimbal world position (UFO itself never rotates, so this is a plain scaled offset).
-        const gimbalWorldX = shooter.root.position.x + shooter.gimbal.position.x * shooter.root.scale.x;
-        const gimbalWorldY = shooter.root.position.y + shooter.gimbal.position.y * shooter.root.scale.y;
-        const angleToTargetDegrees =
-            (Math.atan2(target.root.position.y - gimbalWorldY, target.root.position.x - gimbalWorldX) * 180) / Math.PI;
-        // The Laser's own rotation (fixed, relative to the gimbal) is the template's baked beam
-        // offset - the gimbal's rotation is the only aim adjustment we make.
-        shooter.gimbal.rotation = angleToTargetDegrees - shooter.laser.rotation;
-        this.markTransformDirty(shooter.gimbal);
+        shooter.firingTarget = target;
+        this.aimGimbalAt(shooter, target);
 
         shooter.laser.active = true;
         this.markTransformDirty(shooter.laser);
         shooter.firing = true;
         shooter.fireElapsed = 0;
         shooter.fireTimeRemaining = randomRange(FIRE_DURATION_MIN_SECONDS, FIRE_DURATION_MAX_SECONDS);
+    }
+
+    /**
+     * Rotates `shooter.gimbal` so the laser beam points at `target`'s current position - called
+     * once when a burst starts and again every frame for the rest of the burst, so the beam tracks
+     * a moving target instead of freezing on its position when the burst began.
+     */
+    private aimGimbalAt(shooter: UfoInstance, target: UfoInstance): void {
+        // Gimbal world position (UFO itself never rotates, so this is a plain scaled offset).
+        const gimbalWorldX = shooter.root.position.x + shooter.gimbal.position.x * shooter.root.scale.x;
+        const gimbalWorldY = shooter.root.position.y + shooter.gimbal.position.y * shooter.root.scale.y;
+        const angleToTargetDegrees =
+            (Math.atan2(target.root.position.y - gimbalWorldY, target.root.position.x - gimbalWorldX) * 180) / Math.PI;
+        // The Laser's own rotation (fixed, relative to the gimbal) is the template's baked beam
+        // offset - the gimbal's rotation is the only aim adjustment we make. forward_monte_carlo.wgsl's
+        // LIGHT_KIND_LASER emitter fires along the Laser object's local -Y axis (not +X - its scale,
+        // 0.05 wide by 0.142 tall, is a tall thin beam shape), which points at world angle
+        // (totalRotation + 90deg); solving totalRotation = gimbal.rotation + laser.rotation for the
+        // beam to point at the target adds that same 90deg here.
+        shooter.gimbal.rotation = angleToTargetDegrees + 90 - shooter.laser.rotation;
+        this.markTransformDirty(shooter.gimbal);
     }
 }
