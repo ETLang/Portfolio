@@ -1,7 +1,7 @@
 import './style.css';
 import { marked } from 'marked';
 import { ModalDialog } from './modal-dialog.ts';
-import { LitboxSceneRenderer } from './litbox_scene_renderer.ts';
+import { LitboxSceneRenderer, type WebGpuInitFailureReason } from './litbox_scene_renderer.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
 import { formatRate } from './litbox/performance_metrics.ts';
@@ -23,6 +23,68 @@ const sidebarPane = document.querySelector('.sidebar-pane') as HTMLElement;
 const workspaceViewport = document.querySelector('.workspace-viewport') as HTMLElement;
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
 const resumeView = document.querySelector('.resume-view') as HTMLElement;
+const webgpuErrorOverlay = document.querySelector('.webgpu-error-overlay') as HTMLElement;
+const webgpuErrorReason = document.querySelector('.webgpu-error-reason') as HTMLElement;
+const webgpuErrorTips = document.querySelector('.webgpu-error-tips') as HTMLElement;
+const webgpuStatus = document.getElementById('webgpu-status') as HTMLElement;
+
+// --- WEBGPU FAILURE DIAGNOSTICS ---
+// initWebGPU() (see litbox_scene_renderer.ts) fails silently by design - it's a background
+// resource-setup step, not something worth throwing over - so the UI has to actively check
+// for it here rather than relying on a rejected promise. Without this, a failed init used to
+// just leave a blank canvas with the status bar's hardcoded "WebGPU: Active" claiming
+// otherwise (see 🐛 note in git history / CLAUDE.md) - misleading during exactly the moment a
+// visitor most needs an explanation.
+const WEBGPU_FAILURE_MESSAGES: Record<WebGpuInitFailureReason, { reason: string; tips: string[] }> = {
+    'unsupported': {
+        reason: "Your browser doesn't support the WebGPU API this scene needs to render.",
+        tips: [
+            "Try a recent version of Chrome, Edge, or Safari 18+ - WebGPU isn't available in every browser yet.",
+            "On Firefox, WebGPU currently has to be enabled manually via about:config.",
+        ],
+    },
+    'no-adapter': {
+        reason: "Your browser supports WebGPU, but couldn't find or allocate a GPU for it to use.",
+        tips: [
+            "Reboot the device - browsers disable GPU acceleration after repeated GPU-process crashes, and this usually clears on restart.",
+            "On Chrome, visit chrome://gpu and check the \"Problems Detected\" section for the specific cause.",
+            "Turn off battery saver / low-power mode, which can restrict GPU access.",
+            "Close other GPU-heavy tabs or apps and try again.",
+            "Make sure the browser and OS are up to date.",
+        ],
+    },
+    'device-error': {
+        reason: "Your browser found a GPU, but something went wrong while setting it up.",
+        tips: [
+            "Reboot the device and try again.",
+            "Try a different browser.",
+            "Open the browser console for more detail on the underlying error.",
+        ],
+    },
+};
+
+// Tracked separately from the overlay's own display style because the overlay lives inside
+// .workspace-viewport, which stays visible on every view except "about" (see updateView's
+// canvas/resumeView toggle) - it needs to hide there too rather than covering the resume text,
+// then reappear if the visitor navigates back to "intro"/"litbox".
+let webgpuErrorActive = false;
+
+function updateWebGpuErrorVisibility(isAboutView: boolean): void {
+    webgpuErrorOverlay.style.display = (webgpuErrorActive && !isAboutView) ? 'flex' : 'none';
+}
+
+function showWebGpuError(reason: WebGpuInitFailureReason): void {
+    const info = WEBGPU_FAILURE_MESSAGES[reason];
+    webgpuErrorReason.textContent = info.reason;
+    webgpuErrorTips.replaceChildren(...info.tips.map(tip => {
+        const li = document.createElement('li');
+        li.textContent = tip;
+        return li;
+    }));
+    webgpuErrorActive = true;
+    updateWebGpuErrorVisibility(appContainer.dataset.activeView === 'about');
+    webgpuStatus.textContent = '🔴 WebGPU: Unavailable';
+}
 
 // --- CONSOLE LOG CAPTURE ---
 const consoleContainer = document.getElementById('console-container');
@@ -215,6 +277,7 @@ async function updateView(view: ViewKey) {
     // Show/hide main content
     resumeView.style.display = isAboutView ? 'block' : 'none';
     canvas.style.display = isAboutView ? 'none' : 'block';
+    updateWebGpuErrorVisibility(isAboutView);
 
     updateLayout();
 }
@@ -381,12 +444,19 @@ if (canvas) {
         .then(scene => renderer.setScene(scene))
         .then(() => renderer.start())
         .then(() => {
+            if (renderer.initFailureReason) {
+                showWebGpuError(renderer.initFailureReason);
+                return;
+            }
             litboxRenderer = renderer;
             // Exposed for manual debugging from the devtools console, e.g.
             // `litboxRenderer.debugView = 'lightmap'` - see LitboxSceneRenderer.debugView.
             (window as unknown as { litboxRenderer: LitboxSceneRenderer }).litboxRenderer = renderer;
         })
-        .catch(error => console.error('Failed to start Litbox scene renderer:', error));
+        .catch(error => {
+            console.error('Failed to start Litbox scene renderer:', error);
+            showWebGpuError('device-error');
+        });
 } else {
     console.error("Canvas element not found!");
 }

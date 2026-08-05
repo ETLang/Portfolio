@@ -36,6 +36,14 @@ interface ActiveCamera {
 }
 
 /**
+ * Why initWebGPU() failed, for main.ts to turn into a user-facing message - the underlying
+ * causes (browser lacks the API at all vs. the API exists but no adapter/device could be
+ * obtained) call for different troubleshooting tips, so the distinction is preserved past the
+ * boolean start() currently returns rather than collapsed into one generic "didn't work".
+ */
+export type WebGpuInitFailureReason = 'unsupported' | 'no-adapter' | 'device-error';
+
+/**
  * Renders a Litbox Scene (see src/litbox/scene.ts): runs the (currently
  * stubbed) light simulation, then paints sprites layer-by-layer around an
  * additive composite of the simulation's HDR lightmap, into an offscreen
@@ -54,6 +62,8 @@ interface ActiveCamera {
  */
 export class LitboxSceneRenderer {
     private canvas: HTMLCanvasElement;
+    /** Set by initWebGPU() when start() fails to reach a running device; null otherwise. */
+    public initFailureReason: WebGpuInitFailureReason | null = null;
     private adapter!: GPUAdapter;
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
@@ -308,12 +318,14 @@ export class LitboxSceneRenderer {
         try {
             if (!navigator.gpu) {
                 console.error("WebGPU not supported on this browser.");
+                this.initFailureReason = 'unsupported';
                 return false;
             }
 
             const adapter = await navigator.gpu.requestAdapter();
             if (!adapter) {
                 console.error("No appropriate GPUAdapter found.");
+                this.initFailureReason = 'no-adapter';
                 return false;
             }
             this.adapter = adapter;
@@ -348,6 +360,7 @@ export class LitboxSceneRenderer {
             });
         } catch (error) {
             console.error("Error initializing WebGPU:", error);
+            this.initFailureReason = 'device-error';
             return false;
         }
         return true;

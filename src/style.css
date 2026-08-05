@@ -189,6 +189,41 @@ canvas {
     display: block; /* remove extra space below canvas */
 }
 
+.webgpu-error-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background-color: var(--bg-color);
+  overflow-y: auto;
+}
+
+.webgpu-error-content {
+  max-width: 480px;
+  color: var(--text-color);
+}
+
+.webgpu-error-content h2 {
+  margin-top: 0;
+  font-size: 1.1em;
+}
+
+.webgpu-error-content p {
+  color: var(--text-subtitle);
+}
+
+.webgpu-error-content ul {
+  color: var(--text-muted);
+  padding-left: 1.2em;
+  line-height: 1.6;
+}
+
+.webgpu-error-content li::marker {
+  color: var(--accent-color);
+}
+
 .status-bar {
   grid-area: footer;
   background-color: var(--status-bar-bg);
