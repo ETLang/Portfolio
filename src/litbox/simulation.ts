@@ -22,7 +22,7 @@ import {
     resolveBounces,
     computeWorldToTargetPixels,
     computeLightToTarget,
-    computeDirectionalLightDirection,
+    computeDirectionalLightSegment,
     combineWriteCount,
 } from './forward_monte_carlo.ts';
 import compositeShaderCode from './shaders/simulation_composite.wgsl?raw';
@@ -836,6 +836,15 @@ export class SimulationResources {
         // single-pass, non-accumulating integration - see this project's plan).
         this.device.queue.writeBuffer(this.photonBuffer.buffer, 0, this.photonBufferClearData);
 
+        // Reset each light kind's per-frame uniform-buffer-slot cursor - see
+        // ForwardMonteCarloOperation.beginFrame's doc comment. Unconditional (even for a kind with
+        // no active lights this frame) since it's just a counter reset, no allocation.
+        this.pointOperation.beginFrame();
+        this.spotOperation.beginFrame();
+        this.laserOperation.beginFrame();
+        this.directionalOperation.beginFrame();
+        this.ambientOperation.beginFrame();
+
         const { width, height, raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces } = this.simulation;
         const maxIntegrationSteps = computeMaxIntegrationSteps(width, height);
 
@@ -896,9 +905,16 @@ export class SimulationResources {
 
             const lightWorldTransform = sceneGraph.getWorldTransform(light.ownerId);
             const lightToTarget = computeLightToTarget(worldToTargetPixels, lightWorldTransform);
-            const directionalLightDirection: [number, number] = kind === 'directional'
-                ? computeDirectionalLightDirection(lightToTarget)
-                : [0, 0];
+            const directionalSegment = kind === 'directional'
+                ? computeDirectionalLightSegment(lightToTarget, width, height)
+                : null;
+            const directionalLightDirection: readonly [number, number] = directionalSegment?.direction ?? [0, 0];
+            const directionalLightSegmentStart: readonly [number, number] = directionalSegment?.segmentStart ?? [0, 0];
+            const directionalLightSegmentVector: readonly [number, number] = directionalSegment?.segmentVector ?? [0, 0];
+            // Divides out the segment's own length so this light's total emitted power stays
+            // independent of the target's resolution (see computeDirectionalLightSegment) - the
+            // segment is only a sampling aperture, not a physical property of the light.
+            const directionalEnergyScale = directionalSegment ? 1 / directionalSegment.length : 1;
             const pinchSquared = pinch * pinch;
             const lightPinch: [number, number] = kind === 'spot' ? [pinchSquared, Math.atan(pinchSquared)] : [0, 0];
             const bounces = resolveBounces(photonBounces, light.bounces);
@@ -933,7 +949,7 @@ export class SimulationResources {
                 // Normalized from this half's own ray count, not rays[i] - so each half
                 // independently is an unbiased estimator of the same signal on its own, matching
                 // Unity's TracerPostProcessing.compute's mean(sample_a, sample_b) equivalence.
-                const photonEnergyScale = 0xFFFFFFFF / half.rays / integrationInterval;
+                const photonEnergyScale = 0xFFFFFFFF / half.rays / integrationInterval * directionalEnergyScale;
                 const lightEnergy: [number, number, number] = [
                     energyRgb[0] * photonEnergyScale,
                     energyRgb[1] * photonEnergyScale,
@@ -946,6 +962,8 @@ export class SimulationResources {
                     seedBase: half.seedBase,
                     halfIndex: half.halfIndex,
                     directionalLightDirection,
+                    directionalLightSegmentStart,
+                    directionalLightSegmentVector,
                     lightPinch,
                     integrationInterval,
                     integrationIntervalSquared,
