@@ -12,7 +12,7 @@ interface DenoiserParamMeta {
 /** Order matches which DenoiseOperation/BuildDenoiserQuadtreeOperation each field feeds - see DenoiserTunables. */
 const DENOISER_PARAMS: DenoiserParamMeta[] = [
     { key: 'varianceScale', label: 'Variance Scale', min: 0, max: 20, step: 0.1 },
-    { key: 'darknessNoiseFloor', label: 'Darkness Noise Floor', min: 0, max: 0.02, step: 0.0005 },
+    { key: 'darknessNoiseFloor', label: 'Darkness Noise Floor', min: 0, max: 0.5, step: 0.005 },
     { key: 'maxBlurMip', label: 'Max Blur Mip', min: 0, max: 8, step: 1 },
     { key: 'albedoSensitivity', label: 'Albedo Sensitivity', min: 0, max: 2, step: 0.01 },
     { key: 'densitySensitivity', label: 'Density Sensitivity', min: 0, max: 5, step: 0.05 },
