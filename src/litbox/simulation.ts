@@ -184,6 +184,47 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
 };
 
 /**
+ * Every tunable value in the photon-tracing simulation itself (as opposed to DenoiserTunables,
+ * which tunes the post-process blur) - bundled the same way for the same reason: a single source
+ * of truth for the portfolio page's config UI (see main.ts's simulation tunables panel). Mutate a
+ * field directly (e.g. `simulationResources.simulationTunables.surfaceBias = 4`); tracePhotons
+ * reads this fresh every frame, so there's no separate "apply" step.
+ *
+ * raysPerFrame/integrationInterval/photonBounces mirror the identically-named SceneSimulation
+ * fields (the scene's exported JSON) - they start out equal to that scene's own (already
+ * device-profile-scaled) values every time loadFromScene runs (see its doc comment), then become
+ * independently live-editable from that point on, same as every other field here. Simulation
+ * resolution (width/height) is deliberately NOT part of this struct - resizing needs a full GPU
+ * resource reallocation (LitboxSceneRenderer.resizeSimulation), not a per-frame uniform write, so
+ * it doesn't fit this "mutate and reread" shape.
+ */
+export interface SimulationTunables {
+    raysPerFrame: number;
+    integrationInterval: number;
+    /** -1 = use each light's own bounce count (SceneSimulation's OverrideBounceCount sentinel - see resolveBounces). */
+    photonBounces: number;
+    /** forward_monte_carlo.wgsl's scatterMaterially self-intersection pushback after a bounce - fine-geometry light leaks vs. self-shadowing artifacts. */
+    surfaceBias: number;
+    /** forward_monte_carlo.wgsl's ambient emitLight direction-perturbation divisor - how directional vs. uniform ambient scatter looks. */
+    ambientScatterSoftness: number;
+}
+
+/**
+ * raysPerFrame/integrationInterval/photonBounces here are placeholder fallbacks only - loadFromScene
+ * always immediately overwrites them from the loaded scene's own (device-profile-scaled)
+ * SceneSimulation, so no real scene ends up relying on these three. surfaceBias/
+ * ambientScatterSoftness are the actual defaults (the Unity-ported hardcoded literals this
+ * project inherited - starting points, not solved values, same as DEFAULT_DENOISER_TUNABLES).
+ */
+export const DEFAULT_SIMULATION_TUNABLES: SimulationTunables = {
+    raysPerFrame: 100000,
+    integrationInterval: 0.01,
+    photonBounces: -1,
+    surfaceBias: 2.5,
+    ambientScatterSoftness: 1.44,
+};
+
+/**
  * Owns the HDR mipmapped lightmap produced by the light simulation, and the pipeline that
  * additively composites it into the HDR frame buffer as a world-space quad.
  *
@@ -230,6 +271,9 @@ export class SimulationResources {
 
     /** Live-editable copy of every denoiser threshold - see DenoiserTunables' own doc comment. */
     public denoiserTunables: DenoiserTunables = { ...DEFAULT_DENOISER_TUNABLES };
+
+    /** Live-editable copy of every simulation tunable - see SimulationTunables' own doc comment. */
+    public simulationTunables: SimulationTunables = { ...DEFAULT_SIMULATION_TUNABLES };
 
     public denoiserEnabled = true;
     private frameIndex = 0;
@@ -459,8 +503,18 @@ export class SimulationResources {
      * tweak made against the previous scene is discarded, not carried over (see LitboxScene's own
      * doc comment for why). The device profile's maxBlurMip cut below is then re-applied on top,
      * same as before this parameter existed - that one stays device-derived, never scene-derived.
+     *
+     * `sceneSimulationTunables` (LitboxScene.getSimulationTunables()) gets the same treatment for
+     * simulationTunables - see SimulationTunables' own doc comment for why raysPerFrame/
+     * integrationInterval/photonBounces are seeded from this scene's own (already device-scaled)
+     * SceneSimulation first, with sceneSimulationTunables layered on top of that.
      */
-    public loadFromScene(scene: Scene, sceneGraph: SceneGraph, sceneTunables: Partial<DenoiserTunables> | null = null): void {
+    public loadFromScene(
+        scene: Scene,
+        sceneGraph: SceneGraph,
+        sceneTunables: Partial<DenoiserTunables> | null = null,
+        sceneSimulationTunables: Partial<SimulationTunables> | null = null,
+    ): void {
         if (this.lightmap) {
             this.computedDataManager.releaseTexture(this.lightmap);
             this.lightmap = null;
@@ -506,6 +560,13 @@ export class SimulationResources {
         this.bilinearPhotonDistribution = deviceProfile.bilinearPhotonDistribution;
         this.denoiserTunables = { ...DEFAULT_DENOISER_TUNABLES, ...sceneTunables };
         this.denoiserTunables.maxBlurMip = deviceProfile.maxBlurMip;
+        this.simulationTunables = {
+            ...DEFAULT_SIMULATION_TUNABLES,
+            raysPerFrame: this.simulation.raysPerFrame,
+            integrationInterval: this.simulation.integrationInterval,
+            photonBounces: this.simulation.photonBounces,
+            ...sceneSimulationTunables,
+        };
         // Visible via the on-screen console overlay on mobile - lets a device profile be verified
         // without attaching devtools (see CDP-over-adb mobile debugging notes: some GPU readback
         // paths hang under remote debugging, so an in-page log is the more reliable check anyway).
@@ -878,7 +939,8 @@ export class SimulationResources {
         this.directionalOperation.beginFrame();
         this.ambientOperation.beginFrame();
 
-        const { width, height, raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces } = this.simulation;
+        const { width, height } = this.simulation;
+        const { raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces, surfaceBias, ambientScatterSoftness } = this.simulationTunables;
         const maxIntegrationSteps = computeMaxIntegrationSteps(width, height);
 
         interface Entry {
@@ -1001,6 +1063,8 @@ export class SimulationResources {
                     integrationInterval,
                     integrationIntervalSquared,
                     rays: half.rays,
+                    surfaceBias,
+                    ambientScatterSoftness,
                 });
                 operation.execute(encoder);
             }

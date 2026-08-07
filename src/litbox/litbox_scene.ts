@@ -17,7 +17,7 @@ import {
 } from './scene.ts';
 import { DynamicSet } from './dynamic_set.ts';
 import type { LitboxSceneRenderer } from '../litbox_scene_renderer.ts';
-import type { DenoiserTunables } from './simulation.ts';
+import type { DenoiserTunables, SimulationTunables } from './simulation.ts';
 
 const ROOT_PARENT_ID = -1;
 
@@ -212,6 +212,18 @@ export abstract class LitboxScene {
      * carried over.
      */
     public getDenoiserTunables(): Partial<DenoiserTunables> | null {
+        return null;
+    }
+
+    /**
+     * Per-scene defaults for SimulationTunables (see its own doc comment), applied on top of
+     * DEFAULT_SIMULATION_TUNABLES (and this scene's own JSON-authored raysPerFrame/
+     * integrationInterval/photonBounces) every time this scene loads - see
+     * SimulationResources.loadFromScene. Same reasoning and same "fixed baseline, not a
+     * preserved delta" contract as getDenoiserTunables(): returns null (no override) unless a
+     * subclass overrides it.
+     */
+    public getSimulationTunables(): Partial<SimulationTunables> | null {
         return null;
     }
 

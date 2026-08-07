@@ -213,6 +213,34 @@ export class LitboxSceneRenderer {
     }
 
     /**
+     * Live-resizes the active scene's simulation resolution by mutating its own
+     * SceneSimulation.width/height (the scene's raw, pre-device-scale authored value) and
+     * re-running the same serialized rebuild pipeline setScene() uses. Deliberately does NOT call
+     * scene.onLoad() again (unlike setScene) - a resize isn't a scene swap, and re-running
+     * onLoad's one-time setup (e.g. addSlider registrations) would incorrectly duplicate it.
+     * Reuses the full rebuildFromScene teardown/rebuild rather than a narrower resize path in
+     * SimulationResources/RaytracedResources, since the G-Buffer (RaytracedResources) must stay
+     * pixel-for-pixel matched to the simulation's own resolution (see
+     * SimulationResources.getEffectiveResolution's doc comment) and there's no existing narrow
+     * "just resize" entry point for either resource today - correctness over micro-perf for what's
+     * expected to be an infrequent debug-panel action, not a per-frame path. A side effect of
+     * going through the full rebuild: denoiserTunables/simulationTunables both reset to this
+     * scene's defaults, exactly as they would on an actual scene switch.
+     */
+    public async resizeSimulation(width: number, height: number): Promise<void> {
+        if (!this.activeScene) {
+            return;
+        }
+        const simulation = this.activeScene.data.simulations[0];
+        if (!simulation) {
+            return;
+        }
+        simulation.width = Math.max(1, Math.round(width));
+        simulation.height = Math.max(1, Math.round(height));
+        await this.queueRebuild(this.activeScene);
+    }
+
+    /**
      * Runs rebuildFromScene() for `scene`, serialized against every other queueRebuild() call so
      * at most one is ever running at a time. Necessary because rebuildFromScene does synchronous
      * teardown of the *previous* scene's GPU resources followed by an *async* rebuild (texture
@@ -466,7 +494,7 @@ export class LitboxSceneRenderer {
         this.lastActiveCameraOwnerId = null;
 
         this.lightResources.loadFromScene(scene, this.sceneGraph, this.transformResources);
-        this.simulationResources.loadFromScene(scene, this.sceneGraph, this.activeScene.getDenoiserTunables());
+        this.simulationResources.loadFromScene(scene, this.sceneGraph, this.activeScene.getDenoiserTunables(), this.activeScene.getSimulationTunables());
         await this.raytracedResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
         await this.spriteResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
 

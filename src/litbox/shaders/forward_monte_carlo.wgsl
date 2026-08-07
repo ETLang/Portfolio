@@ -41,6 +41,9 @@ struct Uniforms {
     // lightEnergy is pre-divided by its length so total emitted power stays resolution-independent.
     directionalLightSegmentStart: vec2<f32>,
     directionalLightSegmentVector: vec2<f32>,
+    // SimulationTunables (simulation.ts) - see its own doc comment for what each controls.
+    surfaceBias: f32,
+    ambientScatterSoftness: f32,
 }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -287,7 +290,7 @@ fn scatterMaterially(rand: ptr<function, Random>, origin: ptr<function, vec2<f32
         let reflected = reflect(incoming, normal2D);
 
         let alignment = clamp(alignment0 / len, 0.0, 1.0);
-        *origin -= incoming * 2.5;
+        *origin -= incoming * uniforms.surfaceBias;
         if (alignment > 0.999) {
             return vec4<f32>(reflected, 1.0, 0.0);
         } else if (alignment == 0.0) {
@@ -480,7 +483,7 @@ fn emitLight(rand: ptr<function, Random>) -> Ray {
 
     var emitted: Ray;
     emitted.origin = nOrigin * targetSize;
-    emitted.direction = normalize(randomNextDirection(rand) - (nOrigin * 2.0 - vec2<f32>(1.0, 1.0)) / 1.44);
+    emitted.direction = normalize(randomNextDirection(rand) - (nOrigin * 2.0 - vec2<f32>(1.0, 1.0)) / uniforms.ambientScatterSoftness);
     emitted.energy = uniforms.lightEnergy;
     return emitted;
 }
