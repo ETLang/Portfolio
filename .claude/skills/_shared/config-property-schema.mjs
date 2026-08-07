@@ -32,7 +32,21 @@ export const DENOISER_TUNABLE_KEYS = [
     'varianceGateScale',
 ];
 
-export const STATIC_PROPERTY_NAMES = ['exposure', 'tonemap', 'denoiser', ...DENOISER_TUNABLE_KEYS.map((k) => `denoiser.${k}`)];
+// Must match SimulationTunables in src/litbox/simulation.ts exactly.
+export const SIMULATION_TUNABLE_KEYS = [
+    'raysPerFrame',
+    'integrationInterval',
+    'photonBounces',
+    'surfaceBias',
+    'ambientScatterSoftness',
+];
+
+export const STATIC_PROPERTY_NAMES = [
+    'exposure', 'tonemap', 'denoiser',
+    ...DENOISER_TUNABLE_KEYS.map((k) => `denoiser.${k}`),
+    ...SIMULATION_TUNABLE_KEYS.map((k) => `simulation.${k}`),
+    'simulation.width', 'simulation.height',
+];
 
 /**
  * Parses a --property/--value pair into a typed, validated command the daemon can dispatch, or
@@ -71,6 +85,28 @@ export function parsePropertyArg(property, rawValue) {
         const value = Number(rawValue);
         if (Number.isNaN(value)) throw new Error(`denoiser.${key} must be numeric, got: ${rawValue}`);
         return { kind: 'denoiser-tunable', key, value };
+    }
+
+    if (property === 'simulation.width' || property === 'simulation.height') {
+        // Resolution is deliberately NOT one of SIMULATION_TUNABLE_KEYS (see
+        // LitboxSceneRenderer.resizeSimulation's own doc comment - it needs an async GPU resource
+        // rebuild, not a plain property write) - handled as its own kind, which resolves the
+        // OTHER dimension from the simulation's current live resolution so a single-dimension
+        // call still produces a valid resizeSimulation(width, height) pair.
+        const dimension = property === 'simulation.width' ? 'width' : 'height';
+        const value = Number(rawValue);
+        if (Number.isNaN(value)) throw new Error(`${property} must be numeric, got: ${rawValue}`);
+        return { kind: 'simulation-size', dimension, value };
+    }
+
+    if (property.startsWith('simulation.')) {
+        const key = property.slice('simulation.'.length);
+        if (!SIMULATION_TUNABLE_KEYS.includes(key)) {
+            throw new Error(`Unknown simulation tunable "${key}". Valid tunables: ${SIMULATION_TUNABLE_KEYS.join(', ')}`);
+        }
+        const value = Number(rawValue);
+        if (Number.isNaN(value)) throw new Error(`simulation.${key} must be numeric, got: ${rawValue}`);
+        return { kind: 'simulation-tunable', key, value };
     }
 
     throw new Error(`Unknown property "${property}". Valid properties: ${STATIC_PROPERTY_NAMES.join(', ')}, scene-slider.<label>`);
