@@ -30,8 +30,8 @@ const WOBBLE_AMPLITUDE_MIN = 0.05;
 const WOBBLE_AMPLITUDE_MAX = 0.15;
 const WOBBLE_FREQUENCY_MIN_HZ = 0.6;
 const WOBBLE_FREQUENCY_MAX_HZ = 1.4;
-const FIRE_INTERVAL_MIN_SECONDS = 1;
-const FIRE_INTERVAL_MAX_SECONDS = 2;
+const FIRE_INTERVAL_MIN_SECONDS = 0.5;
+const FIRE_INTERVAL_MAX_SECONDS = 1.25;
 const FIRE_DURATION_MIN_SECONDS = 0.5;
 const FIRE_DURATION_MAX_SECONDS = 1.5;
 const LASER_FLICKER_FREQUENCY_HZ = 5;
@@ -46,6 +46,10 @@ const HOVER_INTERVAL_MIN_SECONDS = 6;
 const HOVER_INTERVAL_MAX_SECONDS = 8; // mean 7s - normalized by UFO count the same way FIRE_INTERVAL is, so the global rate stays ~once/7s regardless of population
 const HOVER_DURATION_MIN_SECONDS = 2;
 const HOVER_DURATION_MAX_SECONDS = 3;
+
+// Fraction of laser hits that actually down the target - the rest land (beam fires, gimbal
+// aims, visuals play) but the target flies on unaffected, so not every shot reads as a kill.
+const UFO_SHOOTDOWN_CHANCE = 0.5;
 
 const SHOCK_DURATION_SECONDS = 0.5;
 const SHOCK_IMPULSE_DEGREES_MIN = 25;
@@ -407,7 +411,9 @@ export class BattleScene extends LitboxScene {
         shooter.fireStartTimeSeconds = nowSeconds;
         shooter.fireDurationSeconds = randomRange(FIRE_DURATION_MIN_SECONDS, FIRE_DURATION_MAX_SECONDS);
 
-        this.applyHit(target, nowSeconds);
+        if (Math.random() < UFO_SHOOTDOWN_CHANCE) {
+            this.applyHit(target, nowSeconds);
+        }
     }
 
     /** The beam is instant (light-speed, and the gimbal is already aimed exactly at the target), so the hit lands the same frame the burst starts - kicks the target into 'shocked'. */

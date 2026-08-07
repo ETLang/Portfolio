@@ -8,6 +8,7 @@ import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } fro
 import { ComputedDataManager, ComputedTexture, ComputedBuffer } from './computed_data_manager.ts';
 import { ConvertPhotonIrradianceToHdrOperation } from './convert_photon_irradiance_to_hdr.ts';
 import { MipDownsampleOperation } from './mip_downsample.ts';
+import { LightmapBlurPyramid } from './lightmap_blur_pyramid.ts';
 import { DensityMipBlitResources } from './density_mip_blit.ts';
 import { ComputeVarianceAndMipsOperation } from './compute_variance_and_mips.ts';
 import { FilterVarianceOperation } from './filter_variance.ts';
@@ -156,7 +157,7 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     // for why) - 2.0 reaches full suppression around opticalDepth 3 (about 95% dense), the same
     // ceiling a raw-optical-depth falloff of 3.0 would have had, but ramps up far more gradually
     // below that instead of the whole transition being compressed into the last few % of density.
-    densityBlurFalloff: 0.003,
+    densityBlurFalloff: 0.001,
     albedoSensitivity: 0.3,
     densitySensitivity: 1.0,
     normalSensitivity: 8.0,
@@ -191,8 +192,9 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
  * populate photonBuffer (an atomic accumulator), then ConvertPhotonIrradianceToHdrOperation
  * converts that into the lightmap's mip 0, combining it with the albedo/density G-Buffer. This is
  * a single-pass, non-accumulating integration - photonBuffer is cleared every frame, not
- * progressively converged across frames (see tracePhotons). Higher mips have no real content yet
- * (no mip-chain generation from mip 0), so they're just cleared each frame.
+ * progressively converged across frames (see tracePhotons). Higher mips are regenerated every
+ * frame from mip 0 as a Gaussian blur pyramid, not a plain mip chain - see LightmapBlurPyramid -
+ * since sprite.wgsl's blur-size selection is their only consumer.
  */
 export class SimulationResources {
     private device: GPUDevice;
@@ -264,8 +266,10 @@ export class SimulationResources {
     private buildQuadtreeIterate: BuildDenoiserQuadtreeOperation;
     /** Fixed to 'rgba8unorm' at construction (Albedo's format) - never switched at runtime, so mipDownsampleAlbedo/mipDownsample never fight over recompiling the same pipeline for two different formats every frame. */
     private mipDownsampleAlbedo: MipDownsampleOperation;
-    /** Fixed to 'rgba16float' (its default) - used for NormalRoughness, combinedIrradiance, and the final lightmap's own post-denoise mip chain. */
+    /** Fixed to 'rgba16float' (its default) - used for NormalRoughness and combinedIrradiance's own post-mip2 chain (denoiser evidence, not sprite-facing). */
     private mipDownsample: MipDownsampleOperation;
+    /** Regenerates the lightmap's own mip 1+ chain - a real Gaussian blur pyramid for sprite.wgsl's blur-size selection, not a box filter - see lightmap_blur_pyramid.ts. */
+    private lightmapBlurPyramid: LightmapBlurPyramid;
     private densityMipBlit: DensityMipBlitResources;
 
     /** One ForwardMonteCarloOperation per light kind - see its class doc. Constructed in initialize() once lutResources exists. */
@@ -297,7 +301,13 @@ export class SimulationResources {
     constructor(device: GPUDevice, computedDataManager: ComputedDataManager) {
         this.device = device;
         this.computedDataManager = computedDataManager;
-        this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
+        // mipmapFilter is 'nearest', not 'linear': sprite.wgsl's textureSampleLevel(...,
+        // props.simBlur) selects a discrete blur-size level, not a continuous LOD - 'nearest'
+        // makes "no blending between adjacent blur sizes" a structural guarantee instead of an
+        // authoring convention (relying on simBlur always being a whole number). Shared with
+        // compositeInto below, which always samples level 0.0 exactly - no fractional level, so
+        // this is a no-op there.
+        this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'nearest' });
         this.vertexBuffer = getQuadVertexBuffer(device);
         this.convertToHdr = new ConvertPhotonIrradianceToHdrOperation(device);
 
@@ -312,6 +322,7 @@ export class SimulationResources {
         this.mipDownsampleAlbedo = new MipDownsampleOperation(device);
         this.mipDownsampleAlbedo.updateSwitches({ outputFormat: 'rgba8unorm' });
         this.mipDownsample = new MipDownsampleOperation(device);
+        this.lightmapBlurPyramid = new LightmapBlurPyramid(device);
         this.densityMipBlit = new DensityMipBlitResources(device);
 
         this.writeCounterBuffer = device.createBuffer({
@@ -442,8 +453,14 @@ export class SimulationResources {
      * Full teardown-and-rebuild of the lightmap (and photon buffer) from `scene`. Called only on
      * an actual scene load/swap (see LitboxSceneRenderer.rebuildFromScene, its only caller) - never
      * per-frame; a transform-only change instead goes through refreshWorldTransform.
+     *
+     * `sceneTunables` (the just-loaded scene's own LitboxScene.getDenoiserTunables()) resets
+     * denoiserTunables to DEFAULT_DENOISER_TUNABLES merged with that override - any tunables-panel
+     * tweak made against the previous scene is discarded, not carried over (see LitboxScene's own
+     * doc comment for why). The device profile's maxBlurMip cut below is then re-applied on top,
+     * same as before this parameter existed - that one stays device-derived, never scene-derived.
      */
-    public loadFromScene(scene: Scene, sceneGraph: SceneGraph): void {
+    public loadFromScene(scene: Scene, sceneGraph: SceneGraph, sceneTunables: Partial<DenoiserTunables> | null = null): void {
         if (this.lightmap) {
             this.computedDataManager.releaseTexture(this.lightmap);
             this.lightmap = null;
@@ -577,8 +594,9 @@ export class SimulationResources {
      * then continues for the G-Buffer and combinedIrradiance's deeper mips;
      * FilterVarianceOperation bilateral-filters the variance evidence; denoise (currently a
      * passthrough stub - the real size-argument/guided-blur algorithm is a separate, later step)
-     * produces the final lightmap mip0, whose own higher mips are then regenerated from it (for
-     * whatever later samples the lightmap across mips, e.g. sprites).
+     * produces the final lightmap mip0, whose own higher mips are then regenerated from it as a
+     * Gaussian blur pyramid (LightmapBlurPyramid) for sprite.wgsl's blur-size selection - the only
+     * consumer of the lightmap's mip 1+ chain.
      */
     public run(
         encoder: GPUCommandEncoder,
@@ -704,20 +722,15 @@ export class SimulationResources {
         // When denoiserEnabled is false, denoise/ditherFilter never dispatch at all - lightmap's
         // mip0 was already written directly above by computeVarianceAndMips's combined output.
 
-        // Regenerate the final lightmap's own higher mips from its just-written mip0 (whatever
-        // later samples the lightmap across mips, e.g. sprites, needs a real chain, not a clear) -
-        // independent of combinedIrradiance's own chain, since this one reflects the final lit
-        // (albedo/density-combined) image, not raw irradiance. Starts at mip 3, not 1, when
-        // computeVarianceAndMips just wrote lightmap's mip0-2 directly above (denoiser disabled) -
-        // regenerating them again here would just recompute what that pass already produced.
+        // Regenerate the final lightmap's own higher mips from its just-written mip0 as a real
+        // Gaussian blur pyramid (see lightmap_blur_pyramid.ts) - what sprite.wgsl's blur-size
+        // selection samples - independent of combinedIrradiance's own (box-filtered) chain, since
+        // this one reflects the final lit (albedo/density-combined) image, not raw irradiance.
+        // Starts at mip 3, not 1, when computeVarianceAndMips just wrote lightmap's mip0-2
+        // directly above (denoiser disabled) - regenerating them again here would just recompute
+        // what that pass already produced.
         const mipRegenStart = wroteLightmapMipsThroughTwo ? 3 : 1;
-        for (let mip = mipRegenStart; mip < this.lightmap.mipLevelCount; mip++) {
-            const mipWidth = Math.max(1, width >> mip);
-            const mipHeight = Math.max(1, height >> mip);
-            this.mipDownsample.updateInputs(this.lightmap.getMipView(mip - 1));
-            this.mipDownsample.updateOutputs(this.lightmap.getMipView(mip), mipWidth, mipHeight);
-            this.mipDownsample.execute(encoder);
-        }
+        this.lightmapBlurPyramid.regenerate(encoder, this.lightmap, width, height, mipRegenStart);
     }
 
     /**
