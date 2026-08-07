@@ -1,7 +1,7 @@
 {
     "simulations": [
         {
-            "ownerId": 56966,
+            "ownerId": 41410,
             "width": 512,
             "height": 512,
             "raysPerFrame": 65536,
@@ -12,7 +12,87 @@
     "objects": [
         {
             "active": true,
-            "id": 57128,
+            "id": -31760,
+            "name": "Circle",
+            "parentId": -1386,
+            "position": {
+                "x": -2.240000009536743,
+                "y": -0.8500000834465027
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1436,
+            "name": "Bottom",
+            "parentId": -1398,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.9318181872367859,
+                "y": 0.33000001311302187
+            }
+        },
+        {
+            "active": true,
+            "id": -9228,
+            "name": "Top",
+            "parentId": -7272,
+            "position": {
+                "x": -1.0993000268936158,
+                "y": 10.044400215148926
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 38.81683349609375,
+                "y": 12.379376411437989
+            }
+        },
+        {
+            "active": true,
+            "id": -31764,
+            "name": "Sprite",
+            "parentId": -31762,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": false,
+            "id": -1380,
+            "name": "DirectionalLight",
+            "parentId": -1482,
+            "position": {
+                "x": -1.2775700092315674,
+                "y": 0.049219995737075809
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 10.0,
+                "y": 10.0
+            }
+        },
+        {
+            "active": true,
+            "id": 41454,
             "name": "Diagnostic",
             "parentId": -1,
             "position": {
@@ -28,327 +108,7 @@
         },
         {
             "active": true,
-            "id": -120116,
-            "name": "Outline",
-            "parentId": -120102,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -1.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.1299999952316285,
-                "y": 1.2100000381469727
-            }
-        },
-        {
-            "active": true,
-            "id": -120054,
-            "name": "Background",
-            "parentId": -120050,
-            "position": {
-                "x": -1.3175699710845948,
-                "y": -0.19078001379966737
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 10.300000190734864,
-                "y": 10.300000190734864
-            }
-        },
-        {
-            "active": true,
-            "id": -120140,
-            "name": "Laser",
-            "parentId": -120136,
-            "position": {
-                "x": -0.5070000290870667,
-                "y": 0.00800000037997961
-            },
-            "depth": 0.0,
-            "rotation": 267.20001220703127,
-            "scale": {
-                "x": 0.05000000074505806,
-                "y": 0.14199000597000123
-            }
-        },
-        {
-            "active": true,
-            "id": -120136,
-            "name": "Laser Gimbal",
-            "parentId": -120064,
-            "position": {
-                "x": 0.0,
-                "y": 0.10899999737739563
-            },
-            "depth": 0.0,
-            "rotation": 37.900001525878909,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": -120106,
-            "name": "Sprite",
-            "parentId": -120102,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -1.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": 56966,
-            "name": "Simulation",
-            "parentId": -1,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -1.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 9.65555191040039,
-                "y": 9.65555191040039
-            }
-        },
-        {
-            "active": true,
-            "id": -120148,
-            "name": "Static Lights",
-            "parentId": -120050,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": -120082,
-            "name": "Outline",
-            "parentId": -120068,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -1.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.1699999570846558,
-                "y": 1.1699999570846558
-            }
-        },
-        {
-            "active": true,
-            "id": -120126,
-            "name": "Traced",
-            "parentId": -120102,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": -120152,
-            "name": "PointLight",
-            "parentId": -120148,
-            "position": {
-                "x": -4.2434000968933109,
-                "y": 7.386899948120117
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 4.382776737213135,
-                "y": 0.9061999917030335
-            }
-        },
-        {
-            "active": true,
-            "id": -124708,
-            "name": "Circle",
-            "parentId": -120050,
-            "position": {
-                "x": -2.240000009536743,
-                "y": -0.8500000238418579
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": -124722,
-            "name": "Traced",
-            "parentId": -124708,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": false,
-            "id": -152112,
-            "name": "DirectionalLight",
-            "parentId": -120148,
-            "position": {
-                "x": -1.2775700092315674,
-                "y": 0.049219995737075809
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 10.0,
-                "y": 10.0
-            }
-        },
-        {
-            "active": true,
-            "id": -120050,
-            "name": "Scene",
-            "parentId": -1,
-            "position": {
-                "x": 1.2599999904632569,
-                "y": -0.20000000298023225
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": -120092,
-            "name": "Traced",
-            "parentId": -120068,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": -124712,
-            "name": "Sprite",
-            "parentId": -124708,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -1.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": -120102,
-            "name": "Bottom",
-            "parentId": -120064,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 0.9318181872367859,
-                "y": 0.33000001311302187
-            }
-        },
-        {
-            "active": true,
-            "id": -120064,
-            "name": "UFO",
-            "parentId": -120050,
-            "position": {
-                "x": 0.6899999976158142,
-                "y": 0.0
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 0.5400000214576721,
-                "y": 0.5400000214576721
-            }
-        },
-        {
-            "active": false,
-            "id": -120160,
-            "name": "SpotLight",
-            "parentId": -120148,
-            "position": {
-                "x": -1.2400000095367432,
-                "y": 11.84000015258789
-            },
-            "depth": 0.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 0.38999998569488528,
-                "y": 0.23760001361370088
-            }
-        },
-        {
-            "active": true,
-            "id": -120072,
-            "name": "Sprite",
-            "parentId": -120068,
-            "position": {
-                "x": 0.0,
-                "y": 0.0
-            },
-            "depth": -1.0,
-            "rotation": 0.0,
-            "scale": {
-                "x": 1.0,
-                "y": 1.0
-            }
-        },
-        {
-            "active": true,
-            "id": 57008,
+            "id": 41434,
             "name": "Main Camera",
             "parentId": -1,
             "position": {
@@ -364,9 +124,121 @@
         },
         {
             "active": true,
-            "id": -120068,
+            "id": -31762,
+            "name": "Circle (1)",
+            "parentId": -1386,
+            "position": {
+                "x": -2.819999933242798,
+                "y": -0.8399999737739563
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1470,
+            "name": "Laser Gimbal",
+            "parentId": -1398,
+            "position": {
+                "x": 0.0,
+                "y": 0.10899999737739563
+            },
+            "depth": 0.0,
+            "rotation": 37.900001525878909,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -31766,
+            "name": "Traced",
+            "parentId": -31762,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1474,
+            "name": "Laser",
+            "parentId": -1470,
+            "position": {
+                "x": -0.5070000290870667,
+                "y": 0.00800000037997961
+            },
+            "depth": 0.0,
+            "rotation": 267.20001220703127,
+            "scale": {
+                "x": 0.05000000074505806,
+                "y": 0.14199000597000123
+            }
+        },
+        {
+            "active": true,
+            "id": -1416,
+            "name": "Outline",
+            "parentId": -1402,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.1699999570846558,
+                "y": 1.1699999570846558
+            }
+        },
+        {
+            "active": true,
+            "id": -1440,
+            "name": "Sprite",
+            "parentId": -1436,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1426,
+            "name": "Traced",
+            "parentId": -1402,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1402,
             "name": "Top",
-            "parentId": -120064,
+            "parentId": -1398,
             "position": {
                 "x": 0.0,
                 "y": 0.25
@@ -377,11 +249,315 @@
                 "x": 0.4699999988079071,
                 "y": 0.4699999988079071
             }
+        },
+        {
+            "active": true,
+            "id": -1370,
+            "name": "Traced",
+            "parentId": -1358,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1388,
+            "name": "Background",
+            "parentId": -1386,
+            "position": {
+                "x": -1.3175699710845948,
+                "y": -0.19078001379966737
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 10.300000190734864,
+                "y": 10.300000190734864
+            }
+        },
+        {
+            "active": true,
+            "id": -1460,
+            "name": "Traced",
+            "parentId": -1436,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": false,
+            "id": -1492,
+            "name": "SpotLight",
+            "parentId": -1482,
+            "position": {
+                "x": -1.2400000095367432,
+                "y": 11.84000015258789
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.38999998569488528,
+                "y": 0.23760001361370088
+            }
+        },
+        {
+            "active": true,
+            "id": -1450,
+            "name": "Outline",
+            "parentId": -1436,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.1299999952316285,
+                "y": 1.2100000381469727
+            }
+        },
+        {
+            "active": true,
+            "id": -1482,
+            "name": "Static Lights",
+            "parentId": -1386,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -7272,
+            "name": "Crop",
+            "parentId": -1,
+            "position": {
+                "x": 1.3032599687576295,
+                "y": 0.9893500208854675
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": 41410,
+            "name": "Simulation",
+            "parentId": -1,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 9.65555191040039,
+                "y": 9.65555191040039
+            }
+        },
+        {
+            "active": true,
+            "id": -9842,
+            "name": "Bottom",
+            "parentId": -7272,
+            "position": {
+                "x": -1.4600000381469727,
+                "y": -12.092100143432618
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 38.81683349609375,
+                "y": 12.515549659729004
+            }
+        },
+        {
+            "active": true,
+            "id": -8510,
+            "name": "Right",
+            "parentId": -7272,
+            "position": {
+                "x": 10.69159984588623,
+                "y": 0.12759999930858613
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 14.311527252197266,
+                "y": 32.329158782958987
+            }
+        },
+        {
+            "active": true,
+            "id": -1484,
+            "name": "PointLight",
+            "parentId": -1482,
+            "position": {
+                "x": -4.2434000968933109,
+                "y": 7.386899948120117
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 4.382776737213135,
+                "y": 0.9061999917030335
+            }
+        },
+        {
+            "active": true,
+            "id": -31756,
+            "name": "Sprite",
+            "parentId": -31760,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1406,
+            "name": "Sprite",
+            "parentId": -1402,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -7146,
+            "name": "Left",
+            "parentId": -7272,
+            "position": {
+                "x": -13.330900192260743,
+                "y": 0.09799999743700028
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 14.353214263916016,
+                "y": 32.2706298828125
+            }
+        },
+        {
+            "active": true,
+            "id": -31758,
+            "name": "Traced",
+            "parentId": -31760,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1360,
+            "name": "Sprite",
+            "parentId": -1358,
+            "position": {
+                "x": 0.0,
+                "y": 0.0
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1386,
+            "name": "Scene",
+            "parentId": -1,
+            "position": {
+                "x": 1.2599999904632569,
+                "y": -0.20000000298023225
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": false,
+            "id": -1358,
+            "name": "Circle",
+            "parentId": -1386,
+            "position": {
+                "x": -2.240000009536743,
+                "y": -0.8500000238418579
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 1.0,
+                "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -1398,
+            "name": "UFO",
+            "parentId": -1386,
+            "position": {
+                "x": 0.6899999976158142,
+                "y": 0.0
+            },
+            "depth": 0.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 0.5400000214576721,
+                "y": 0.5400000214576721
+            }
         }
     ],
     "cameras": [
         {
-            "ownerId": 57008,
+            "ownerId": 41434,
             "verticalSize": 5.0,
             "exposure": 0.0,
             "blackPointLog": {
@@ -398,11 +574,28 @@
     ],
     "raytraced": [
         {
-            "ownerId": -124722,
+            "ownerId": -1426,
             "sortOrder": 0,
-            "logDensity": -0.3700000047683716,
+            "logDensity": -0.05000000074505806,
             "roughness": 0.699999988079071,
             "heightScale": 1.0,
+            "albedo": {
+                "r": 0.21176470816135407,
+                "g": 0.8941176533699036,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "albedoMap": "",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -1370,
+            "sortOrder": 0,
+            "logDensity": -0.019999999552965165,
+            "roughness": 1.0,
+            "heightScale": 0.0,
             "albedo": {
                 "r": 1.0,
                 "g": 1.0,
@@ -415,24 +608,7 @@
             "primitiveShape": "ellipse"
         },
         {
-            "ownerId": -120126,
-            "sortOrder": 0,
-            "logDensity": -0.05000000074505806,
-            "roughness": 0.699999988079071,
-            "heightScale": 1.0,
-            "albedo": {
-                "r": 1.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 1.0
-            },
-            "albedoMap": "",
-            "logDensityMap": "",
-            "sdfNormalMap": "",
-            "primitiveShape": "ellipse"
-        },
-        {
-            "ownerId": -120054,
+            "ownerId": -1388,
             "sortOrder": -1,
             "logDensity": -2.0,
             "roughness": 1.0,
@@ -449,16 +625,50 @@
             "primitiveShape": "rect"
         },
         {
-            "ownerId": -120092,
+            "ownerId": -31758,
+            "sortOrder": 0,
+            "logDensity": -0.1899999976158142,
+            "roughness": 1.0,
+            "heightScale": 0.0,
+            "albedo": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "albedoMap": "Cloud_Texture2D",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -31766,
+            "sortOrder": 0,
+            "logDensity": -0.1899999976158142,
+            "roughness": 1.0,
+            "heightScale": 0.0,
+            "albedo": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "albedoMap": "Cloud_Texture2D",
+            "logDensityMap": "",
+            "sdfNormalMap": "",
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -1460,
             "sortOrder": 0,
             "logDensity": -0.05000000074505806,
             "roughness": 0.699999988079071,
             "heightScale": 1.0,
             "albedo": {
-                "r": 0.21176470816135407,
-                "g": 0.8941176533699036,
-                "b": 1.0,
-                "a": 0.0
+                "r": 1.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
             },
             "albedoMap": "",
             "logDensityMap": "",
@@ -468,21 +678,54 @@
     ],
     "sprites": [
         {
-            "ownerId": -120106,
+            "ownerId": -1360,
+            "layer": 2,
+            "sortOrder": 0,
+            "opacity": 1.0,
+            "image": "Cloud_Foreground_Texture2D",
+            "colorMod": {
+                "r": 0.6039215922355652,
+                "g": 0.6470588445663452,
+                "b": 0.6392157077789307,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 2.0,
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -1440,
             "layer": 1,
             "sortOrder": 10,
-            "opacity": 0.0,
+            "opacity": 1.0,
             "image": "",
             "colorMod": {
                 "r": 1.0,
                 "g": 0.10849058628082276,
                 "b": 0.10849058628082276,
-                "a": 0.0
+                "a": 1.0
             },
             "ambient": {
-                "r": 1.0,
-                "g": 1.0,
-                "b": 1.0,
+                "r": 0.0784313753247261,
+                "g": 0.0784313753247261,
+                "b": 0.0784313753247261,
                 "a": 1.0
             },
             "emissive": {
@@ -501,49 +744,148 @@
             "primitiveShape": "ellipse"
         },
         {
-            "ownerId": -120116,
-            "layer": 1,
-            "sortOrder": 5,
-            "opacity": 0.0,
-            "image": "",
-            "colorMod": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 0.0
-            },
-            "ambient": {
-                "r": 0.15094339847564698,
-                "g": 0.15094339847564698,
-                "b": 0.15094339847564698,
-                "a": 1.0
-            },
-            "emissive": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 1.0
-            },
-            "simContribution": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 0.0
-            },
-            "simBlur": 0.0,
-            "primitiveShape": "ellipse"
-        },
-        {
-            "ownerId": -124712,
+            "ownerId": -9228,
             "layer": 2,
             "sortOrder": 0,
-            "opacity": 0.0,
-            "image": "Cloud_Foreground_Texture2D",
+            "opacity": 1.0,
+            "image": "",
             "colorMod": {
-                "r": 1.0,
-                "g": 1.0,
-                "b": 1.0,
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
                 "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -8510,
+            "layer": 2,
+            "sortOrder": 0,
+            "opacity": 1.0,
+            "image": "",
+            "colorMod": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -7146,
+            "layer": 2,
+            "sortOrder": 0,
+            "opacity": 1.0,
+            "image": "",
+            "colorMod": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
+        },
+        {
+            "ownerId": -1416,
+            "layer": 1,
+            "sortOrder": 1,
+            "opacity": 1.0,
+            "image": "",
+            "colorMod": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -1450,
+            "layer": 1,
+            "sortOrder": 5,
+            "opacity": 1.0,
+            "image": "",
+            "colorMod": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
             },
             "ambient": {
                 "r": 0.15094339847564698,
@@ -558,39 +900,6 @@
                 "a": 1.0
             },
             "simContribution": {
-                "r": 1.0,
-                "g": 1.0,
-                "b": 1.0,
-                "a": 0.0
-            },
-            "simBlur": 0.0,
-            "primitiveShape": "ellipse"
-        },
-        {
-            "ownerId": -120082,
-            "layer": 1,
-            "sortOrder": 1,
-            "opacity": 0.0,
-            "image": "",
-            "colorMod": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 0.0
-            },
-            "ambient": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 1.0
-            },
-            "emissive": {
-                "r": 0.0,
-                "g": 0.0,
-                "b": 0.0,
-                "a": 1.0
-            },
-            "simContribution": {
                 "r": 0.0,
                 "g": 0.0,
                 "b": 0.0,
@@ -600,16 +909,49 @@
             "primitiveShape": "ellipse"
         },
         {
-            "ownerId": -120072,
+            "ownerId": -1406,
             "layer": 1,
             "sortOrder": 3,
-            "opacity": 0.0,
+            "opacity": 1.0,
             "image": "",
             "colorMod": {
                 "r": 0.21226418018341065,
                 "g": 0.8937011361122131,
                 "b": 1.0,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0784313753247261,
+                "g": 0.0784313753247261,
+                "b": 0.0784313753247261,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
                 "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -31764,
+            "layer": 2,
+            "sortOrder": 0,
+            "opacity": 1.0,
+            "image": "Cloud_Foreground_Texture2D",
+            "colorMod": {
+                "r": 1.0,
+                "g": 0.6273584961891174,
+                "b": 0.6273584961891174,
+                "a": 1.0
             },
             "ambient": {
                 "r": 0.0,
@@ -629,13 +971,79 @@
                 "b": 1.0,
                 "a": 0.0
             },
-            "simBlur": 0.0,
+            "simBlur": 2.0,
             "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -31756,
+            "layer": 2,
+            "sortOrder": 0,
+            "opacity": 1.0,
+            "image": "Cloud_Foreground_Texture2D",
+            "colorMod": {
+                "r": 1.0,
+                "g": 0.6273584961891174,
+                "b": 0.6273584961891174,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 2.0,
+            "primitiveShape": "ellipse"
+        },
+        {
+            "ownerId": -9842,
+            "layer": 2,
+            "sortOrder": 0,
+            "opacity": 1.0,
+            "image": "",
+            "colorMod": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": ""
         }
     ],
     "pointLights": [
         {
-            "ownerId": -120152,
+            "ownerId": -1484,
             "color": {
                 "r": 0.9078553318977356,
                 "g": 0.9250340461730957,
@@ -648,7 +1056,7 @@
     ],
     "spotlights": [
         {
-            "ownerId": -120160,
+            "ownerId": -1492,
             "color": {
                 "r": 0.9098039269447327,
                 "g": 0.9254902005195618,
@@ -662,7 +1070,7 @@
     ],
     "laserLights": [
         {
-            "ownerId": -120140,
+            "ownerId": -1474,
             "color": {
                 "r": 0.9528301954269409,
                 "g": 0.15246893465518952,
@@ -675,7 +1083,7 @@
     ],
     "directionalLights": [
         {
-            "ownerId": -152112,
+            "ownerId": -1380,
             "color": {
                 "r": 0.9001683592796326,
                 "g": 0.9229387044906616,
