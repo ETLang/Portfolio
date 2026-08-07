@@ -71,6 +71,8 @@ export class SpriteResources {
 
     private textureCache: TextureCache | null = null;
     private transformResources: TransformResources | null = null;
+    /** SimulationResources.getSpriteBlurMipOffset() as of the last loadFromScene - see writePropertiesData. */
+    private blurMipOffset = 0;
 
     /**
      * True while loadFromScene/removeSprite/removeByOwnerIds is already mid-flight - each of
@@ -156,6 +158,7 @@ export class SpriteResources {
             throw new Error('SpriteResources.initialize() must be called before loadFromScene().');
         }
         this.textureCache = textureCache;
+        this.blurMipOffset = simulationResources.getSpriteBlurMipOffset();
         this.registerTransformResources(transformResources);
 
         this.bulkOpInProgress = true;
@@ -315,7 +318,7 @@ export class SpriteResources {
             return;
         }
         const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
-        this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
+        this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId, this.blurMipOffset));
 
         const targetImage = sprite.image;
         if (targetImage !== resolved.lastResolvedImage && resolved.pendingImage !== targetImage) {
@@ -374,7 +377,7 @@ export class SpriteResources {
         const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
 
         const transformEntry = transformResources.ensureEntry(sprite.ownerId, sceneGraph);
-        const propertiesEntry = this.propertiesArray.insertStatic((view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
+        const propertiesEntry = this.propertiesArray.insertStatic((view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId, this.blurMipOffset));
         const atlasEntry = this.atlasArray.insertStatic((view, byteOffset) => writeAtlasData(view, byteOffset, uvTransform));
         this.ensureTextureBindGroup(texture);
 
@@ -515,7 +518,7 @@ function writeAtlasData(view: DataView, byteOffset: number, uvTransform: UvTrans
     view.setFloat32(byteOffset + 28, 0, true);
 }
 
-function writePropertiesData(view: DataView, byteOffset: number, sprite: SceneSprite, shapeId: number): void {
+function writePropertiesData(view: DataView, byteOffset: number, sprite: SceneSprite, shapeId: number, blurMipOffset: number): void {
     // ambient/emissive/simContribution/colorMod are authored/stored in sRGB (matching Unity's
     // Inspector-authored Color, see color_space.ts) - converted to linear here, at GPU-upload
     // time, since PortfolioSpriteShader.shader declares all 4 corresponding properties
@@ -542,7 +545,10 @@ function writePropertiesData(view: DataView, byteOffset: number, sprite: SceneSp
     view.setFloat32(byteOffset + 56, colorMod.b, true);
     view.setFloat32(byteOffset + 60, colorMod.a, true);
     view.setFloat32(byteOffset + 64, sprite.opacity, true);
-    view.setFloat32(byteOffset + 68, sprite.simBlur, true);
+    // See computeSpriteBlurMipOffset (simulation.ts): simBlur is authored assuming the lightmap's
+    // mip 0 is at the scene's natural resolution, which a scaled-down device profile violates -
+    // clamped to 0 since a negative mip level isn't valid.
+    view.setFloat32(byteOffset + 68, Math.max(0, sprite.simBlur - blurMipOffset), true);
     view.setUint32(byteOffset + 72, shapeId, true);
     // Bytes 76-79 are unused padding (WGSL rounds the struct up to a 16-byte multiple).
 }

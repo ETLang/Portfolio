@@ -85,6 +85,23 @@ export function getSimulationDeviceProfile(platform: Platform, gpuRandomAccessFr
 }
 
 /**
+ * Mip levels to subtract from every sprite's authored simBlur (see sprite.wgsl's SpriteProperties
+ * and LightmapBlurPyramid) before it's used to sample the lightmap's blur pyramid. simBlur is
+ * authored as a mip index assuming the lightmap's mip 0 sits at the scene's natural, unscaled
+ * resolution - but LightmapBlurPyramid's mip chain is built on top of the device-profile-scaled
+ * simulation resolution (see deriveEffectiveSimulation), so a halved resolutionScale means each of
+ * *its* mip levels already covers twice the world-space extent the same-numbered mip would at full
+ * resolution. Left uncorrected, a scene's authored blur sizes (tuned against desktop's unscaled
+ * lightmap) would render roughly 1/resolutionScale times too blurry on a scaled-down device.
+ * resolutionScale is always a power of two across every current/future device profile, so this is
+ * always a whole number - no rounding needed before it's subtracted from simBlur (see
+ * SpriteResources' use of this).
+ */
+export function computeSpriteBlurMipOffset(resolutionScale: number): number {
+    return -Math.log2(resolutionScale);
+}
+
+/**
  * Per-bounce-phase ray-march step cap: one domain-diagonal march. forward_monte_carlo.wgsl's
  * integrate() runs its search phase and refine phase as two *separate* invocations of the same
  * steps-for-loop (each resets steps to 0), each independently bounded by that phase's own uEscape
@@ -251,6 +268,8 @@ export class SimulationResources {
 
     private simulation: SceneSimulation | null = null;
     private worldTransform: mat4 = mat4.create();
+    /** This session's SimulationDeviceProfile.resolutionScale, set by loadFromScene - see getSpriteBlurMipOffset. */
+    private resolutionScale = 1;
 
     /**
      * Atomic accumulator the photon tracer writes into: width*height*6 u32 entries - two
@@ -459,6 +478,11 @@ export class SimulationResources {
         return this.sampler;
     }
 
+    /** See computeSpriteBlurMipOffset - SpriteResources subtracts this from every sprite's authored simBlur before upload. */
+    public getSpriteBlurMipOffset(): number {
+        return computeSpriteBlurMipOffset(this.resolutionScale);
+    }
+
     /** World transform of the simulation's owner, used by sprites to derive their lightmap UV. */
     public getWorldTransform(): mat4 {
         return this.worldTransform;
@@ -558,6 +582,7 @@ export class SimulationResources {
         const deviceProfile = getSimulationDeviceProfile(getPlatform(), isRandomAccessFriendlyGpu());
         this.simulation = deriveEffectiveSimulation(rawSimulation, deviceProfile);
         this.bilinearPhotonDistribution = deviceProfile.bilinearPhotonDistribution;
+        this.resolutionScale = deviceProfile.resolutionScale;
         this.denoiserTunables = { ...DEFAULT_DENOISER_TUNABLES, ...sceneTunables };
         this.denoiserTunables.maxBlurMip = deviceProfile.maxBlurMip;
         this.simulationTunables = {
