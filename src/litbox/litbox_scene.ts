@@ -17,6 +17,7 @@ import {
 } from './scene.ts';
 import { DynamicSet } from './dynamic_set.ts';
 import type { LitboxSceneRenderer } from '../litbox_scene_renderer.ts';
+import type { DenoiserTunables } from './simulation.ts';
 
 const ROOT_PARENT_ID = -1;
 
@@ -198,6 +199,21 @@ export abstract class LitboxScene {
      * positions/rotations on entries captured during onLoad()).
      */
     public onFrame(_deltaTimeSeconds: number): void {}
+
+    /**
+     * Per-scene defaults for DenoiserTunables (see its own doc comment), applied on top of
+     * DEFAULT_DENOISER_TUNABLES every time this scene loads (see
+     * SimulationResources.loadFromScene) - the ideal denoiser "look" varies enough scene-to-scene
+     * that one global default isn't a good fit for all of them, and chasing an automated way to
+     * detect which situation applies was judged out of scope. Returns null (no override -
+     * DEFAULT_DENOISER_TUNABLES applies as-is) unless a subclass overrides it. Deliberately a
+     * fixed baseline, not a per-scene delta preserved across switches: whatever the user tweaked
+     * via the tunables panel for the previously active scene is intentionally discarded, not
+     * carried over.
+     */
+    public getDenoiserTunables(): Partial<DenoiserTunables> | null {
+        return null;
+    }
 
     // --- Scene-authoring API. `name` accepts either a bare unique SceneObject name, or
     // a "/"-separated path (e.g. "Left Wall/Sprite") that resolves each segment as a

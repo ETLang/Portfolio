@@ -2,6 +2,17 @@ import { vec4 } from 'gl-matrix';
 import { LitboxScene } from '../litbox_scene.ts';
 import type { AnyLight, RaytracedObject, SceneObject, SceneSprite } from '../scene.ts';
 import type { LitboxSceneRenderer } from '../../litbox_scene_renderer.ts';
+import type { DenoiserTunables } from '../simulation.ts';
+
+/**
+ * See LitboxScene.getDenoiserTunables's doc comment. densityBlurFalloff explicitly pinned to the
+ * default (not just inherited) - the UFOs/beams here read as solid-surfaced geometry, not a
+ * cloudy/subsurface-scattering volume (contrast CornellSquareScene's much higher value), so the
+ * default's fast falloff is the intended look, not a placeholder.
+ */
+const DENOISER_TUNABLES: Partial<DenoiserTunables> = {
+    densityBlurFalloff: 0.001,
+};
 
 const SPAWN_INTERVAL_MIN_SECONDS = 0.8;
 const SPAWN_INTERVAL_MAX_SECONDS = 1.2;
@@ -144,6 +155,10 @@ export class BattleScene extends LitboxScene {
 
         const templateLaser = this.resolveRelativePath(this.ufoTemplate, 'Laser Gimbal/Laser');
         this.baseLaserIntensity = this.getLight(templateLaser).intensity;
+    }
+
+    public override getDenoiserTunables(): Partial<DenoiserTunables> {
+        return DENOISER_TUNABLES;
     }
 
     public override onFrame(deltaTimeSeconds: number): void {

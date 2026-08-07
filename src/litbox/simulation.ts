@@ -487,6 +487,7 @@ export class SimulationResources {
         const deviceProfile = getSimulationDeviceProfile(getPlatform(), isRandomAccessFriendlyGpu());
         this.simulation = deriveEffectiveSimulation(rawSimulation, deviceProfile);
         this.bilinearPhotonDistribution = deviceProfile.bilinearPhotonDistribution;
+        this.denoiserTunables = { ...DEFAULT_DENOISER_TUNABLES, ...sceneTunables };
         this.denoiserTunables.maxBlurMip = deviceProfile.maxBlurMip;
         // Visible via the on-screen console overlay on mobile - lets a device profile be verified
         // without attaching devtools (see CDP-over-adb mobile debugging notes: some GPU readback

@@ -466,7 +466,7 @@ export class LitboxSceneRenderer {
         this.lastActiveCameraOwnerId = null;
 
         this.lightResources.loadFromScene(scene, this.sceneGraph, this.transformResources);
-        this.simulationResources.loadFromScene(scene, this.sceneGraph);
+        this.simulationResources.loadFromScene(scene, this.sceneGraph, this.activeScene.getDenoiserTunables());
         await this.raytracedResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
         await this.spriteResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
 

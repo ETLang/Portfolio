@@ -387,6 +387,13 @@ sidebarPane.addEventListener('change', async (e: Event) => {
         if (scenePropertiesContainer) {
             scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer.getActiveScene());
         }
+        // setScene() just reset denoiserTunables to the new scene's own defaults (see
+        // LitboxScene.getDenoiserTunables) - regenerate the panel so it doesn't keep showing the
+        // previous scene's (possibly user-tweaked) values.
+        const denoiserTunablesEl = sidebarPane.querySelector('.denoiser-tunables');
+        if (denoiserTunablesEl) {
+            denoiserTunablesEl.outerHTML = getDenoiserTunablesPanel(litboxRenderer.getSimulationResources().denoiserTunables);
+        }
     }
 });
 
