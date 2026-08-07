@@ -15,6 +15,7 @@ export const DENOISER_TUNABLE_KEYS = [
     'varianceScale',
     'darknessNoiseFloor',
     'maxBlurMip',
+    'densityBlurFalloff',
     'albedoSensitivity',
     'densitySensitivity',
     'normalSensitivity',
