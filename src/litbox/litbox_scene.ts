@@ -1,3 +1,4 @@
+import { mat4, vec4 } from 'gl-matrix';
 import {
     parseScene,
     type AmbientLight,
@@ -20,6 +21,26 @@ import type { LitboxSceneRenderer } from '../litbox_scene_renderer.ts';
 import type { DenoiserTunables, SimulationTunables } from './simulation.ts';
 
 const ROOT_PARENT_ID = -1;
+
+/** Axis-aligned bounding box - see LitboxScene.computeLocalBounds for the coordinate space it's expressed in. */
+export interface BoundingBox {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+}
+
+/**
+ * Every primitiveShape this project supports ('', 'rect', 'ellipse') shares this same local
+ * footprint regardless of which one a given leaf uses - see primitive_mesh.ts's QUAD_REGION_VERTICES/
+ * RECT_REGION_VERTICES/ELLIPSE_REGION_VERTICES, all of which stay within [-0.5, 0.5] on both axes.
+ */
+const UNIT_QUAD_LOCAL_CORNERS: ReadonlyArray<readonly [number, number]> = [
+    [-0.5, -0.5],
+    [0.5, -0.5],
+    [0.5, 0.5],
+    [-0.5, 0.5],
+];
 
 export interface CreateObjectOptions {
     name: string;
@@ -328,6 +349,149 @@ export abstract class LitboxScene {
     /** Returns `owner`'s Nth owned light (combined across all kinds), without marking it dynamic/dirty - see getSprite. */
     public getLight(owner: SceneObject, index = 0): AnyLight {
         return this.findLightByOwner(owner, index);
+    }
+
+    // --- Geometry queries.
+
+    /**
+     * Computes the axis-aligned bounding box of `target`'s whole subtree's rendered geometry
+     * (every descendant - or `target` itself - that owns a sprite and/or raytraced entry). The
+     * result is expressed in `target`'s *parent's* coordinate space, but with `target`'s own
+     * position treated as the origin - i.e. `target`'s rotation/scale are baked in, but not its
+     * position. That means a caller can translate the returned box by whatever it sets
+     * `target.position` to (e.g. to test whether an object has drifted out of the simulation
+     * area) without recomputing the whole subtree every frame - compute it once (it never changes
+     * unless the subtree's own local transforms do) and cache it alongside the object.
+     *
+     * `target` accepts a name/path or a direct SceneObject reference - see markTransformDirty for
+     * why a reference is needed once more than one object shares a name.
+     *
+     * Throws if `target`'s subtree owns no geometry anywhere - there's nothing to bound.
+     */
+    public computeLocalBounds(target: string | SceneObject): BoundingBox {
+        const root = typeof target === 'string' ? this.resolvePath(target) : target;
+        const rootTransform = this.localTransform(root, false);
+
+        let bounds: BoundingBox | null = null;
+        const visit = (obj: SceneObject, transform: mat4): void => {
+            if (this.ownsGeometry(obj)) {
+                bounds = this.expandBoundsWithUnitQuad(bounds, transform);
+            }
+            for (const child of this.data.objects) {
+                if (child.parentId !== obj.id) {
+                    continue;
+                }
+                const childTransform = mat4.create();
+                mat4.multiply(childTransform, transform, this.localTransform(child, true));
+                visit(child, childTransform);
+            }
+        };
+        visit(root, rootTransform);
+
+        if (!bounds) {
+            throw new Error(
+                `Litbox scene: object "${root.name}" (id ${root.id}) has no sprite/raytraced geometry ` +
+                `anywhere in its subtree; its bounds can't be computed.`,
+            );
+        }
+        return bounds;
+    }
+
+    /**
+     * Computes `target`'s full world transform - the same translate/rotateZ/scale composition
+     * SceneGraph.getWorldTransform uses for actual rendering (see scene_graph.ts), just
+     * re-resolved on demand against this scene's plain `data.objects` rather than SceneGraph's
+     * cache, since a LitboxScene subclass has no access to the renderer's live SceneGraph
+     * instance. Uncached - fine for occasional calls (e.g. once at load, or once per respawn),
+     * not intended as a per-frame-per-object hot path.
+     */
+    public computeWorldTransform(target: string | SceneObject): mat4 {
+        const obj = typeof target === 'string' ? this.resolvePath(target) : target;
+        return this.resolveWorldTransform(obj);
+    }
+
+    /** World-space XY of `target`'s own origin/pivot - see computeWorldTransform. Ignores rotation/scale (a point at its own origin is invariant under both). */
+    public computeWorldPosition(target: string | SceneObject): Vector2 {
+        const obj = typeof target === 'string' ? this.resolvePath(target) : target;
+        const p = vec4.transformMat4(vec4.create(), vec4.fromValues(0, 0, 0, 1), this.computeWorldTransform(obj));
+        return { x: p[0], y: p[1] };
+    }
+
+    /**
+     * Sets `target.position` (local, parent-relative - what SceneObject.position actually is) so
+     * that `target`'s origin lands at the given world-space XY. Needed whenever a target's parent
+     * itself carries a nonzero transform (e.g. a "rig" container object nudged away from world
+     * origin for authoring convenience) - world-space placement logic (spawn/despawn relative to
+     * the simulation area's own world-space rect, from getWorldTransform - see e.g.
+     * BattleScene.getSimulationBounds) would otherwise silently compare against the wrong
+     * coordinate space if it wrote `target.position` directly. Inverts `target`'s *parent's* world
+     * transform, not `target`'s own - target's own rotation/scale don't affect where its own
+     * origin sits, only its parent chain's does. Does not call markTransformDirty(); the caller
+     * still owns that.
+     */
+    public setWorldPosition(target: string | SceneObject, worldX: number, worldY: number): void {
+        const obj = typeof target === 'string' ? this.resolvePath(target) : target;
+        const parent = this.data.objects.find(o => o.id === obj.parentId);
+        if (!parent) {
+            obj.position.x = worldX;
+            obj.position.y = worldY;
+            return;
+        }
+        const worldToParent = mat4.create();
+        if (!mat4.invert(worldToParent, this.computeWorldTransform(parent))) {
+            console.warn(
+                `Litbox scene: object "${parent.name}" (id ${parent.id})'s world transform isn't invertible ` +
+                `(likely a zero scale somewhere in its ancestry); leaving "${obj.name}" (id ${obj.id})'s position unchanged.`,
+            );
+            return;
+        }
+        const local = vec4.transformMat4(vec4.create(), vec4.fromValues(worldX, worldY, 0, 1), worldToParent);
+        obj.position.x = local[0];
+        obj.position.y = local[1];
+    }
+
+    /** Whether `obj` directly owns a sprite and/or raytraced entry (not counting descendants) - shared by computeLocalBounds. */
+    private ownsGeometry(obj: SceneObject): boolean {
+        return this.data.sprites.some(s => s.ownerId === obj.id) || this.data.raytraced.some(r => r.ownerId === obj.id);
+    }
+
+    /** Transforms the shared unit-quad footprint (see UNIT_QUAD_LOCAL_CORNERS) by `transform` and unions it into `bounds` - shared by computeLocalBounds. */
+    private expandBoundsWithUnitQuad(bounds: BoundingBox | null, transform: mat4): BoundingBox {
+        let minX = bounds?.minX ?? Infinity;
+        let maxX = bounds?.maxX ?? -Infinity;
+        let minY = bounds?.minY ?? Infinity;
+        let maxY = bounds?.maxY ?? -Infinity;
+        for (const [x, y] of UNIT_QUAD_LOCAL_CORNERS) {
+            const p = vec4.transformMat4(vec4.create(), vec4.fromValues(x, y, 0, 1), transform);
+            minX = Math.min(minX, p[0]);
+            maxX = Math.max(maxX, p[0]);
+            minY = Math.min(minY, p[1]);
+            maxY = Math.max(maxY, p[1]);
+        }
+        return { minX, maxX, minY, maxY };
+    }
+
+    /** `obj`'s own local transform (translate+rotateZ+scale) - `includeTranslation=false` yields the transform of `obj`'s local frame with its own position treated as the origin, used by computeLocalBounds for exactly that reason. Shared by computeLocalBounds/resolveWorldTransform. */
+    private localTransform(obj: SceneObject, includeTranslation: boolean): mat4 {
+        const m = mat4.create();
+        if (includeTranslation) {
+            mat4.translate(m, m, [obj.position.x, obj.position.y, obj.depth]);
+        }
+        mat4.rotateZ(m, m, (obj.rotation * Math.PI) / 180);
+        mat4.scale(m, m, [obj.scale.x, obj.scale.y, 1]);
+        return m;
+    }
+
+    /** Recursive resolver behind computeWorldTransform - walks up the parentId chain to the scene root. */
+    private resolveWorldTransform(obj: SceneObject): mat4 {
+        const local = this.localTransform(obj, true);
+        const parent = this.data.objects.find(o => o.id === obj.parentId);
+        if (!parent) {
+            return local;
+        }
+        const world = mat4.create();
+        mat4.multiply(world, this.resolveWorldTransform(parent), local);
+        return world;
     }
 
     /**

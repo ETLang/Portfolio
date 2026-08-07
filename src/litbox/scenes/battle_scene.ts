@@ -1,5 +1,5 @@
 import { vec4 } from 'gl-matrix';
-import { LitboxScene } from '../litbox_scene.ts';
+import { LitboxScene, type BoundingBox } from '../litbox_scene.ts';
 import type { AnyLight, RaytracedObject, SceneObject, SceneSprite } from '../scene.ts';
 import type { LitboxSceneRenderer } from '../../litbox_scene_renderer.ts';
 import type { DenoiserTunables } from '../simulation.ts';
@@ -60,6 +60,17 @@ const FALL_GRAVITY = 3; // world-units/second^2 downward acceleration once a hit
 const FALL_SPIN_MIN_DEG_PER_SEC = 360;
 const FALL_SPIN_MAX_DEG_PER_SEC = 720;
 
+// Fraction of the simulation area's height (0 = bottom edge, 1 = top edge) a Cloud_N is allowed to
+// re-spawn at once it drifts out of view - kept off both the very top and bottom of the sky.
+const CLOUD_HEIGHT_FRACTION_MIN = 0.4;
+const CLOUD_HEIGHT_FRACTION_MAX = 0.9;
+// Cloud drift speed is a function of CLOUD_HEIGHT_FRACTION - a cheap parallax cue (higher/further
+// clouds move slower) without an actual depth axis. World-units/second.
+const CLOUD_SPEED_AT_LOW_ALTITUDE = 0.35; // at CLOUD_HEIGHT_FRACTION_MIN - closest, fastest
+const CLOUD_SPEED_AT_HIGH_ALTITUDE = 0.12; // at CLOUD_HEIGHT_FRACTION_MAX - furthest, slowest
+// Haze_L_N/Haze_R_N drift at a constant pace (world-units/second) - Haze_L toward -X, Haze_R toward +X.
+const HAZE_SPEED = 0.2;
+
 /** 6 high-saturation primary/secondary body colors a spawned UFO picks from. */
 const BODY_COLORS: ReadonlyArray<{ r: number; g: number; b: number }> = [
     { r: 1, g: 0, b: 0 }, // red
@@ -75,6 +86,40 @@ interface SimulationBounds {
     right: number;
     top: number;
     bottom: number;
+}
+
+/**
+ * A Cloud_N object drifting left across the sky. `localBounds` is computed once (LitboxScene.
+ * computeLocalBounds never changes for a subtree whose local transforms are never touched) and
+ * reused for both the "has it exited" test and placing a respawned cloud just off-screen.
+ * `velocityX` is always <= 0, re-derived from a freshly-randomized height every respawn - see
+ * cloudSpeedForHeightFraction.
+ *
+ * `worldX`/`worldY` (not `root.position`) are the authoritative position state: Cloud_N is
+ * parented under a rig object that itself carries a nonzero world offset, so `root.position` (its
+ * *local*, parent-relative position) isn't directly comparable to `bounds`, which
+ * getSimulationBounds() computes in true world space. worldX/worldY are updated directly and
+ * only ever pushed into `root.position` via LitboxScene.setWorldPosition - see its doc comment.
+ */
+interface CloudInstance {
+    root: SceneObject;
+    localBounds: BoundingBox;
+    worldX: number;
+    worldY: number;
+    velocityX: number;
+}
+
+/**
+ * A Haze_L_N/Haze_R_N band drifting at a constant pace - `velocityX`'s sign (fixed at
+ * construction: negative for Haze_L, positive for Haze_R) is what the update loop below branches
+ * on, so both groups share one code path. worldX/worldY: see CloudInstance's doc comment.
+ */
+interface HazeInstance {
+    root: SceneObject;
+    localBounds: BoundingBox;
+    worldX: number;
+    worldY: number;
+    velocityX: number;
 }
 
 /**
@@ -148,6 +193,11 @@ export class BattleScene extends LitboxScene {
     private sceneTimeSeconds = 0;
     private nextSpawnTimeSeconds = randomRange(SPAWN_INTERVAL_MIN_SECONDS, SPAWN_INTERVAL_MAX_SECONDS);
 
+    private clouds: CloudInstance[] = [];
+    private hazeBands: HazeInstance[] = [];
+    /** Cloud velocities need getSimulationBounds(), which isn't available yet during onLoad() (see the UFO spawn loop's own null-bounds guard) - set once, the first time onFrame() sees non-null bounds. */
+    private cloudVelocitiesInitialized = false;
+
     public override onLoad(renderer: LitboxSceneRenderer): void {
         this.setActiveCamera('Main Camera');
         this.renderer = renderer;
@@ -159,6 +209,27 @@ export class BattleScene extends LitboxScene {
 
         const templateLaser = this.resolveRelativePath(this.ufoTemplate, 'Laser Gimbal/Laser');
         this.baseLaserIntensity = this.getLight(templateLaser).intensity;
+
+        // Cloud_N/Haze_L_N/Haze_R_N counts are arbitrary (not assumed to match whatever's
+        // currently authored in battle.json), so these are discovered by name pattern rather than
+        // indexed by number - see each interface's doc comment for why velocityX's initial value
+        // differs between the two (haze's is fixed here; cloud's needs simulation bounds, not yet
+        // available this early - see cloudVelocitiesInitialized).
+        for (const obj of this.data.objects) {
+            if (/^Cloud_\d+$/.test(obj.name)) {
+                const localBounds = this.computeLocalBounds(obj);
+                const worldPosition = this.computeWorldPosition(obj);
+                this.clouds.push({ root: obj, localBounds, worldX: worldPosition.x, worldY: worldPosition.y, velocityX: 0 });
+            } else if (/^Haze_L_\d+$/.test(obj.name)) {
+                const localBounds = this.computeLocalBounds(obj);
+                const worldPosition = this.computeWorldPosition(obj);
+                this.hazeBands.push({ root: obj, localBounds, worldX: worldPosition.x, worldY: worldPosition.y, velocityX: -HAZE_SPEED });
+            } else if (/^Haze_R_\d+$/.test(obj.name)) {
+                const localBounds = this.computeLocalBounds(obj);
+                const worldPosition = this.computeWorldPosition(obj);
+                this.hazeBands.push({ root: obj, localBounds, worldX: worldPosition.x, worldY: worldPosition.y, velocityX: HAZE_SPEED });
+            }
+        }
     }
 
     public override getDenoiserTunables(): Partial<DenoiserTunables> {
@@ -183,6 +254,15 @@ export class BattleScene extends LitboxScene {
             this.updateUfo(ufo, this.sceneTimeSeconds, bounds);
         }
         this.despawnExited(bounds);
+
+        if (!this.cloudVelocitiesInitialized) {
+            for (const cloud of this.clouds) {
+                cloud.velocityX = -this.cloudSpeedForHeightFraction(this.heightFractionFor(cloud.worldY, bounds));
+            }
+            this.cloudVelocitiesInitialized = true;
+        }
+        this.updateClouds(bounds, deltaTimeSeconds);
+        this.updateHaze(bounds, deltaTimeSeconds);
     }
 
     /**
@@ -472,6 +552,78 @@ export class BattleScene extends LitboxScene {
             }
         }
         this.ufos = survivors;
+    }
+
+    /** Cloud_N's height, as a 0 (bounds.bottom) to 1 (bounds.top) fraction - the single input both the initial and every respawned velocityX are derived from (see cloudSpeedForHeightFraction). */
+    private heightFractionFor(y: number, bounds: SimulationBounds): number {
+        return (y - bounds.bottom) / (bounds.top - bounds.bottom);
+    }
+
+    /**
+     * Higher clouds drift slower - a linear interpolation between CLOUD_SPEED_AT_LOW_ALTITUDE and
+     * CLOUD_SPEED_AT_HIGH_ALTITUDE across the [CLOUD_HEIGHT_FRACTION_MIN, MAX] range, clamped so a
+     * cloud already outside that range (e.g. wherever battle.json happened to author one) still
+     * gets a sane speed instead of an extrapolated one.
+     */
+    private cloudSpeedForHeightFraction(heightFraction: number): number {
+        const normalized = Math.min(
+            Math.max((heightFraction - CLOUD_HEIGHT_FRACTION_MIN) / (CLOUD_HEIGHT_FRACTION_MAX - CLOUD_HEIGHT_FRACTION_MIN), 0),
+            1,
+        );
+        return CLOUD_SPEED_AT_LOW_ALTITUDE + (CLOUD_SPEED_AT_HIGH_ALTITUDE - CLOUD_SPEED_AT_LOW_ALTITUDE) * normalized;
+    }
+
+    /**
+     * Drifts every Cloud_N left in world space (see CloudInstance's doc comment for why worldX,
+     * not root.position.x, is what's tracked), respawning (see respawnCloud) whichever ones have
+     * fully exited to the left, then pushes the result into root.position via setWorldPosition.
+     */
+    private updateClouds(bounds: SimulationBounds, deltaTimeSeconds: number): void {
+        for (const cloud of this.clouds) {
+            cloud.worldX += cloud.velocityX * deltaTimeSeconds;
+
+            const rightEdge = cloud.worldX + cloud.localBounds.maxX;
+            if (rightEdge < bounds.left) {
+                this.respawnCloud(cloud, bounds);
+            }
+
+            this.setWorldPosition(cloud.root, cloud.worldX, cloud.worldY);
+            this.markTransformDirty(cloud.root);
+        }
+    }
+
+    /** Re-randomizes a cloud's height (within CLOUD_HEIGHT_FRACTION_MIN/MAX) and matching speed, and places it just off the right edge of the simulation area (in world space). */
+    private respawnCloud(cloud: CloudInstance, bounds: SimulationBounds): void {
+        const heightFraction = randomRange(CLOUD_HEIGHT_FRACTION_MIN, CLOUD_HEIGHT_FRACTION_MAX);
+        cloud.worldY = bounds.bottom + heightFraction * (bounds.top - bounds.bottom);
+        cloud.velocityX = -this.cloudSpeedForHeightFraction(heightFraction);
+        cloud.worldX = bounds.right - cloud.localBounds.minX;
+    }
+
+    /**
+     * Drifts every Haze_L_N/Haze_R_N at its own constant, fixed-sign velocityX (in world space -
+     * see CloudInstance's doc comment), wrapping each one to just off the opposite edge once it's
+     * fully exited - see HazeInstance.
+     */
+    private updateHaze(bounds: SimulationBounds, deltaTimeSeconds: number): void {
+        for (const haze of this.hazeBands) {
+            haze.worldX += haze.velocityX * deltaTimeSeconds;
+
+            if (haze.velocityX < 0) {
+                const rightEdge = haze.worldX + haze.localBounds.maxX;
+                if (rightEdge < bounds.left) {
+                    haze.worldX = bounds.right - haze.localBounds.minX;
+                }
+            } else {
+                const leftEdge = haze.worldX + haze.localBounds.minX;
+                if (leftEdge > bounds.right) {
+                    haze.worldX = bounds.left - haze.localBounds.maxX;
+                }
+            }
+
+            this.setWorldPosition(haze.root, haze.worldX, haze.worldY);
+            this.markTransformDirty(haze.root);
+        }
     }
 
     /**
