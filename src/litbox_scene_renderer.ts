@@ -123,7 +123,8 @@ export class LitboxSceneRenderer {
      * 'roughness' from the raytraced G-Buffer; 'lightmap' from the simulation's final HDR image;
      * 'irradiance-a'/'irradiance-b' (the two independent, uncombined per-half HDR estimates -
      * see this project's denoiser plan), 'combined-irradiance' (their mean, pre-denoise),
-     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline, and
+     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline,
+     * 'blur-size' (decideBlurSize's continuous per-pixel result - see denoise.wgsl), and
      * 'gradient-coherence' (prototype structural-detail evidence, not yet consumed by any
      * decision - see compute_gradient_coherence.wgsl), see createSharedResources), replaces the
      * entire normal render (simulation/sprites/tonemap) with
@@ -431,6 +432,12 @@ export class LitboxSceneRenderer {
         this.debugViews.set('combined-irradiance', { getSourceView: () => this.simulationResources.getCombinedIrradianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('raw-variance', { getSourceView: () => this.simulationResources.getRawVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('filtered-variance', { getSourceView: () => this.simulationResources.getFilteredVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        // decideBlurSize's continuous per-pixel result (denoise.wgsl) - the actual "how much blur"
+        // decision, not something inferable from the final image's own apparent noise/smoothness.
+        // Also single-channel r32float, same HDR_SCALED convention as the variance views above -
+        // debugViewScale should typically be set near maxBlurMip (~6 by default) to use the full
+        // displayable range, since that's this value's own natural ceiling.
+        this.debugViews.set('blur-size', { getSourceView: () => this.simulationResources.getBlurSizeDebugView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
 
         this.createHdrFrameTexture();
     }

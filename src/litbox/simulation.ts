@@ -120,6 +120,7 @@ export interface DenoiserTunables {
     varianceScale: number;
     darknessNoiseFloor: number;
     maxBlurMip: number;
+    densityBlurFalloff: number;
     albedoSensitivity: number;
     densitySensitivity: number;
     normalSensitivity: number;
@@ -149,7 +150,13 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     // pre-fix, corrupted signals) no longer apply - these values reflect the post-fix scene.
     varianceScale: 10.0,
     darknessNoiseFloor: 0.1,
-    maxBlurMip: 6.0,
+    maxBlurMip: 5.0,
+    // Starting point, not a solved value (see this struct's own doc comment). Measured in
+    // log2(1+opticalDepth), not raw optical depth (see denoise.wgsl's decideBlurSize doc comment
+    // for why) - 2.0 reaches full suppression around opticalDepth 3 (about 95% dense), the same
+    // ceiling a raw-optical-depth falloff of 3.0 would have had, but ramps up far more gradually
+    // below that instead of the whole transition being compressed into the last few % of density.
+    densityBlurFalloff: 0.003,
     albedoSensitivity: 0.3,
     densitySensitivity: 1.0,
     normalSensitivity: 8.0,
@@ -236,6 +243,8 @@ export class SimulationResources {
 
     /** DenoiseOperation's output when DitherFilterOperation is about to run over it (see run()'s use of this) - the not-yet-final, jittery denoised image, full G-Buffer resolution, single mip. DitherFilterOperation reads this and writes lightmap's mip0 directly, so no copy is ever needed to get the real final image into lightmap. */
     private denoiseScratch: ComputedTexture | null = null;
+    /** DenoiseOperation's per-pixel blurSize (see denoise.wgsl's decideBlurSize/blurSizeOutput), full G-Buffer resolution, single mip - diagnostic-only, feeds the 'blur-size' debug view, never consumed by anything downstream in the normal render path. */
+    private blurSizeDebug: ComputedTexture | null = null;
 
     /** Normal-based edge detector feeding the quadtree bake, full G-Buffer resolution, mip0 only - see ComputeVolatilityOperation. */
     private volatility: ComputedTexture | null = null;
@@ -386,6 +395,11 @@ export class SimulationResources {
         return this.filteredVariance?.view ?? null;
     }
 
+    /** Diagnostic-only (see blurSizeDebug's own doc comment) - feeds the 'blur-size' debug view. */
+    public getBlurSizeDebugView(): GPUTextureView | null {
+        return this.blurSizeDebug?.view ?? null;
+    }
+
     public getSampler(): GPUSampler {
         return this.sampler;
     }
@@ -442,7 +456,7 @@ export class SimulationResources {
         for (const texture of [
             this.irradianceA, this.irradianceB, this.combinedIrradiance, this.rawVariance, this.filteredVariance,
             this.volatility, this.albedoMin, this.albedoMax, this.densityMinMaxVolatility, this.quadtreeMustSplit,
-            this.denoiseScratch,
+            this.denoiseScratch, this.blurSizeDebug,
         ]) {
             if (texture) {
                 this.computedDataManager.releaseTexture(texture);
@@ -459,6 +473,7 @@ export class SimulationResources {
         this.densityMinMaxVolatility = null;
         this.quadtreeMustSplit = null;
         this.denoiseScratch = null;
+        this.blurSizeDebug = null;
         const rawSimulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
@@ -515,6 +530,10 @@ export class SimulationResources {
         // final destination), so this texture is never the source or destination of a GPU copy.
         this.denoiseScratch = this.computedDataManager.acquireTexture(
             width, height, LIGHTMAP_FORMAT, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
+        // Diagnostic-only (see this field's own doc comment) - same STORAGE_BINDING|TEXTURE_BINDING
+        // usage/no-copy rationale as denoiseScratch above, just single-channel.
+        this.blurSizeDebug = this.computedDataManager.acquireTexture(
+            width, height, VARIANCE_FORMAT, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
 
         // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - see field doc comments
         // above. albedoMin/Max/densityMinMaxVolatility/quadtreeMustSplit are allocated at HALF the
@@ -567,7 +586,7 @@ export class SimulationResources {
         lutResources: LutResources,
         sceneGraph: SceneGraph,
     ): void {
-        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance || !this.denoiseScratch) {
+        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance || !this.denoiseScratch || !this.blurSizeDebug) {
             return;
         }
         if (!this.simulation || !this.photonBuffer) {
@@ -667,7 +686,7 @@ export class SimulationResources {
                 this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
                 this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
             );
-            this.denoise.updateOutputs(this.denoiseScratch.view, width, height);
+            this.denoise.updateOutputs(this.denoiseScratch.view, this.blurSizeDebug.view, width, height);
             this.denoise.execute(encoder);
 
             // Guided post-filter over denoise's just-written result (see dither_filter.wgsl) -

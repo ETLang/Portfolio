@@ -14,6 +14,7 @@ const DENOISER_PARAMS: DenoiserParamMeta[] = [
     { key: 'varianceScale', label: 'Variance Scale', min: 0, max: 20, step: 0.1 },
     { key: 'darknessNoiseFloor', label: 'Darkness Noise Floor', min: 0, max: 0.5, step: 0.005 },
     { key: 'maxBlurMip', label: 'Max Blur Mip', min: 0, max: 8, step: 1 },
+    { key: 'densityBlurFalloff', label: 'Density Blur Falloff', min: 0.001, max: 0.1, step: 0.001 },
     { key: 'albedoSensitivity', label: 'Albedo Sensitivity', min: 0, max: 2, step: 0.01 },
     { key: 'densitySensitivity', label: 'Density Sensitivity', min: 0, max: 5, step: 0.05 },
     { key: 'normalSensitivity', label: 'Normal Sensitivity', min: 0, max: 32, step: 0.5 },

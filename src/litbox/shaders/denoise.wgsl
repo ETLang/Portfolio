@@ -21,6 +21,7 @@ struct DenoiseUniforms {
     varianceScale: f32,
     darknessNoiseFloor: f32,
     maxBlurMip: f32,
+    densityBlurFalloff: f32,
     albedoSensitivity: f32,
     densitySensitivity: f32,
     normalSensitivity: f32,
@@ -57,6 +58,12 @@ struct DenoiseUniforms {
 @group(1) @binding(7) var quadtreeMustSplit: texture_2d<f32>;
 
 @group(2) @binding(0) var output: texture_storage_2d<rgba16float, write>;
+// Diagnostic-only: the continuous blurSize (see decideBlurSize) each pixel actually resolved to,
+// written unconditionally (both early-return and normal paths) - lets the 'blur-size' debug view
+// (see LitboxSceneRenderer) show this decision directly instead of inferring it from how noisy or
+// smooth the final composited image looks, which is what every earlier investigation of a "why is
+// this edge sharp" report had to fall back on.
+@group(2) @binding(1) var blurSizeOutput: texture_storage_2d<r32float, write>;
 
 const SEED_RADIUS: i32 = 1; // 3x3 seed neighborhood at the chosen starting mip.
 
@@ -70,55 +77,13 @@ struct TreeSampleNode {
     mip: i32,
 }
 
-// Evidence available: filteredVariance (relative-variance, quarter res) and combinedIrradiance's
-// own mip chain (already box-filtered, so a coarse mip IS the local mean - no separate blur pass
-// needed the way the Unity reference re-derives one by hand). Combined with max(), not a blend:
-// relative variance under-reports noise in rarely-hit dark regions (both A/B half-samples land
-// near zero, so their difference is deceptively small - it's a difference of two things wrong in
-// the same direction, not an absolute confidence measure), but mean brightness doesn't share that
-// blind spot, so whichever signal says "blur more" wins.
-fn decideBlurSize(centerVariance: f32, localLuminance: f32) -> f32 {
+fn decideBlurSize(centerVariance: f32, localLuminance: f32, localOpticalDepth: f32) -> f32 {
     let darknessShortfall = saturate((uniforms.darknessNoiseFloor - localLuminance) / (uniforms.darknessNoiseFloor + 1e-3));
-    let adjustedVariance = uniforms.maxBlurMip * max(centerVariance * uniforms.varianceScale, darknessShortfall);
-    return clamp(adjustedVariance, 0.0, uniforms.maxBlurMip);
+    let adjustedVariance = max(centerVariance * uniforms.varianceScale, darknessShortfall);
+    let densityAttenuation = smoothstep(0, 1, uniforms.densityBlurFalloff / localOpticalDepth);
+    return saturate(adjustedVariance * densityAttenuation) * uniforms.maxBlurMip;
 }
 
-// O(1) lookup into the baked min/max-range quadtree (see build_denoiser_quadtree.wgsl and this
-// project's denoiser plan), gated by a distance bias against splitting far from the query pixel -
-// see this project's denoiser plan. quadtreeMustSplit's own mip index is offset by -1 from
-// G-Buffer/irradiance mip space (it's allocated at half the G-Buffer's resolution with its own
-// 0-indexed chain - level i there answers "should G-Buffer mip (i+1) split into mip-i children") -
-// mip - 1 is the correct index into quadtreeMustSplit's own space, not mip. FORCE_FULL_SPLIT
-// (Phase 1's debug mode) still takes priority when defined, ignoring both the baked quadtree and
-// the distance bias entirely - that mode exists specifically to isolate DecideWeight's own quality
-// from any split heuristic, distance-based or otherwise.
-//
-// Distance bias rationale: as a candidate node's distance from the query pixel grows relative to
-// the whole blur kernel's radius, further refining it matters less and less to the final weighted
-// result, since decideWeight's spatialWeight will heavily discount it regardless of how accurately
-// its fine structure gets resolved - resolving detail nobody's going to weight is wasted work.
-//
-// Bug fix: this used to normalize by the CURRENT node's own (shrinking) texel size instead of the
-// fixed seedTexelSize passed in now, on the theory that dividing by a shrinking footprint made the
-// cutoff "depth-aware": a branch starting AT the query (distance 0) keeps a ~0 ratio forever, so
-// that part checked out - but every other one of the 3x3 neighborhood's 8 seeds (see SEED_RADIUS)
-// starts a full node-width away, and a split's children are only ever offset from their parent by
-// a FIXED FRACTION of the *parent's* (not the query's) footprint - a geometric series that
-// converges, so any branch's descendants stay within a bounded distance of where their seed
-// started, no matter how deep they split. That means the numerator (true distance from the query)
-// stays roughly constant for an off-center seed while the old denominator (current node's texel
-// size) shrinks to 0 every split - the ratio was mathematically guaranteed to diverge to infinity
-// for every non-center seed, regardless of the threshold. Raising the threshold only bought a few
-// more split levels before the identical failure would recur one level deeper on a scene needing
-// more of them (a noisier/darker scene, or any change that pushes decideBlurSize's chosen mip
-// higher) - a strong sign the *formula*, not the constant, was wrong; the fix belongs here, not in
-// DEFAULT_DENOISER_TUNABLES.maxSplitDistance. Normalizing by the fixed
-// seedTexelSize instead - the same quantity decideWeight's spatialWeight already uses (see that
-// function's own doc comment) - gives every branch a stable, depth-independent ratio approximating
-// its true final distance from the query, so the cutoff now actually answers the question it's
-// supposed to ("will decideWeight care about this branch at all"), instead of one that happens to
-// answer "has this branch split more than ~log2(maxSplitDistance) times," which is a different
-// question that doesn't track real relevance.
 fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, texelSize: vec2<f32>) -> bool {
 #ifdef FORCE_FULL_SPLIT
     return mip > 0;
@@ -141,25 +106,6 @@ fn shouldSplit(uv: vec2<f32>, mip: i32, queryUv: vec2<f32>, texelSize: vec2<f32>
 #endif
 }
 
-// Same baked-quadtree lookup as shouldSplit() above, but answering a different question: not "should
-// THIS CANDIDATE NODE keep splitting" (per-node, during traversal), but "does the QUERY pixel itself
-// sit near real, detected detail" (once, before gathering starts) - see main()'s use of this for
-// sigmaAdaptive. Needed because centerVariance can't tell "real feature" apart from "plain MC noise"
-// once it's saturated near its ceiling, which happens almost everywhere in a sparsely-lit scene (a
-// laser through haze, say) - see this project's denoiser plan and CLAUDE.md's sigmaLuminanceLoose
-// note. The quadtree's mustSplit evidence (albedo/density/normal range + the irradiance-detail
-// trigger) is a materially different signal from variance, so it's what actually distinguishes them.
-//
-// Deliberately always reads level 0 (the finest, half-G-Buffer-resolution level), never a level
-// tied to startMip: mustSplit ORs upward from level 0 into every coarser level (see
-// build_denoiser_quadtree.wgsl), which is the right bias for shouldSplit()'s "when in doubt, keep
-// splitting" traversal decision (a false positive there only wastes compute), but reusing that same
-// coarse, OR-broadened flag here would flag an entire wide cell as "near detail" merely because a
-// real edge sits somewhere inside it, forcing every pixel in that cell onto the tight sigma - not a
-// free "when in doubt" choice for THIS use, since it visibly reintroduces noise anywhere the flag
-// spuriously covers (confirmed: using startMip-1 here left a band of noise across an unrelated
-// object's whole bounding region, not just its actual edge). Level 0 stays spatially precise
-// regardless of how deep decideBlurSize decided to blur.
 fn hasNearbyDetail(uv: vec2<f32>) -> bool {
 #ifdef FORCE_FULL_SPLIT
     return false;
@@ -170,25 +116,6 @@ fn hasNearbyDetail(uv: vec2<f32>) -> bool {
 #endif
 }
 
-// spatialWeight * structuralWeight * radianceWeight * node.size - see the denoiser plan for the
-// full justification of each term; summary:
-// - structuralWeight (G-Buffer similarity) rejects cross-material bleed (hard edges,
-//   silhouettes) and, via the normal term, protects a smooth Lambertian shading gradient on a
-//   uniform-albedo curved object - real, converged detail with no albedo/density signature.
-// - radianceWeight rejects cross-*feature* bleed structuralWeight cannot see at all: a G-Buffer-
-//   uniform region (e.g. a laser beam through haze) can still contain a real, sharp irradiance
-//   feature. Its sigma is adaptive on the *center* pixel's own variance (tighter where the center
-//   is already trustworthy, looser where it isn't) - reusing filter_variance.wgsl's validated
-//   pattern verbatim, so a genuinely noisy-but-flat region doesn't get rejected by its own MC
-//   noise.
-//   (spatialWeight is normalized by the fixed seedTexelSize - the same metric shouldSplit's own
-//   distance bias now uses, see that function's doc comment for why an earlier, node-relative
-//   version of that cutoff was a bug, not a deliberate difference from this one.)
-// - node.size is a partition-of-unity area weight (4^-depth-below-seed), not stored on the node
-//   since it's a pure function of (startMip - node.mip): guarantees a region that fully resolves
-//   to mip 0 contributes the same total weight mass as it would have unsplit, so a heavily-
-//   detailed (hence heavily-split) region doesn't numerically dominate the average just by
-//   producing more stack entries.
 fn decideWeight(
     queryUv: vec2<f32>,
     centerAlbedo: vec3<f32>,
@@ -276,10 +203,25 @@ fn main(
     let localLuminanceMip = min(3, maxMip);
     let localLuminance = luminance(textureSampleLevel(combinedIrradiance, linearSampler, uv, f32(localLuminanceMip)).rgb);
 
-    let blurSize = decideBlurSize(centerVariance, localLuminance);
-    let startMip = clamp(i32(round(blurSize)), 0, maxMip);
+    // A coarse, bilinearly-filtered density read for decideBlurSize's attenuation term -
+    // deliberately NOT centerOpticalDepth (that stays pixel-exact for decideWeight's material-
+    // identity comparison and the final COMBINE_ALBEDO_DENSITY multiply below). decideBlurSize
+    // wants "how dense is my surroundings," the same kind of broad, low-frequency signal
+    // localLuminance already is (hence the matching mip choice) - sampling density at full
+    // resolution instead made the attenuation term track the density texture's own pixel-sharp
+    // edges (e.g. a cloud sprite's alpha feather), so at an aggressive densityBlurFalloff the
+    // attenuation could swing from ~1 to ~0 within the same couple of source pixels that edge
+    // spans, which then rounds to a hard mip-0-vs-mip-1+ line instead of a gradual falloff.
+    let densityMaxMip = i32(textureNumLevels(density)) - 1;
+    let densityBlurMip = min(1, densityMaxMip);
+    let localDensityValue = textureSampleLevel(density, linearSampler, uv, f32(densityBlurMip)).r / DENSITY_SCALE;
+    let localOpticalDepth = opticalDepth(localDensityValue);
 
-    if (startMip == 0) {
+    let blurSize = clamp(decideBlurSize(centerVariance, localLuminance, localOpticalDepth), 0.0, f32(maxMip));
+    //let blurSize = decideBlurSize(centerVariance, localLuminance, localOpticalDepth);
+    textureStore(blurSizeOutput, coords, vec4<f32>(blurSize, 0.0, 0.0, 0.0));
+
+    if (blurSize <= 0.0) {
 #ifdef COMBINE_ALBEDO_DENSITY
         textureStore(output, coords, vec4<f32>(centerIrradiance * centerAlbedo * centerDensityValue, 1.0));
 #else
@@ -287,6 +229,15 @@ fn main(
 #endif
         return;
     }
+
+    // The actual texture reads still need one discrete mip - there's no hardware trilinear
+    // equivalent for "blend the results of two whole quadtree descents" the way there is for a
+    // single texture fetch at a fractional LOD, since startMip seeds an entire recursive
+    // gather/weight algorithm (see shouldSplit/decideWeight below), not a texel lookup. ceil (not
+    // round) so any blurSize in (0, 1] still reads mip 1's data - the near-zero end of that range
+    // is instead handled by seedTexelSize's continuous scaling just below, not by falling back to
+    // mip 0.
+    let startMip = i32(ceil(blurSize));
 
     // Prefer the quadtree's detail evidence over centerVariance where they disagree: variance
     // alone can't distinguish "there's a real feature here" from "this is just noisy" once it's
@@ -304,8 +255,16 @@ fn main(
         hasNearbyDetail(uv));
     let centerLuminance = luminance(centerIrradiance);
 
-    let seedTexelSize = texelSize * f32(1u << u32(startMip));
-    // All 9 seeds share the same seedTexelSize wherever startMip is locally constant (true across
+    // exp2(blurSize), not f32(1u << u32(startMip)) - continuous, not stepped in powers of two.
+    // This is what actually makes the blur-size transition smooth despite startMip itself being a
+    // discrete mip: decideWeight's spatialWeight (and the seed positions below) are normalized by
+    // this value, so as blurSize shrinks toward 0 within a single startMip bracket (e.g. 0.05, still
+    // reading mip 1's data), the seeds collapse toward the query pixel's own UV and spatialWeight
+    // correspondingly collapses toward "only the center sample matters" - converging smoothly to the
+    // unblurred result the old startMip==0 branch used to jump straight to, instead of holding full
+    // mip-1-radius weight right up until blurSize crossed 0.5 and then dropping to zero at once.
+    let seedTexelSize = texelSize * exp2(blurSize);
+    // All 9 seeds share the same seedTexelSize wherever blurSize is locally constant (true across
     // most of a flat, uniform-material region - see DecideBlurSize), so every seed's position (and
     // therefore its "which quadtree cell am I in" state) advances in exact lockstep as the query
     // pixel moves. Left unjittered, that state flips at a fixed, periodic pixel interval matching
