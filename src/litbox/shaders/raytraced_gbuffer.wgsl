@@ -1,7 +1,7 @@
 // Ported from the Unity reference shader RTObjectMat.shader, rasterizing every raytraced scene
 // object into 3 G-Buffer render targets that a future raytracing/path-tracing pass will sample:
 //
-//   albedo      = premultiplied(albedoMap.rgb * albedo.rgb, albedoMap.a * albedo.a)
+//   albedo      = straight(albedoMap.rgb * albedo.rgb, albedoMap.a * albedo.a)
 //   density     = (1 - pow(1 - substrateDensity * albedoMap.a, 100 / targetHeightPixels)) * DENSITY_SCALE
 //   normalRoughness = (worldNormal * heightScale, particleAlignment)
 //
@@ -147,7 +147,10 @@ struct GBufferOutput {
 fn fragment_main(in: VertexOutput) -> GBufferOutput {
     let props = raytracedProperties[in.propertiesIndex];
 
-    let c = textureSample(mainTex, mainSampler, in.atlasUv);
+    // mainTex is stored premultiplied (see TextureCache) to avoid dark edge fringing under
+    // bilinear filtering - un-premultiply back to straight color for this shader's own math.
+    let sampled = textureSample(mainTex, mainSampler, in.atlasUv);
+    let c = vec4<f32>(select(vec3<f32>(0.0), sampled.rgb / sampled.a, sampled.a > 0.0001), sampled.a);
 
     let imageDensity = props.substrateDensity * c.a;
     // Clamped defensively (not a literal Unity port): substrateDensity*c.a can exceed 1 with
@@ -169,7 +172,7 @@ fn fragment_main(in: VertexOutput) -> GBufferOutput {
     // Y-up, matching world space with no flip at all.
     let normal = in.worldNormalUnscaled * props.heightScale;
     var out: GBufferOutput;
-    out.albedo = vec4<f32>(c.rgb * props.albedo.rgb, 1.0) * c.a * props.albedo.a;
+    out.albedo = vec4<f32>(c.rgb * props.albedo.rgb, c.a * props.albedo.a);
     out.density = vec4<f32>(scaledDensity, scaledDensity, 0.0, 0.0);
     out.normalRoughness = vec4<f32>(normal.x, -normal.y, normal.z, props.particleAlignment);
     return out;

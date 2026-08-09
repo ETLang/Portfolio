@@ -189,6 +189,41 @@ canvas {
     display: block; /* remove extra space below canvas */
 }
 
+.webgpu-error-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background-color: var(--bg-color);
+  overflow-y: auto;
+}
+
+.webgpu-error-content {
+  max-width: 480px;
+  color: var(--text-color);
+}
+
+.webgpu-error-content h2 {
+  margin-top: 0;
+  font-size: 1.1em;
+}
+
+.webgpu-error-content p {
+  color: var(--text-subtitle);
+}
+
+.webgpu-error-content ul {
+  color: var(--text-muted);
+  padding-left: 1.2em;
+  line-height: 1.6;
+}
+
+.webgpu-error-content li::marker {
+  color: var(--accent-color);
+}
+
 .status-bar {
   grid-area: footer;
   background-color: var(--status-bar-bg);
@@ -676,6 +711,62 @@ canvas {
 }
 
 .denoiser-param-controls .denoiser-param-number {
+    width: 5.5rem;
+    flex-shrink: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
+/* Simulation tunables panel (see simulation_tunables_panel.ts) - same layout as the denoiser panel above, one row per SimulationTunables field plus the two resolution rows. */
+.simulation-tunables {
+    margin-top: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+}
+
+.simulation-tunables summary {
+    cursor: pointer;
+    font-weight: bold;
+    color: var(--text-secondary-header);
+    padding: 0.25rem 0;
+}
+
+.simulation-tunables summary:hover {
+    color: var(--accent-color);
+}
+
+.simulation-tunables-list {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.simulation-param label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.simulation-param-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.simulation-param-controls .simulation-param-slider {
+    flex: 1;
+    min-width: 0;
+}
+
+.simulation-param-controls .simulation-param-number {
     width: 5.5rem;
     flex-shrink: 0;
     padding: 4px 6px;

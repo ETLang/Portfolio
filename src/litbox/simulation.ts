@@ -8,6 +8,7 @@ import { QUAD_VERTEX_COUNT, QUAD_VERTEX_BUFFER_LAYOUT, getQuadVertexBuffer } fro
 import { ComputedDataManager, ComputedTexture, ComputedBuffer } from './computed_data_manager.ts';
 import { ConvertPhotonIrradianceToHdrOperation } from './convert_photon_irradiance_to_hdr.ts';
 import { MipDownsampleOperation } from './mip_downsample.ts';
+import { LightmapBlurCascade } from './lightmap_blur_cascade.ts';
 import { DensityMipBlitResources } from './density_mip_blit.ts';
 import { ComputeVarianceAndMipsOperation } from './compute_variance_and_mips.ts';
 import { FilterVarianceOperation } from './filter_variance.ts';
@@ -84,6 +85,23 @@ export function getSimulationDeviceProfile(platform: Platform, gpuRandomAccessFr
 }
 
 /**
+ * Blur levels to subtract from every sprite's authored simBlur (see sprite.wgsl's SpriteProperties
+ * and LightmapBlurCascade) before it's used to select the lightmap's blur level. simBlur is
+ * authored as a level index assuming the lightmap's mip 0 sits at the scene's natural, unscaled
+ * resolution - but LightmapBlurCascade's levels are built on top of the device-profile-scaled
+ * simulation resolution (see deriveEffectiveSimulation), so a halved resolutionScale means each of
+ * *its* levels already covers twice the world-space extent the same-numbered level would at full
+ * resolution. Left uncorrected, a scene's authored blur sizes (tuned against desktop's unscaled
+ * lightmap) would render roughly 1/resolutionScale times too blurry on a scaled-down device.
+ * resolutionScale is always a power of two across every current/future device profile, so this is
+ * always a whole number - no rounding needed before it's subtracted from simBlur (see
+ * SpriteResources' use of this).
+ */
+export function computeSpriteBlurMipOffset(resolutionScale: number): number {
+    return -Math.log2(resolutionScale);
+}
+
+/**
  * Per-bounce-phase ray-march step cap: one domain-diagonal march. forward_monte_carlo.wgsl's
  * integrate() runs its search phase and refine phase as two *separate* invocations of the same
  * steps-for-loop (each resets steps to 0), each independently bounded by that phase's own uEscape
@@ -120,6 +138,7 @@ export interface DenoiserTunables {
     varianceScale: number;
     darknessNoiseFloor: number;
     maxBlurMip: number;
+    densityBlurFalloff: number;
     albedoSensitivity: number;
     densitySensitivity: number;
     normalSensitivity: number;
@@ -136,6 +155,14 @@ export interface DenoiserTunables {
     volatilityThreshold: number;
     detailThreshold: number;
     varianceGateScale: number;
+    // LightmapBlurCascade (lightmap_blur_cascade.ts) - see this project's plan: "Fix lightmap
+    // sprite-blur pixelation on high-contrast content" for why these exist and what each
+    // calibrates. Grouped with the denoiser tunables (not SimulationTunables) since this is
+    // squarely a lightmap post-process concern, same category as maxBlurMip above.
+    /** How many full-resolution, never-decimated blur levels sprite.wgsl can select before falling back to the decimated mip chain - a structural tunable: changing it reallocates lightmapCascade (see SimulationResources.ensureBlurCascadeAllocated). */
+    blurCascadeLevelCount: number;
+    /** Target sigma (in texels) of the first cascade level; each subsequent level's target cumulative sigma doubles the previous one's - see LightmapBlurCascade's doc comment. Cheap to change live, no reallocation. */
+    blurCascadeSigma: number;
 }
 
 export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
@@ -149,7 +176,13 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     // pre-fix, corrupted signals) no longer apply - these values reflect the post-fix scene.
     varianceScale: 10.0,
     darknessNoiseFloor: 0.1,
-    maxBlurMip: 6.0,
+    maxBlurMip: 5.0,
+    // Starting point, not a solved value (see this struct's own doc comment). Measured in
+    // log2(1+opticalDepth), not raw optical depth (see denoise.wgsl's decideBlurSize doc comment
+    // for why) - 2.0 reaches full suppression around opticalDepth 3 (about 95% dense), the same
+    // ceiling a raw-optical-depth falloff of 3.0 would have had, but ramps up far more gradually
+    // below that instead of the whole transition being compressed into the last few % of density.
+    densityBlurFalloff: 0.001,
     albedoSensitivity: 0.3,
     densitySensitivity: 1.0,
     normalSensitivity: 8.0,
@@ -173,6 +206,53 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     volatilityThreshold: 0.05,
     detailThreshold: 0.1,
     varianceGateScale: 20.0,
+    // Starting points, not solved values (see LightmapBlurCascade's doc comment for the
+    // doubling-target formula these feed). blurCascadeLevelCount default of 2 matches this
+    // project's original educated guess at how many full-res levels a laser beam needs to survive
+    // before decimation is safe - tunable specifically because that guess wasn't derived.
+    blurCascadeLevelCount: 2,
+    blurCascadeSigma: 3.0,
+};
+
+/**
+ * Every tunable value in the photon-tracing simulation itself (as opposed to DenoiserTunables,
+ * which tunes the post-process blur) - bundled the same way for the same reason: a single source
+ * of truth for the portfolio page's config UI (see main.ts's simulation tunables panel). Mutate a
+ * field directly (e.g. `simulationResources.simulationTunables.surfaceBias = 4`); tracePhotons
+ * reads this fresh every frame, so there's no separate "apply" step.
+ *
+ * raysPerFrame/integrationInterval/photonBounces mirror the identically-named SceneSimulation
+ * fields (the scene's exported JSON) - they start out equal to that scene's own (already
+ * device-profile-scaled) values every time loadFromScene runs (see its doc comment), then become
+ * independently live-editable from that point on, same as every other field here. Simulation
+ * resolution (width/height) is deliberately NOT part of this struct - resizing needs a full GPU
+ * resource reallocation (LitboxSceneRenderer.resizeSimulation), not a per-frame uniform write, so
+ * it doesn't fit this "mutate and reread" shape.
+ */
+export interface SimulationTunables {
+    raysPerFrame: number;
+    integrationInterval: number;
+    /** -1 = use each light's own bounce count (SceneSimulation's OverrideBounceCount sentinel - see resolveBounces). */
+    photonBounces: number;
+    /** forward_monte_carlo.wgsl's scatterMaterially self-intersection pushback after a bounce - fine-geometry light leaks vs. self-shadowing artifacts. */
+    surfaceBias: number;
+    /** forward_monte_carlo.wgsl's ambient emitLight direction-perturbation divisor - how directional vs. uniform ambient scatter looks. */
+    ambientScatterSoftness: number;
+}
+
+/**
+ * raysPerFrame/integrationInterval/photonBounces here are placeholder fallbacks only - loadFromScene
+ * always immediately overwrites them from the loaded scene's own (device-profile-scaled)
+ * SceneSimulation, so no real scene ends up relying on these three. surfaceBias/
+ * ambientScatterSoftness are the actual defaults (the Unity-ported hardcoded literals this
+ * project inherited - starting points, not solved values, same as DEFAULT_DENOISER_TUNABLES).
+ */
+export const DEFAULT_SIMULATION_TUNABLES: SimulationTunables = {
+    raysPerFrame: 100000,
+    integrationInterval: 0.01,
+    photonBounces: -1,
+    surfaceBias: 2.5,
+    ambientScatterSoftness: 1.44,
 };
 
 /**
@@ -184,13 +264,23 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
  * populate photonBuffer (an atomic accumulator), then ConvertPhotonIrradianceToHdrOperation
  * converts that into the lightmap's mip 0, combining it with the albedo/density G-Buffer. This is
  * a single-pass, non-accumulating integration - photonBuffer is cleared every frame, not
- * progressively converged across frames (see tracePhotons). Higher mips have no real content yet
- * (no mip-chain generation from mip 0), so they're just cleared each frame.
+ * progressively converged across frames (see tracePhotons). Higher blur levels are regenerated
+ * every frame from mip 0 by LightmapBlurCascade (a real, full-resolution Gaussian cascade feeding
+ * a decimated tail, not a plain mip chain) - see lightmap_blur_cascade.ts - since sprite.wgsl's
+ * blur-size selection is their only consumer.
  */
 export class SimulationResources {
     private device: GPUDevice;
     private computedDataManager: ComputedDataManager;
     private lightmap: ComputedTexture | null = null;
+    /** Full-resolution HDR-safe blur cascade (see lightmap_blur_cascade.ts) - entries [0, length-2] are sprite-selectable blur buckets, the last entry is an internal bridging level never exposed to sprites. Reallocated lazily whenever denoiserTunables.blurCascadeLevelCount changes - see ensureBlurCascadeAllocated. */
+    private lightmapCascade: ComputedTexture[] = [];
+    /** The blurCascadeLevelCount lightmapCascade is currently sized for (-1 = not yet allocated) - compared against denoiserTunables.blurCascadeLevelCount each frame to detect a tunable change. */
+    private allocatedBlurCascadeLevelCount = -1;
+    /** Full-resolution scratch texture shared by every LightmapBlurCascade pass (horizontal-pass intermediate) - fixed size from scene load, independent of blurCascadeLevelCount, so unlike lightmapCascade it never needs lazy reallocation. */
+    private lightmapCascadeScratch: ComputedTexture | null = null;
+    /** Real, halving-resolution decimated mip chain continuing past the blur cascade (see lightmap_blur_cascade.ts) - own mip0 is half of lightmap's resolution; fixed size/level count from scene load, independent of blurCascadeLevelCount. */
+    private lightmapMipChain: ComputedTexture | null = null;
     private sampler: GPUSampler;
 
     private pipeline: GPURenderPipeline | null = null;
@@ -201,6 +291,8 @@ export class SimulationResources {
 
     private simulation: SceneSimulation | null = null;
     private worldTransform: mat4 = mat4.create();
+    /** This session's SimulationDeviceProfile.resolutionScale, set by loadFromScene - see getSpriteBlurMipOffset. */
+    private resolutionScale = 1;
 
     /**
      * Atomic accumulator the photon tracer writes into: width*height*6 u32 entries - two
@@ -222,13 +314,16 @@ export class SimulationResources {
     /** Live-editable copy of every denoiser threshold - see DenoiserTunables' own doc comment. */
     public denoiserTunables: DenoiserTunables = { ...DEFAULT_DENOISER_TUNABLES };
 
+    /** Live-editable copy of every simulation tunable - see SimulationTunables' own doc comment. */
+    public simulationTunables: SimulationTunables = { ...DEFAULT_SIMULATION_TUNABLES };
+
     public denoiserEnabled = true;
     private frameIndex = 0;
 
     /** Per-half HDR conversion of photonBuffer, mip0 only - see ConvertPhotonIrradianceToHdrOperation. */
     private irradianceA: ComputedTexture | null = null;
     private irradianceB: ComputedTexture | null = null;
-    /** mean(irradianceA, irradianceB) pre-denoise signal, full mip chain (0..lightmap.mipLevelCount-1) - kept separate from `lightmap` since denoise() reads mip0 of this while writing lightmap's mip0. */
+    /** mean(irradianceA, irradianceB) pre-denoise signal, full mip chain (loadFromScene's own mipLevelCount, independent of lightmap's now-single-mip allocation) - kept separate from `lightmap` since denoise() reads mip0 of this while writing lightmap's mip0. */
     private combinedIrradiance: ComputedTexture | null = null;
     /** Relative variance from the (irradianceA, irradianceB) pair, quarter resolution (matches combinedIrradiance's mip2) - see ComputeVarianceAndMipsOperation. */
     private rawVariance: ComputedTexture | null = null;
@@ -236,6 +331,8 @@ export class SimulationResources {
 
     /** DenoiseOperation's output when DitherFilterOperation is about to run over it (see run()'s use of this) - the not-yet-final, jittery denoised image, full G-Buffer resolution, single mip. DitherFilterOperation reads this and writes lightmap's mip0 directly, so no copy is ever needed to get the real final image into lightmap. */
     private denoiseScratch: ComputedTexture | null = null;
+    /** DenoiseOperation's per-pixel blurSize (see denoise.wgsl's decideBlurSize/blurSizeOutput), full G-Buffer resolution, single mip - diagnostic-only, feeds the 'blur-size' debug view, never consumed by anything downstream in the normal render path. */
+    private blurSizeDebug: ComputedTexture | null = null;
 
     /** Normal-based edge detector feeding the quadtree bake, full G-Buffer resolution, mip0 only - see ComputeVolatilityOperation. */
     private volatility: ComputedTexture | null = null;
@@ -255,8 +352,10 @@ export class SimulationResources {
     private buildQuadtreeIterate: BuildDenoiserQuadtreeOperation;
     /** Fixed to 'rgba8unorm' at construction (Albedo's format) - never switched at runtime, so mipDownsampleAlbedo/mipDownsample never fight over recompiling the same pipeline for two different formats every frame. */
     private mipDownsampleAlbedo: MipDownsampleOperation;
-    /** Fixed to 'rgba16float' (its default) - used for NormalRoughness, combinedIrradiance, and the final lightmap's own post-denoise mip chain. */
+    /** Fixed to 'rgba16float' (its default) - used for NormalRoughness and combinedIrradiance's own post-mip2 chain (denoiser evidence, not sprite-facing). */
     private mipDownsample: MipDownsampleOperation;
+    /** Regenerates the lightmap's blur levels for sprite.wgsl's blur-size selection - see lightmap_blur_cascade.ts for why this replaced LightmapBlurPyramid (still present, untouched, and still used nowhere - kept for near-LDR scenes where its cheap decimation pyramid works well, per this project's plan). */
+    private lightmapBlurCascade: LightmapBlurCascade;
     private densityMipBlit: DensityMipBlitResources;
 
     /** One ForwardMonteCarloOperation per light kind - see its class doc. Constructed in initialize() once lutResources exists. */
@@ -288,7 +387,13 @@ export class SimulationResources {
     constructor(device: GPUDevice, computedDataManager: ComputedDataManager) {
         this.device = device;
         this.computedDataManager = computedDataManager;
-        this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
+        // mipmapFilter is 'nearest', not 'linear': sprite.wgsl's textureSampleLevel(...,
+        // props.simBlur) selects a discrete blur-size level, not a continuous LOD - 'nearest'
+        // makes "no blending between adjacent blur sizes" a structural guarantee instead of an
+        // authoring convention (relying on simBlur always being a whole number). Shared with
+        // compositeInto below, which always samples level 0.0 exactly - no fractional level, so
+        // this is a no-op there.
+        this.sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'nearest' });
         this.vertexBuffer = getQuadVertexBuffer(device);
         this.convertToHdr = new ConvertPhotonIrradianceToHdrOperation(device);
 
@@ -303,6 +408,7 @@ export class SimulationResources {
         this.mipDownsampleAlbedo = new MipDownsampleOperation(device);
         this.mipDownsampleAlbedo.updateSwitches({ outputFormat: 'rgba8unorm' });
         this.mipDownsample = new MipDownsampleOperation(device);
+        this.lightmapBlurCascade = new LightmapBlurCascade(device);
         this.densityMipBlit = new DensityMipBlitResources(device);
 
         this.writeCounterBuffer = device.createBuffer({
@@ -362,6 +468,20 @@ export class SimulationResources {
         return this.lightmap?.view ?? null;
     }
 
+    /** lightmapCascade's exposed (non-bridging) entries' views, for sprite_resources.ts's bind group - see lightmap_blur_cascade.ts. Length is getBlurCascadeLevelCount(). */
+    public getLightmapCascadeViews(): GPUTextureView[] {
+        return this.lightmapCascade.slice(0, -1).map((texture) => texture.view);
+    }
+
+    public getLightmapMipChainView(): GPUTextureView | null {
+        return this.lightmapMipChain?.view ?? null;
+    }
+
+    /** How many of lightmapCascade's entries are currently allocated as sprite-selectable buckets (excludes the internal bridging level) - see ensureBlurCascadeAllocated. SpriteResources compares this against its own last-seen value each frame to know when to rebuild its lightmap bind group and reupload sprite properties. */
+    public getBlurCascadeLevelCount(): number {
+        return this.allocatedBlurCascadeLevelCount;
+    }
+
     // --- Denoiser evidence debug-view plumbing (see debug_view.ts's DebugView, registered by
     // LitboxSceneRenderer) - not used by the normal render path.
 
@@ -386,8 +506,18 @@ export class SimulationResources {
         return this.filteredVariance?.view ?? null;
     }
 
+    /** Diagnostic-only (see blurSizeDebug's own doc comment) - feeds the 'blur-size' debug view. */
+    public getBlurSizeDebugView(): GPUTextureView | null {
+        return this.blurSizeDebug?.view ?? null;
+    }
+
     public getSampler(): GPUSampler {
         return this.sampler;
+    }
+
+    /** See computeSpriteBlurMipOffset - SpriteResources subtracts this from every sprite's authored simBlur before upload. */
+    public getSpriteBlurMipOffset(): number {
+        return computeSpriteBlurMipOffset(this.resolutionScale);
     }
 
     /** World transform of the simulation's owner, used by sprites to derive their lightmap UV. */
@@ -428,11 +558,40 @@ export class SimulationResources {
      * Full teardown-and-rebuild of the lightmap (and photon buffer) from `scene`. Called only on
      * an actual scene load/swap (see LitboxSceneRenderer.rebuildFromScene, its only caller) - never
      * per-frame; a transform-only change instead goes through refreshWorldTransform.
+     *
+     * `sceneTunables` (the just-loaded scene's own LitboxScene.getDenoiserTunables()) resets
+     * denoiserTunables to DEFAULT_DENOISER_TUNABLES merged with that override - any tunables-panel
+     * tweak made against the previous scene is discarded, not carried over (see LitboxScene's own
+     * doc comment for why). The device profile's maxBlurMip cut below is then re-applied on top,
+     * same as before this parameter existed - that one stays device-derived, never scene-derived.
+     *
+     * `sceneSimulationTunables` (LitboxScene.getSimulationTunables()) gets the same treatment for
+     * simulationTunables - see SimulationTunables' own doc comment for why raysPerFrame/
+     * integrationInterval/photonBounces are seeded from this scene's own (already device-scaled)
+     * SceneSimulation first, with sceneSimulationTunables layered on top of that.
      */
-    public loadFromScene(scene: Scene, sceneGraph: SceneGraph): void {
+    public loadFromScene(
+        scene: Scene,
+        sceneGraph: SceneGraph,
+        sceneTunables: Partial<DenoiserTunables> | null = null,
+        sceneSimulationTunables: Partial<SimulationTunables> | null = null,
+    ): void {
         if (this.lightmap) {
             this.computedDataManager.releaseTexture(this.lightmap);
             this.lightmap = null;
+        }
+        for (const texture of this.lightmapCascade) {
+            this.computedDataManager.releaseTexture(texture);
+        }
+        this.lightmapCascade = [];
+        this.allocatedBlurCascadeLevelCount = -1;
+        if (this.lightmapCascadeScratch) {
+            this.computedDataManager.releaseTexture(this.lightmapCascadeScratch);
+            this.lightmapCascadeScratch = null;
+        }
+        if (this.lightmapMipChain) {
+            this.computedDataManager.releaseTexture(this.lightmapMipChain);
+            this.lightmapMipChain = null;
         }
         if (this.photonBuffer) {
             this.computedDataManager.releaseBuffer(this.photonBuffer);
@@ -442,7 +601,7 @@ export class SimulationResources {
         for (const texture of [
             this.irradianceA, this.irradianceB, this.combinedIrradiance, this.rawVariance, this.filteredVariance,
             this.volatility, this.albedoMin, this.albedoMax, this.densityMinMaxVolatility, this.quadtreeMustSplit,
-            this.denoiseScratch,
+            this.denoiseScratch, this.blurSizeDebug,
         ]) {
             if (texture) {
                 this.computedDataManager.releaseTexture(texture);
@@ -459,6 +618,7 @@ export class SimulationResources {
         this.densityMinMaxVolatility = null;
         this.quadtreeMustSplit = null;
         this.denoiseScratch = null;
+        this.blurSizeDebug = null;
         const rawSimulation = scene.simulations.length > 0 ? scene.simulations[0] : null;
 
         if (scene.simulations.length > 1) {
@@ -472,7 +632,16 @@ export class SimulationResources {
         const deviceProfile = getSimulationDeviceProfile(getPlatform(), isRandomAccessFriendlyGpu());
         this.simulation = deriveEffectiveSimulation(rawSimulation, deviceProfile);
         this.bilinearPhotonDistribution = deviceProfile.bilinearPhotonDistribution;
+        this.resolutionScale = deviceProfile.resolutionScale;
+        this.denoiserTunables = { ...DEFAULT_DENOISER_TUNABLES, ...sceneTunables };
         this.denoiserTunables.maxBlurMip = deviceProfile.maxBlurMip;
+        this.simulationTunables = {
+            ...DEFAULT_SIMULATION_TUNABLES,
+            raysPerFrame: this.simulation.raysPerFrame,
+            integrationInterval: this.simulation.integrationInterval,
+            photonBounces: this.simulation.photonBounces,
+            ...sceneSimulationTunables,
+        };
         // Visible via the on-screen console overlay on mobile - lets a device profile be verified
         // without attaching devtools (see CDP-over-adb mobile debugging notes: some GPU readback
         // paths hang under remote debugging, so an in-page log is the more reliable check anyway).
@@ -485,13 +654,27 @@ export class SimulationResources {
 
         const { width, height } = this.simulation;
         const mipLevelCount = Math.floor(Math.log2(Math.max(width, height))) + 1;
+        // Single mip now - LightmapBlurCascade's exposed/bridging levels live in lightmapCascade
+        // (full resolution, never decimated) and lightmapMipChain (the decimated tail) instead of
+        // this texture's own mip1+, unlike the old LightmapBlurPyramid design - see
+        // lightmap_blur_cascade.ts.
         this.lightmap = this.computedDataManager.acquireTexture(
             width,
             height,
             LIGHTMAP_FORMAT,
             GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
-            mipLevelCount,
+            1,
         );
+        const cascadeUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING;
+        this.lightmapCascadeScratch = this.computedDataManager.acquireTexture(width, height, LIGHTMAP_FORMAT, cascadeUsage);
+        // Own mip0 is freshly half of lightmap's resolution (the first real decimation, one step
+        // past the blur cascade's last/bridging level) - NOT a reuse of any absolute mip-index
+        // sizing from the old single-texture pyramid. See lightmap_blur_cascade.ts's "Calibration"
+        // doc comment for why that distinction matters.
+        const mipChainWidth = Math.max(1, width >> 1);
+        const mipChainHeight = Math.max(1, height >> 1);
+        const mipChainLevelCount = Math.max(1, mipLevelCount - 1);
+        this.lightmapMipChain = this.computedDataManager.acquireTexture(mipChainWidth, mipChainHeight, LIGHTMAP_FORMAT, cascadeUsage, mipChainLevelCount);
 
         this.photonBuffer = this.computedDataManager.acquireBuffer(
             width * height * 6 * 4,
@@ -515,6 +698,10 @@ export class SimulationResources {
         // final destination), so this texture is never the source or destination of a GPU copy.
         this.denoiseScratch = this.computedDataManager.acquireTexture(
             width, height, LIGHTMAP_FORMAT, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
+        // Diagnostic-only (see this field's own doc comment) - same STORAGE_BINDING|TEXTURE_BINDING
+        // usage/no-copy rationale as denoiseScratch above, just single-channel.
+        this.blurSizeDebug = this.computedDataManager.acquireTexture(
+            width, height, VARIANCE_FORMAT, GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING);
 
         // Baked denoiser quadtree (this project's denoiser plan, Phase 2) - see field doc comments
         // above. albedoMin/Max/densityMinMaxVolatility/quadtreeMustSplit are allocated at HALF the
@@ -557,8 +744,9 @@ export class SimulationResources {
      * then continues for the G-Buffer and combinedIrradiance's deeper mips;
      * FilterVarianceOperation bilateral-filters the variance evidence; denoise (currently a
      * passthrough stub - the real size-argument/guided-blur algorithm is a separate, later step)
-     * produces the final lightmap mip0, whose own higher mips are then regenerated from it (for
-     * whatever later samples the lightmap across mips, e.g. sprites).
+     * produces the final lightmap mip0, from which LightmapBlurCascade regenerates the rest of the
+     * blur levels sprite.wgsl's blur-size selection samples - the only consumer of lightmapCascade/
+     * lightmapMipChain.
      */
     public run(
         encoder: GPUCommandEncoder,
@@ -567,7 +755,7 @@ export class SimulationResources {
         lutResources: LutResources,
         sceneGraph: SceneGraph,
     ): void {
-        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance || !this.denoiseScratch) {
+        if (!this.lightmap || !this.irradianceA || !this.irradianceB || !this.combinedIrradiance || !this.rawVariance || !this.filteredVariance || !this.denoiseScratch || !this.blurSizeDebug || !this.lightmapCascadeScratch || !this.lightmapMipChain) {
             return;
         }
         if (!this.simulation || !this.photonBuffer) {
@@ -604,16 +792,19 @@ export class SimulationResources {
         // combineAlbedoDensity switches combinedMip0/1/2's target AND meaning when the denoiser is
         // fully off (see ComputeVarianceAndMipsSwitches' own doc comment): irradiance itself is
         // never the wanted output in that mode, so this dispatch writes directly into lightmap's
-        // own top 3 mip levels, each holding mean * albedo * density (with albedo/density
-        // box-filtered down through the same shared-memory reduction the mean itself uses) rather
-        // than combinedIrradiance's raw irradiance mips - no separate dispatch (DenoiseOperation's
-        // combine-only fast path) or later mip-regeneration work is spent on what this pass already
-        // computes for free (see run()'s mip-regen loop below, which starts at mip 3 in this case).
+        // mip0 plus lightmapMipChain's first two mips, each holding mean * albedo * density (with
+        // albedo/density box-filtered down through the same shared-memory reduction the mean
+        // itself uses) rather than combinedIrradiance's raw irradiance mips - no separate dispatch
+        // (DenoiseOperation's combine-only fast path) or later blur-cascade work is spent on what
+        // this pass already produces for free. lightmapMipChain's mip0/mip1 are exactly half/
+        // quarter of lightmap's resolution, matching this fused pass's own mip1/mip2 sizing, so the
+        // redirect needs no adjustment - see this project's plan: denoiser-disabled is a debug/perf
+        // toggle, not the path the blur-cascade fix targets, so it deliberately keeps this
+        // box-filtered fast path instead of also running LightmapBlurCascade.
         this.computeVarianceAndMips.updateSwitches({ combineAlbedoDensity: !this.denoiserEnabled });
         const combinedMip0 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(0) : this.lightmap.getMipView(0);
-        const combinedMip1 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(1) : this.lightmap.getMipView(1);
-        const combinedMip2 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(2) : this.lightmap.getMipView(2);
-        const wroteLightmapMipsThroughTwo = !this.denoiserEnabled && this.lightmap.mipLevelCount >= 3;
+        const combinedMip1 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(1) : this.lightmapMipChain.getMipView(0);
+        const combinedMip2 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(2) : this.lightmapMipChain.getMipView(1);
         if (this.combinedIrradiance.mipLevelCount >= 3) {
             this.computeVarianceAndMips.updateInputs(
                 this.irradianceA.getMipView(0), this.irradianceB.getMipView(0),
@@ -667,7 +858,7 @@ export class SimulationResources {
                 this.combinedIrradiance.view, albedoView, normalRoughnessView, densityView, this.filteredVariance.view,
                 this.quadtreeMustSplit?.view ?? this.filteredVariance.view,
             );
-            this.denoise.updateOutputs(this.denoiseScratch.view, width, height);
+            this.denoise.updateOutputs(this.denoiseScratch.view, this.blurSizeDebug.view, width, height);
             this.denoise.execute(encoder);
 
             // Guided post-filter over denoise's just-written result (see dither_filter.wgsl) -
@@ -682,22 +873,45 @@ export class SimulationResources {
             this.ditherFilter.execute(encoder);
         }
         // When denoiserEnabled is false, denoise/ditherFilter never dispatch at all - lightmap's
-        // mip0 was already written directly above by computeVarianceAndMips's combined output.
-
-        // Regenerate the final lightmap's own higher mips from its just-written mip0 (whatever
-        // later samples the lightmap across mips, e.g. sprites, needs a real chain, not a clear) -
-        // independent of combinedIrradiance's own chain, since this one reflects the final lit
-        // (albedo/density-combined) image, not raw irradiance. Starts at mip 3, not 1, when
-        // computeVarianceAndMips just wrote lightmap's mip0-2 directly above (denoiser disabled) -
-        // regenerating them again here would just recompute what that pass already produced.
-        const mipRegenStart = wroteLightmapMipsThroughTwo ? 3 : 1;
-        for (let mip = mipRegenStart; mip < this.lightmap.mipLevelCount; mip++) {
-            const mipWidth = Math.max(1, width >> mip);
-            const mipHeight = Math.max(1, height >> mip);
-            this.mipDownsample.updateInputs(this.lightmap.getMipView(mip - 1));
-            this.mipDownsample.updateOutputs(this.lightmap.getMipView(mip), mipWidth, mipHeight);
-            this.mipDownsample.execute(encoder);
+        // mip0 and lightmapMipChain's first two mips were already written directly above by
+        // computeVarianceAndMips's combined output; lightmapCascade's own levels are left
+        // unregenerated in that mode (see the comment on that redirect above).
+        if (this.denoiserEnabled) {
+            this.ensureBlurCascadeAllocated(width, height);
+            this.lightmapBlurCascade.regenerate(
+                encoder,
+                this.lightmap.getMipView(0),
+                this.lightmapCascade,
+                this.lightmapCascadeScratch,
+                this.lightmapMipChain,
+                width,
+                height,
+                this.denoiserTunables.blurCascadeSigma,
+            );
         }
+    }
+
+    /**
+     * Lazily (re)allocates lightmapCascade to match denoiserTunables.blurCascadeLevelCount - one
+     * extra entry beyond the exposed count for LightmapBlurCascade's internal bridging level (see
+     * its doc comment). A no-op once already sized correctly, so this is cheap to call every frame;
+     * only actually reallocates right after blurCascadeLevelCount changes (including the first call
+     * after a scene load, since loadFromScene resets allocatedBlurCascadeLevelCount to -1).
+     */
+    private ensureBlurCascadeAllocated(width: number, height: number): void {
+        const desiredLevelCount = Math.max(0, Math.round(this.denoiserTunables.blurCascadeLevelCount));
+        if (desiredLevelCount === this.allocatedBlurCascadeLevelCount) {
+            return;
+        }
+        for (const texture of this.lightmapCascade) {
+            this.computedDataManager.releaseTexture(texture);
+        }
+        const cascadeUsage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING;
+        this.lightmapCascade = [];
+        for (let i = 0; i < desiredLevelCount + 1; i++) {
+            this.lightmapCascade.push(this.computedDataManager.acquireTexture(width, height, LIGHTMAP_FORMAT, cascadeUsage));
+        }
+        this.allocatedBlurCascadeLevelCount = desiredLevelCount;
     }
 
     /**
@@ -783,6 +997,12 @@ export class SimulationResources {
         // same comparison, per the Unity reference this was ported from) - unlike before, nothing
         // here needs to change per level, since the irradiance range check no longer depends on
         // which absolute mip is being examined (see build_denoiser_quadtree.wgsl).
+        // Reset each instance's per-frame uniform-buffer-slot cursor - see
+        // BuildDenoiserQuadtreeOperation.beginFrame's doc comment. buildQuadtreeLevel0 only ever
+        // dispatches once per frame, but resetting it too keeps both instances' usage uniform.
+        this.buildQuadtreeLevel0.beginFrame();
+        this.buildQuadtreeIterate.beginFrame();
+
         const level0Width = Math.max(1, width >> 1);
         const level0Height = Math.max(1, height >> 1);
         this.buildQuadtreeLevel0.updateUniforms({ ...this.denoiserTunables });
@@ -845,7 +1065,8 @@ export class SimulationResources {
         this.directionalOperation.beginFrame();
         this.ambientOperation.beginFrame();
 
-        const { width, height, raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces } = this.simulation;
+        const { width, height } = this.simulation;
+        const { raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces, surfaceBias, ambientScatterSoftness } = this.simulationTunables;
         const maxIntegrationSteps = computeMaxIntegrationSteps(width, height);
 
         interface Entry {
@@ -968,6 +1189,8 @@ export class SimulationResources {
                     integrationInterval,
                     integrationIntervalSquared,
                     rays: half.rays,
+                    surfaceBias,
+                    ambientScatterSoftness,
                 });
                 operation.execute(encoder);
             }

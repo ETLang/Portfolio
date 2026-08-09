@@ -36,6 +36,14 @@ interface ActiveCamera {
 }
 
 /**
+ * Why initWebGPU() failed, for main.ts to turn into a user-facing message - the underlying
+ * causes (browser lacks the API at all vs. the API exists but no adapter/device could be
+ * obtained) call for different troubleshooting tips, so the distinction is preserved past the
+ * boolean start() currently returns rather than collapsed into one generic "didn't work".
+ */
+export type WebGpuInitFailureReason = 'unsupported' | 'no-adapter' | 'device-error';
+
+/**
  * Renders a Litbox Scene (see src/litbox/scene.ts): runs the (currently
  * stubbed) light simulation, then paints sprites layer-by-layer around an
  * additive composite of the simulation's HDR lightmap, into an offscreen
@@ -54,10 +62,14 @@ interface ActiveCamera {
  */
 export class LitboxSceneRenderer {
     private canvas: HTMLCanvasElement;
+    /** Set by initWebGPU() when start() fails to reach a running device; null otherwise. */
+    public initFailureReason: WebGpuInitFailureReason | null = null;
     private adapter!: GPUAdapter;
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
     private presentationFormat!: GPUTextureFormat;
+    /** `${presentationFormat}-srgb` - the view format Background/Overlay bypass sprites render through so the GPU auto-gamma-encodes on write, skipping the tonemap pass entirely. See SpriteResources.drawBypass and render()'s bypass passes. */
+    private presentationFormatSrgb!: GPUTextureFormat;
     private presentationSize!: [number, number];
 
     private hdrFrameTexture!: GPUTexture;
@@ -113,7 +125,8 @@ export class LitboxSceneRenderer {
      * 'roughness' from the raytraced G-Buffer; 'lightmap' from the simulation's final HDR image;
      * 'irradiance-a'/'irradiance-b' (the two independent, uncombined per-half HDR estimates -
      * see this project's denoiser plan), 'combined-irradiance' (their mean, pre-denoise),
-     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline, and
+     * 'raw-variance'/'filtered-variance' from the denoiser's evidence-gathering pipeline,
+     * 'blur-size' (decideBlurSize's continuous per-pixel result - see denoise.wgsl), and
      * 'gradient-coherence' (prototype structural-detail evidence, not yet consumed by any
      * decision - see compute_gradient_coherence.wgsl), see createSharedResources), replaces the
      * entire normal render (simulation/sprites/tonemap) with
@@ -199,6 +212,34 @@ export class LitboxSceneRenderer {
         if (this.device) {
             await this.queueRebuild(scene);
         }
+    }
+
+    /**
+     * Live-resizes the active scene's simulation resolution by mutating its own
+     * SceneSimulation.width/height (the scene's raw, pre-device-scale authored value) and
+     * re-running the same serialized rebuild pipeline setScene() uses. Deliberately does NOT call
+     * scene.onLoad() again (unlike setScene) - a resize isn't a scene swap, and re-running
+     * onLoad's one-time setup (e.g. addSlider registrations) would incorrectly duplicate it.
+     * Reuses the full rebuildFromScene teardown/rebuild rather than a narrower resize path in
+     * SimulationResources/RaytracedResources, since the G-Buffer (RaytracedResources) must stay
+     * pixel-for-pixel matched to the simulation's own resolution (see
+     * SimulationResources.getEffectiveResolution's doc comment) and there's no existing narrow
+     * "just resize" entry point for either resource today - correctness over micro-perf for what's
+     * expected to be an infrequent debug-panel action, not a per-frame path. A side effect of
+     * going through the full rebuild: denoiserTunables/simulationTunables both reset to this
+     * scene's defaults, exactly as they would on an actual scene switch.
+     */
+    public async resizeSimulation(width: number, height: number): Promise<void> {
+        if (!this.activeScene) {
+            return;
+        }
+        const simulation = this.activeScene.data.simulations[0];
+        if (!simulation) {
+            return;
+        }
+        simulation.width = Math.max(1, Math.round(width));
+        simulation.height = Math.max(1, Math.round(height));
+        await this.queueRebuild(this.activeScene);
     }
 
     /**
@@ -308,12 +349,14 @@ export class LitboxSceneRenderer {
         try {
             if (!navigator.gpu) {
                 console.error("WebGPU not supported on this browser.");
+                this.initFailureReason = 'unsupported';
                 return false;
             }
 
             const adapter = await navigator.gpu.requestAdapter();
             if (!adapter) {
                 console.error("No appropriate GPUAdapter found.");
+                this.initFailureReason = 'no-adapter';
                 return false;
             }
             this.adapter = adapter;
@@ -348,6 +391,7 @@ export class LitboxSceneRenderer {
             });
         } catch (error) {
             console.error("Error initializing WebGPU:", error);
+            this.initFailureReason = 'device-error';
             return false;
         }
         return true;
@@ -360,11 +404,17 @@ export class LitboxSceneRenderer {
         }
         this.context = context;
         this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+        // getPreferredCanvasFormat() only ever returns 'bgra8unorm' or 'rgba8unorm' (never an
+        // '-srgb' variant itself - see LitboxCommon.wgsl's linearToSrgb doc), both of which have a
+        // valid '-srgb' sibling. Declared via viewFormats so render() can later request that
+        // sibling view from the same swapchain texture for the bypass sprite passes.
+        this.presentationFormatSrgb = `${this.presentationFormat}-srgb` as GPUTextureFormat;
         this.presentationSize = [this.canvas.width, this.canvas.height];
         this.context.configure({
             device: this.device,
             format: this.presentationFormat,
             alphaMode: 'premultiplied',
+            viewFormats: [this.presentationFormatSrgb],
         });
     }
 
@@ -390,7 +440,7 @@ export class LitboxSceneRenderer {
 
         this.simulationResources.initialize(this.cameraBindGroupLayout, this.lutResources);
         this.raytracedResources.initialize();
-        this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
+        this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT, this.presentationFormatSrgb);
 
         // Named debug views this renderer can blit in place of the normal render (see
         // debugView) - the first 4 come from the raytraced G-Buffer, 'lightmap' from the
@@ -418,6 +468,12 @@ export class LitboxSceneRenderer {
         this.debugViews.set('combined-irradiance', { getSourceView: () => this.simulationResources.getCombinedIrradianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('raw-variance', { getSourceView: () => this.simulationResources.getRawVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
         this.debugViews.set('filtered-variance', { getSourceView: () => this.simulationResources.getFilteredVarianceView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
+        // decideBlurSize's continuous per-pixel result (denoise.wgsl) - the actual "how much blur"
+        // decision, not something inferable from the final image's own apparent noise/smoothness.
+        // Also single-channel r32float, same HDR_SCALED convention as the variance views above -
+        // debugViewScale should typically be set near maxBlurMip (~6 by default) to use the full
+        // displayable range, since that's this value's own natural ceiling.
+        this.debugViews.set('blur-size', { getSourceView: () => this.simulationResources.getBlurSizeDebugView(), mode: DEBUG_VIEW_MODE.HDR_SCALED });
 
         this.createHdrFrameTexture();
     }
@@ -446,7 +502,7 @@ export class LitboxSceneRenderer {
         this.lastActiveCameraOwnerId = null;
 
         this.lightResources.loadFromScene(scene, this.sceneGraph, this.transformResources);
-        this.simulationResources.loadFromScene(scene, this.sceneGraph);
+        this.simulationResources.loadFromScene(scene, this.sceneGraph, this.activeScene.getDenoiserTunables(), this.activeScene.getSimulationTunables());
         await this.raytracedResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
         await this.spriteResources.loadFromScene(scene, this.sceneGraph, this.textureCache, this.simulationResources, this.transformResources);
 
@@ -754,7 +810,9 @@ export class LitboxSceneRenderer {
 
             // Steps 3-6: sprites + additive simulation composite into the offscreen HDR frame buffer.
             // No depth/stencil attachment - It's safe to presume the vast majority of objects have
-            // transparency, so just draw them back to front.
+            // transparency, so just draw them back to front. Non-bypass sprites only - Background/
+            // Overlay (bypassTonemapping: true) sprites skip this buffer and the tonemap curve
+            // entirely (see the two bypass passes below).
             const hdrPass = encoder.beginRenderPass({
                 colorAttachments: [{
                     view: this.hdrFrameTextureView,
@@ -769,12 +827,40 @@ export class LitboxSceneRenderer {
             this.spriteResources.draw(hdrPass, layer => layer >= 1);
             hdrPass.end();
 
-            // Step 7: tonemap the HDR frame buffer to the swapchain.
+            // Step 7: the swapchain texture, viewed two ways this frame - srgbSwapchainView for
+            // the two bypass sprite passes below (drawBypass's pipeline targets this format so the
+            // GPU auto-gamma-encodes on write), plainSwapchainView for the tonemap pass (which does
+            // its own manual gamma-encode in tonemap.wgsl, since it also runs the log curve).
+            const presentationTexture = this.context.getCurrentTexture();
+            const plainSwapchainView = presentationTexture.createView();
+            const srgbSwapchainView = presentationTexture.createView({ format: this.presentationFormatSrgb });
+
+            // Step 7a: Background-tier (layer <= 0) bypass sprites, drawn straight into the
+            // swapchain ahead of the tonemapped scene. This is the frame's first touch of the
+            // swapchain, so it clears - opaque (a: 1), not transparent, so that a scene with no
+            // bypass sprites still ends up solid black wherever the HDR buffer is empty, exactly
+            // as the old unconditionally-opaque tonemap write used to produce. Because the
+            // straight-alpha "over" blend leaves dst alpha at 1 regardless of src alpha once dst
+            // alpha starts at 1, every later blend onto this texture keeps it opaque too - see the
+            // plan doc's "Why clear opaque" note.
+            const backgroundBypassPass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: srgbSwapchainView,
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                    loadOp: 'clear',
+                    storeOp: 'store',
+                }],
+            });
+            backgroundBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
+            this.spriteResources.drawBypass(backgroundBypassPass, layer => layer <= 0);
+            backgroundBypassPass.end();
+
+            // Step 7b: tonemap the HDR frame buffer onto the swapchain, blended over the
+            // Background-bypass content just drawn rather than overwriting it.
             const tonemapPass = encoder.beginRenderPass({
                 colorAttachments: [{
-                    view: this.context.getCurrentTexture().createView(),
-                    clearValue: { r: 0, g: 0, b: 0, a: 0 },
-                    loadOp: 'clear',
+                    view: plainSwapchainView,
+                    loadOp: 'load',
                     storeOp: 'store',
                 }],
             });
@@ -782,6 +868,19 @@ export class LitboxSceneRenderer {
             this.tonemapResources.updateInputs(this.hdrFrameTextureView);
             this.tonemapResources.execute(tonemapPass);
             tonemapPass.end();
+
+            // Step 7c: Overlay-tier (layer >= 1) bypass sprites, drawn on top of the tonemapped
+            // result.
+            const overlayBypassPass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: srgbSwapchainView,
+                    loadOp: 'load',
+                    storeOp: 'store',
+                }],
+            });
+            overlayBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
+            this.spriteResources.drawBypass(overlayBypassPass, layer => layer >= 1);
+            overlayBypassPass.end();
 
             this.device.queue.submit([encoder.finish()]);
             this.cameraUniform.advance();

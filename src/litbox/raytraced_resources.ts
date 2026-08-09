@@ -178,10 +178,9 @@ export class RaytracedResources {
                 entryPoint: 'fragment_main',
                 targets: [
                     {
-                        // AlbedoAlpha: Unity's "One OneMinusSrcAlpha" - standard premultiplied "over".
                         format: ALBEDO_FORMAT,
                         blend: {
-                            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                             alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                         },
                     },

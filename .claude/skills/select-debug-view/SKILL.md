@@ -19,12 +19,18 @@ node .claude/skills/select-debug-view/select-debug-view.mjs --view <key|none> [-
   - Denoiser pipeline evidence: `irradiance-a`, `irradiance-b`, `combined-irradiance`,
     `raw-variance`, `filtered-variance` - see this project's CLAUDE.md denoiser-architecture section
     for what each of these represents.
+  - `blur-size` - decideBlurSize's continuous per-pixel result (denoise.wgsl), i.e. the actual
+    "how much blur" decision at each pixel - lets you see that decision directly instead of
+    inferring it from how noisy/smooth the final composited image looks. `--scale` should
+    typically be set near `maxBlurMip` (~6 by default) to use the full displayable range, since
+    that's this value's own natural ceiling.
 - **An unrecognized `--view` key does not error** - the renderer silently falls back to normal
   rendering. This script prints a warning to stderr if you pass something outside the known list
   above, but double-check spelling regardless; a clean-looking screenshot after a typo'd view name
   is a false negative, not confirmation the view exists.
-- `--scale <n>` sets `debugViewScale` (default 0.5 in the renderer) - currently only consumed by the
-  `density` view.
+- `--scale <n>` sets `debugViewScale` (default 0.5 in the renderer) - consumed by `density` and
+  every HDR-scaled view (`lightmap`, `irradiance-a`/`irradiance-b`, `combined-irradiance`,
+  `raw-variance`/`filtered-variance`, `blur-size`); ignored by the rest.
 - `--mip-level <n>` sets `debugViewMipLevel` (default 0) - which mip of the active view's source
   texture to display. Out-of-range values are clamped harmlessly by the GPU, not rejected.
 - `--solid-color` / `--no-solid-color` toggles `debugSolidColor` (flat shape-colored quads, bypassing

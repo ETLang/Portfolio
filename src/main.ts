@@ -1,13 +1,14 @@
 import './style.css';
 import { marked } from 'marked';
 import { ModalDialog } from './modal-dialog.ts';
-import { LitboxSceneRenderer } from './litbox_scene_renderer.ts';
+import { LitboxSceneRenderer, type WebGpuInitFailureReason } from './litbox_scene_renderer.ts';
 import { getAboutPageContent } from './about.ts';
 import { getContactForm } from './contact-form.ts';
 import { formatRate } from './litbox/performance_metrics.ts';
 import { getDenoiserTunablesPanel } from './denoiser_tunables_panel.ts';
+import { getSimulationTunablesPanel } from './simulation_tunables_panel.ts';
 import { getScenePropertiesPanel } from './scene_properties_panel.ts';
-import { DEFAULT_DENOISER_TUNABLES, type DenoiserTunables } from './litbox/simulation.ts';
+import { DEFAULT_DENOISER_TUNABLES, type DenoiserTunables, DEFAULT_SIMULATION_TUNABLES, type SimulationTunables } from './litbox/simulation.ts';
 import { SCENE_REGISTRY, DEFAULT_SCENE_KEY } from './litbox_scene_registry.ts';
 import introMdText from './intro.md?raw';
 
@@ -23,6 +24,68 @@ const sidebarPane = document.querySelector('.sidebar-pane') as HTMLElement;
 const workspaceViewport = document.querySelector('.workspace-viewport') as HTMLElement;
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
 const resumeView = document.querySelector('.resume-view') as HTMLElement;
+const webgpuErrorOverlay = document.querySelector('.webgpu-error-overlay') as HTMLElement;
+const webgpuErrorReason = document.querySelector('.webgpu-error-reason') as HTMLElement;
+const webgpuErrorTips = document.querySelector('.webgpu-error-tips') as HTMLElement;
+const webgpuStatus = document.getElementById('webgpu-status') as HTMLElement;
+
+// --- WEBGPU FAILURE DIAGNOSTICS ---
+// initWebGPU() (see litbox_scene_renderer.ts) fails silently by design - it's a background
+// resource-setup step, not something worth throwing over - so the UI has to actively check
+// for it here rather than relying on a rejected promise. Without this, a failed init used to
+// just leave a blank canvas with the status bar's hardcoded "WebGPU: Active" claiming
+// otherwise (see 🐛 note in git history / CLAUDE.md) - misleading during exactly the moment a
+// visitor most needs an explanation.
+const WEBGPU_FAILURE_MESSAGES: Record<WebGpuInitFailureReason, { reason: string; tips: string[] }> = {
+    'unsupported': {
+        reason: "Your browser doesn't support the WebGPU API this scene needs to render.",
+        tips: [
+            "Try a recent version of Chrome, Edge, or Safari 18+ - WebGPU isn't available in every browser yet.",
+            "On Firefox, WebGPU currently has to be enabled manually via about:config.",
+        ],
+    },
+    'no-adapter': {
+        reason: "Your browser supports WebGPU, but couldn't find or allocate a GPU for it to use.",
+        tips: [
+            "Reboot the device - browsers disable GPU acceleration after repeated GPU-process crashes, and this usually clears on restart.",
+            "On Chrome, visit chrome://gpu and check the \"Problems Detected\" section for the specific cause.",
+            "Turn off battery saver / low-power mode, which can restrict GPU access.",
+            "Close other GPU-heavy tabs or apps and try again.",
+            "Make sure the browser and OS are up to date.",
+        ],
+    },
+    'device-error': {
+        reason: "Your browser found a GPU, but something went wrong while setting it up.",
+        tips: [
+            "Reboot the device and try again.",
+            "Try a different browser.",
+            "Open the browser console for more detail on the underlying error.",
+        ],
+    },
+};
+
+// Tracked separately from the overlay's own display style because the overlay lives inside
+// .workspace-viewport, which stays visible on every view except "about" (see updateView's
+// canvas/resumeView toggle) - it needs to hide there too rather than covering the resume text,
+// then reappear if the visitor navigates back to "intro"/"litbox".
+let webgpuErrorActive = false;
+
+function updateWebGpuErrorVisibility(isAboutView: boolean): void {
+    webgpuErrorOverlay.style.display = (webgpuErrorActive && !isAboutView) ? 'flex' : 'none';
+}
+
+function showWebGpuError(reason: WebGpuInitFailureReason): void {
+    const info = WEBGPU_FAILURE_MESSAGES[reason];
+    webgpuErrorReason.textContent = info.reason;
+    webgpuErrorTips.replaceChildren(...info.tips.map(tip => {
+        const li = document.createElement('li');
+        li.textContent = tip;
+        return li;
+    }));
+    webgpuErrorActive = true;
+    updateWebGpuErrorVisibility(appContainer.dataset.activeView === 'about');
+    webgpuStatus.textContent = '🔴 WebGPU: Unavailable';
+}
 
 // --- CONSOLE LOG CAPTURE ---
 const consoleContainer = document.getElementById('console-container');
@@ -105,24 +168,6 @@ const viewContent = {
             <div id="scene-properties-container"></div>
             <div class="litbox-config">
                 <div class="litbox-config-row">
-                    <label for="rays-per-pixel-slider">Rays/Pixel</label>
-                    <div class="litbox-config-controls">
-                        <input type="range" id="rays-per-pixel-slider" class="slider litbox-config-slider" data-litbox-param="raysPerPixel"
-                            min="1" max="100" step="1" value="50">
-                        <input type="number" class="litbox-config-number" data-litbox-param="raysPerPixel"
-                            min="1" max="100" step="1" value="50">
-                    </div>
-                </div>
-                <div class="litbox-config-row">
-                    <label for="bounce-depth-slider">Bounce Depth</label>
-                    <div class="litbox-config-controls">
-                        <input type="range" id="bounce-depth-slider" class="slider litbox-config-slider" data-litbox-param="bounceDepth"
-                            min="1" max="10" step="1" value="5">
-                        <input type="number" class="litbox-config-number" data-litbox-param="bounceDepth"
-                            min="1" max="10" step="1" value="5">
-                    </div>
-                </div>
-                <div class="litbox-config-row">
                     <label for="exposure-slider">Exposure</label>
                     <div class="litbox-config-controls">
                         <input type="range" id="exposure-slider" class="slider litbox-config-slider" data-litbox-param="exposure"
@@ -157,6 +202,32 @@ const viewContent = {
 
 type ViewKey = keyof typeof viewContent;
 
+/** The active scene's raw (pre-device-scale) simulation resolution, for the simulation tunables panel's width/height rows - see LitboxSceneRenderer.resizeSimulation's own doc comment for why this reads the scene's own JSON rather than SimulationResources' device-scaled effective resolution. */
+function getRawSimulationSize(): { width: number; height: number } {
+    const simulation = litboxRenderer?.getActiveScene()?.data.simulations[0];
+    return simulation ? { width: simulation.width, height: simulation.height } : { width: 0, height: 0 };
+}
+
+/**
+ * Regenerates both tunables panels from current state - shared by the scene-switch and
+ * simulation-resize handlers below, both of which reset denoiserTunables/simulationTunables to
+ * the newly-loaded scene's own defaults (see SimulationResources.loadFromScene) and so need the
+ * displayed panels refreshed rather than left showing the previous (possibly user-tweaked) values.
+ */
+function refreshTunablesPanels(): void {
+    if (!litboxRenderer) {
+        return;
+    }
+    const denoiserTunablesEl = sidebarPane.querySelector('.denoiser-tunables');
+    if (denoiserTunablesEl) {
+        denoiserTunablesEl.outerHTML = getDenoiserTunablesPanel(litboxRenderer.getSimulationResources().denoiserTunables);
+    }
+    const simulationTunablesEl = sidebarPane.querySelector('.simulation-tunables');
+    if (simulationTunablesEl) {
+        simulationTunablesEl.outerHTML = getSimulationTunablesPanel(litboxRenderer.getSimulationResources().simulationTunables, getRawSimulationSize());
+    }
+}
+
 // --- VIEW SWITCHING LOGIC ---
 async function updateView(view: ViewKey) {
     // Update container attribute for CSS targeting
@@ -185,6 +256,9 @@ async function updateView(view: ViewKey) {
             // used to skip this and always come back showing their hardcoded markup state (e.g.
             // "checked") even after being changed, since sidebarPane.innerHTML above regenerates
             // them fresh from the static template every time.
+            const simulationTunables = litboxRenderer?.getSimulationResources().simulationTunables ?? DEFAULT_SIMULATION_TUNABLES;
+            sidebarPane.insertAdjacentHTML('beforeend', getSimulationTunablesPanel(simulationTunables, getRawSimulationSize()));
+
             const tunables = litboxRenderer?.getSimulationResources().denoiserTunables ?? DEFAULT_DENOISER_TUNABLES;
             sidebarPane.insertAdjacentHTML('beforeend', getDenoiserTunablesPanel(tunables));
 
@@ -215,6 +289,7 @@ async function updateView(view: ViewKey) {
     // Show/hide main content
     resumeView.style.display = isAboutView ? 'block' : 'none';
     canvas.style.display = isAboutView ? 'none' : 'block';
+    updateWebGpuErrorVisibility(isAboutView);
 
     updateLayout();
 }
@@ -236,10 +311,8 @@ sidebarPane.addEventListener('click', async (e: MouseEvent) => {
 sidebarPane.addEventListener('input', (e: Event) => {
     const target = e.target as HTMLElement;
 
-    // Litbox Config panel (Rays/Pixel, Bounce Depth, Exposure): the slider and textbox in a row
-    // share the same data-litbox-param attribute, mirroring the denoiser tunables panel's
-    // data-param pairing below. Only exposure is wired to live state today - Rays/Pixel and
-    // Bounce Depth aren't backed by anything yet, so they just stay in sync with each other.
+    // Litbox Config panel (Exposure): the slider and textbox share the same data-litbox-param
+    // attribute, mirroring the denoiser/simulation tunables panels' data-param pairing below.
     const litboxParam = target.dataset.litboxParam;
     if (litboxParam) {
         const value = parseFloat((target as HTMLInputElement).value);
@@ -272,6 +345,44 @@ sidebarPane.addEventListener('input', (e: Event) => {
         // user just edited.
         const row = target.closest('.denoiser-param');
         const pairedSelector = target.classList.contains('denoiser-param-slider') ? '.denoiser-param-number' : '.denoiser-param-slider';
+        const paired = row?.querySelector<HTMLInputElement>(pairedSelector);
+        if (paired) {
+            paired.value = String(value);
+        }
+        return;
+    }
+
+    // Simulation tunables panel (see simulation_tunables_panel.ts): the slider and textbox in a
+    // row share the same data-sim-param attribute (a SimulationTunables key) - same pairing
+    // convention as the denoiser panel above, kept as a separate attribute (not data-param) so it
+    // can't collide with a DenoiserTunables key and get routed into the wrong tunables object.
+    const simParam = target.dataset.simParam as keyof SimulationTunables | undefined;
+    if (simParam && litboxRenderer) {
+        const value = parseFloat((target as HTMLInputElement).value);
+        if (Number.isNaN(value)) {
+            return;
+        }
+        litboxRenderer.getSimulationResources().simulationTunables[simParam] = value;
+        const row = target.closest('.simulation-param');
+        const pairedSelector = target.classList.contains('simulation-param-slider') ? '.simulation-param-number' : '.simulation-param-slider';
+        const paired = row?.querySelector<HTMLInputElement>(pairedSelector);
+        if (paired) {
+            paired.value = String(value);
+        }
+        return;
+    }
+
+    // Simulation tunables panel's width/height rows: same slider/textbox pairing as above, but
+    // deliberately NOT written back here - a resize needs an async GPU resource rebuild
+    // (LitboxSceneRenderer.resizeSimulation), so it's handled on 'change' below, not on every
+    // 'input' tick.
+    if (target.dataset.simSize) {
+        const value = parseFloat((target as HTMLInputElement).value);
+        if (Number.isNaN(value)) {
+            return;
+        }
+        const row = target.closest('.simulation-param');
+        const pairedSelector = target.classList.contains('simulation-param-slider') ? '.simulation-param-number' : '.simulation-param-slider';
         const paired = row?.querySelector<HTMLInputElement>(pairedSelector);
         if (paired) {
             paired.value = String(value);
@@ -324,6 +435,27 @@ sidebarPane.addEventListener('change', async (e: Event) => {
         if (scenePropertiesContainer) {
             scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer.getActiveScene());
         }
+        // setScene() just reset denoiserTunables/simulationTunables to the new scene's own
+        // defaults (see LitboxScene.getDenoiserTunables/getSimulationTunables) - regenerate both
+        // panels so they don't keep showing the previous scene's (possibly user-tweaked) values.
+        refreshTunablesPanels();
+    } else if (target.dataset.simSize && litboxRenderer) {
+        // Simulation tunables panel's width/height rows (see simulation_tunables_panel.ts) - a
+        // resize needs both dimensions together, regardless of which row's control the user just
+        // changed, so read both current number-box values rather than just `target`'s own.
+        const widthInput = sidebarPane.querySelector<HTMLInputElement>('.simulation-tunables [data-sim-size="width"].simulation-param-number');
+        const heightInput = sidebarPane.querySelector<HTMLInputElement>('.simulation-tunables [data-sim-size="height"].simulation-param-number');
+        const width = parseFloat(widthInput?.value ?? '');
+        const height = parseFloat(heightInput?.value ?? '');
+        if (Number.isNaN(width) || Number.isNaN(height)) {
+            return;
+        }
+        await litboxRenderer.resizeSimulation(width, height);
+        // resizeSimulation reloads the scene at the new resolution, which resets
+        // denoiserTunables/simulationTunables to this scene's defaults the same way an actual
+        // scene switch does - regenerate both panels for the same reason as the scene-select
+        // branch above.
+        refreshTunablesPanels();
     }
 });
 
@@ -381,12 +513,19 @@ if (canvas) {
         .then(scene => renderer.setScene(scene))
         .then(() => renderer.start())
         .then(() => {
+            if (renderer.initFailureReason) {
+                showWebGpuError(renderer.initFailureReason);
+                return;
+            }
             litboxRenderer = renderer;
             // Exposed for manual debugging from the devtools console, e.g.
             // `litboxRenderer.debugView = 'lightmap'` - see LitboxSceneRenderer.debugView.
             (window as unknown as { litboxRenderer: LitboxSceneRenderer }).litboxRenderer = renderer;
         })
-        .catch(error => console.error('Failed to start Litbox scene renderer:', error));
+        .catch(error => {
+            console.error('Failed to start Litbox scene renderer:', error);
+            showWebGpuError('device-error');
+        });
 } else {
     console.error("Canvas element not found!");
 }

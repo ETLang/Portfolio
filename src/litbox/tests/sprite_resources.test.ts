@@ -25,7 +25,7 @@ function makeObject(id: number, x: number): SceneObject {
     };
 }
 
-function makeSprite(ownerId: number, layer = 0, sortOrder = 0): SceneSprite {
+function makeSprite(ownerId: number, layer = 0, sortOrder = 0, bypassTonemapping = false): SceneSprite {
     return {
         ownerId,
         layer,
@@ -38,6 +38,7 @@ function makeSprite(ownerId: number, layer = 0, sortOrder = 0): SceneSprite {
         simContribution: WHITE,
         simBlur: 0,
         primitiveShape: 'rect',
+        bypassTonemapping,
     };
 }
 
@@ -67,6 +68,11 @@ interface Fixture {
 }
 
 async function setup(sprites?: SceneSprite[]): Promise<Fixture> {
+    return setupScene(makeScene(sprites));
+}
+
+/** Like setup(), but for tests that need a custom objects list (e.g. a 3rd owner beyond makeScene()'s default 2, or an inactive object) - see the layerFilter/inactive-sprite tests below. */
+async function setupScene(scene: Scene): Promise<Fixture> {
     const device = createFakeGpuDevice();
     const gpuDevice = device as unknown as GPUDevice;
     const textureCache = new TextureCache(gpuDevice);
@@ -77,10 +83,9 @@ async function setup(sprites?: SceneSprite[]): Promise<Fixture> {
     simulationResources.initialize(cameraBindGroupLayout, lutResources);
 
     const spriteResources = new SpriteResources(gpuDevice);
-    spriteResources.initialize(cameraBindGroupLayout, 'rgba16float');
+    spriteResources.initialize(cameraBindGroupLayout, 'rgba16float', 'bgra8unorm-srgb');
     const transformResources = new TransformResources(gpuDevice);
 
-    const scene = makeScene(sprites);
     const sceneGraph = new SceneGraph(scene);
     textureCache.loadScene('', scene.textureAtlasKeys);
     await spriteResources.loadFromScene(scene, sceneGraph, textureCache, simulationResources, transformResources);
@@ -290,7 +295,7 @@ describe('SpriteResources', () => {
         const cameraBindGroupLayout = gpuDevice.createBindGroupLayout({ entries: [] });
         simulationResources.initialize(cameraBindGroupLayout, lutResources);
         const spriteResources = new SpriteResources(gpuDevice);
-        spriteResources.initialize(cameraBindGroupLayout, 'rgba16float');
+        spriteResources.initialize(cameraBindGroupLayout, 'rgba16float', 'bgra8unorm-srgb');
         const transformResources = new TransformResources(gpuDevice);
         const sceneGraph = new SceneGraph(scene);
         textureCache.loadScene('', scene.textureAtlasKeys);
@@ -314,6 +319,44 @@ describe('SpriteResources', () => {
         fixture.spriteResources.draw(passEncoder.encoder, (layer) => layer <= 0);
 
         expect(passEncoder.draws).toEqual([{ instanceCount: 1, firstInstance: 0 }]);
+    });
+
+    it('draw() excludes a bypassTonemapping sprite even when its layer matches the filter', async () => {
+        const normal = makeSprite(1, 0, 0);
+        const bypass = makeSprite(2, 0, 1, /* bypassTonemapping */ true);
+        const fixture = await setup([normal, bypass]);
+        const passEncoder = makeRecordingPassEncoder();
+
+        fixture.spriteResources.draw(passEncoder.encoder, () => true);
+
+        expect(passEncoder.draws).toEqual([{ instanceCount: 1, firstInstance: 0 }]); // only `normal`
+    });
+
+    it('drawBypass() includes only bypassTonemapping sprites matching layerFilter, in draw order', async () => {
+        const background = makeSprite(1, 0, 0, /* bypassTonemapping */ true);
+        const normal = makeSprite(2, 1, 0);
+        const overlay = makeSprite(3, 2, 0, /* bypassTonemapping */ true);
+        // makeScene() only ever wires up objects for ownerId 1/2 - a 3rd object is needed so
+        // `overlay` (ownerId 3) resolves as active-in-hierarchy instead of silently dropping out.
+        const objects = [makeObject(1, 0), makeObject(2, 0), makeObject(3, 0)];
+        const scene: Scene = { ...makeScene([background, normal, overlay]), objects };
+        const fixture = await setupScene(scene);
+        const passEncoder = makeRecordingPassEncoder();
+
+        const seenLayers: number[] = [];
+        fixture.spriteResources.drawBypass(passEncoder.encoder, (layer) => {
+            seenLayers.push(layer);
+            return true;
+        });
+
+        // layerFilter is consulted for every active sprite in draw order regardless of its own
+        // bypassTonemapping value (same visitation order as draw()) - it's the *subsequent*
+        // `resolved.bypassTonemapping` check that excludes `normal` (layer 1) from the output.
+        expect(seenLayers).toEqual([0, 1, 2]);
+        expect(passEncoder.draws).toEqual([
+            { instanceCount: 1, firstInstance: 0 }, // background
+            { instanceCount: 1, firstInstance: 2 }, // overlay (position 2 in the full draw-ordered list, `normal` sits at 1)
+        ]);
     });
 });
 

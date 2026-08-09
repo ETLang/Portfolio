@@ -3,19 +3,25 @@
 //   baseColor = tex2D(_MainTex, uv)
 //   light = tex2Dlod(_LightMap, lightUV, _LightDetail) * _LightMod + _Ambience
 //   col = baseColor * light * _Color
-//   col += _Emissive
+//   col.rgb += _Emissive.rgb
 //   col *= opacity                     (no Unity-material equivalent; final fade multiplier)
 //
 // _LightDetail (mip LOD) = simBlur. _LightMod = simContribution. _Ambience = ambient.
 // _Color = colorMod. _Emissive = emissive. _Metallic is declared but unused in the
 // reference - not ported.
 //
-// The output alpha is clamped to [0, 1]: the ported formula sums baseColor.a * light.a +
-// emissive.a, which can exceed 1 with real exported data. An alpha above 1 flows straight
-// into the SrcAlpha/OneMinusSrcAlpha blend (this HDR target isn't clamped like an 8-bit
-// one), driving OneMinusSrcAlpha negative - overlapping sprites subtractively cancel
-// instead of blending. Alpha is a coverage value for blending purposes; clamping it here
-// doesn't change the RGB math above.
+// simBlur is authored (and CPU-side offset-corrected - see SpriteResources' writePropertiesData)
+// as a discrete blur-size *level*, then split at upload time into simBlurBucket/simBlurLod - see
+// this project's plan: "Fix lightmap sprite-blur pixelation on high-contrast content" and
+// LightmapBlurCascade (lightmap_blur_cascade.ts). Level 0 is the sharp, unblurred simulation
+// result (lightmapSharp, its own binding); levels 1..MAX_CASCADE_LEVELS are real, full-resolution
+// Gaussian blurs of the previous level (lightmapCascade1/2/3/4, never decimated, so there's no
+// resolution loss for high-contrast content like laser beams to alias against); levels past
+// MAX_CASCADE_LEVELS fall back to lightmapMipChain, a real decimated mip chain continuing past the
+// cascade. simBlurBucket selects which of those textures to sample (always at LOD 0 for the sharp/
+// cascade bindings, since those are single-mip; simBlurLod only matters for the lightmapMipChain
+// bucket) - a sprite picks one blur size and never blends between adjacent ones, matching the old
+// LightmapBlurPyramid design's same "no blending" guarantee.
 //
 // lightUV is *adapted*, not ported verbatim: the reference derives it from screen-space
 // NDC position (valid only because their camera happens to be aligned with the simulation's
@@ -58,8 +64,14 @@ struct SpriteProperties {
     simContribution: vec4<f32>,
     colorMod: vec4<f32>,
     opacity: f32,
-    simBlur: f32,
+    // LOD within whichever texture simBlurBucket selects - always 0 for the sharp/cascade
+    // bindings (all single-mip), only meaningful for the lightmapMipChain bucket.
+    simBlurLod: f32,
     primitiveShapeId: u32,
+    // Which lightmap texture to sample: 0 = lightmapSharp; 1..MAX_CASCADE_LEVELS = lightmapCascade1
+    // ..MAX_CASCADE_LEVELS, all at LOD 0; MAX_CASCADE_LEVELS+1 (sentinel) = lightmapMipChain at
+    // simBlurLod - see this file's header comment.
+    simBlurBucket: u32,
 }
 // Maps this sprite's base [0,1] UV into its texture's sub-rectangle within a shared atlas:
 // atlasUv = vec2(dot(vec3(uv, 1.0), row0.xyz), dot(vec3(uv, 1.0), row1.xyz)). A texture that
@@ -80,8 +92,18 @@ struct SpriteAtlasTransform {
 // once per frame regardless of how many textures are in play.
 @group(2) @binding(0) var mainTex: texture_2d<f32>;
 
-@group(3) @binding(0) var lightmapTex: texture_2d<f32>;
-@group(3) @binding(1) var lightmapSampler: sampler;
+// Binding 0: the sharp, unblurred lightmap (level 0). Bindings 1..4: LightmapBlurCascade's
+// full-resolution blurred levels 1..MAX_CASCADE_LEVELS. Binding 5: the decimated mip chain past
+// the cascade. Binding 6: one shared sampler - see SpriteResources' lightmapBindGroupLayout
+// comment. MAX_CASCADE_LEVELS is hardcoded to 4 here since WGSL can't import a TS constant across
+// the language boundary - must match sprite_resources.ts's MAX_CASCADE_LEVELS exactly.
+@group(3) @binding(0) var lightmapSharp: texture_2d<f32>;
+@group(3) @binding(1) var lightmapCascade1: texture_2d<f32>;
+@group(3) @binding(2) var lightmapCascade2: texture_2d<f32>;
+@group(3) @binding(3) var lightmapCascade3: texture_2d<f32>;
+@group(3) @binding(4) var lightmapCascade4: texture_2d<f32>;
+@group(3) @binding(5) var lightmapMipChain: texture_2d<f32>;
+@group(3) @binding(6) var lightmapSampler: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -124,13 +146,19 @@ fn vertex_main(@builtin(instance_index) instanceIndex: u32, @location(0) localPo
 // ellipse (2) needs an actual mask here, to approximate a circular sprite without a
 // separate mesh; unspecified (0) and rect (1) both render the full quad, matching the
 // reference's behavior.
-fn insideShape(shapeId: u32, uv: vec2<f32>) -> bool {
-    if (shapeId == 2u) {
-        discard;
-        let centered = (uv - vec2<f32>(0.5, 0.5));
-        return dot(centered, centered) <= 0.25;
-    }
-    return true;
+//
+// Antialiased (fwidth-based smoothstep), not a boolean cutoff: a hard-edged circle mask leaves
+// visible rasterization gaps where two ellipse sprites' edges pass close to each other (a pixel
+// can fall just outside both hard boundaries even though it's visually inside their union) -
+// showed up as stray dark pixels where two overlapping cloud puffs' edges nearly meet.
+fn shapeCoverage(shapeId: u32, uv: vec2<f32>) -> f32 {
+    // fwidth computed unconditionally, outside the shapeId branch - WGSL requires derivatives to
+    // be called from uniform control flow, and shapeId varies per-instance (non-uniform across a
+    // draw call's fragments).
+    let dist = length(uv - vec2<f32>(0.5, 0.5));
+    let edgeWidth = max(fwidth(dist), 1e-5);
+    let ellipseCoverage = 1.0 - smoothstep(0.5 - edgeWidth, 0.5 + edgeWidth, dist);
+    return select(1.0, ellipseCoverage, shapeId == 2u);
 }
 
 @fragment
@@ -149,19 +177,38 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(debugColor, 1.0);
     }
 
-    let baseColor = textureSample(mainTex, mainSampler, in.atlasUv);
+    // mainTex is stored premultiplied (see TextureCache) to avoid dark edge fringing under
+    // bilinear filtering - un-premultiply back to straight color for this shader's own math.
+    let sampled = textureSample(mainTex, mainSampler, in.atlasUv);
+    let baseColor = vec4<f32>(select(vec3<f32>(0.0), sampled.rgb / sampled.a, sampled.a > 0.0001), sampled.a);
 
     let simLocal = camera.simInverseWorldTransform * in.worldPos;
     var lightUV = simLocal.xy + vec2<f32>(0.5, 0.5);
     lightUV.y = 1.0f - lightUV.y;
-    let lightSample = textureSampleLevel(lightmapTex, lightmapSampler, lightUV, props.simBlur);
+    // simBlurBucket is flat (per-primitive-constant, see VertexOutput.propertiesIndex) and every
+    // branch below uses textureSampleLevel's explicit LOD (no derivatives), so this non-uniform
+    // branch across sprites in the same draw call is legal WGSL - see this project's plan.
+    var lightSample: vec4<f32>;
+    if (props.simBlurBucket == 0u) {
+        lightSample = textureSampleLevel(lightmapSharp, lightmapSampler, lightUV, 0.0);
+    } else if (props.simBlurBucket == 1u) {
+        lightSample = textureSampleLevel(lightmapCascade1, lightmapSampler, lightUV, 0.0);
+    } else if (props.simBlurBucket == 2u) {
+        lightSample = textureSampleLevel(lightmapCascade2, lightmapSampler, lightUV, 0.0);
+    } else if (props.simBlurBucket == 3u) {
+        lightSample = textureSampleLevel(lightmapCascade3, lightmapSampler, lightUV, 0.0);
+    } else if (props.simBlurBucket == 4u) {
+        lightSample = textureSampleLevel(lightmapCascade4, lightmapSampler, lightUV, 0.0);
+    } else {
+        lightSample = textureSampleLevel(lightmapMipChain, lightmapSampler, lightUV, props.simBlurLod);
+    }
 
     let light = lightSample * props.simContribution + props.ambient;
     var color = baseColor * light * props.colorMod;
-    color = color + props.emissive;
+    color = vec4<f32>(color.rgb + props.emissive.rgb, color.a);
     color = color * props.opacity;
 
-    let inside = insideShape(props.primitiveShapeId, in.uv);
-    let alpha = select(0.0, clamp(color.a, 0.0, 1.0), inside);
+    let coverage = shapeCoverage(props.primitiveShapeId, in.uv);
+    let alpha = clamp(color.a, 0.0, 1.0) * coverage;
     return vec4<f32>(color.rgb, alpha);
 }

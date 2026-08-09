@@ -57,11 +57,27 @@ fn vertex_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
     return out;
 }
 
+// Alpha for compositing this pass over a preceding Background-bypass sprite pass, rather than
+// overwriting it outright (see litbox_scene_renderer.ts's render()). Deliberately *not* the HDR
+// buffer's own alpha: the simulation's additive composite covers almost the entire camera frustum
+// with a single world-space quad regardless of how dark it is there (see
+// simulation_composite.wgsl), so "did anything draw here" is ~always true and can't distinguish
+// empty night sky from a lit ship - it would never let a Background sprite show through anywhere.
+// The display-referred color's own brightness is the right signal instead: a pixel that tonemaps
+// to (near) black has nothing to show *regardless of source*, so it's correct to treat it as
+// transparent and let the background through; a pixel with real brightness represents real scene
+// content and should occlude it. max(r,g,b) (not luminance's weighted sum) so a fully-saturated
+// but dim-average color (e.g. pure blue) still counts as "something's there."
+fn compositeAlpha(displayColor: vec3<f32>) -> f32 {
+    return saturate(max(max(displayColor.r, displayColor.g), displayColor.b));
+}
+
 @fragment
 fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hdr = textureSample(hdrTex, hdrSampler, in.uv).rgb;
     if (tonemapUniform.enabled < 0.5) {
-        return vec4<f32>(linearToSrgb(hdr), 1.0);
+        let ldr = linearToSrgb(hdr);
+        return vec4<f32>(ldr, compositeAlpha(ldr));
     }
     var shape = toneMapDefaultShape();
     shape.exposure = tonemapUniform.exposure;
@@ -71,5 +87,6 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // mapped is linear (the smoothstep curve, not a display transform on its own) - gamma-encode
     // before writing, since the swapchain's presentation format is never an "-srgb" variant (see
     // linearToSrgb's doc comment in LitboxCommon.wgsl).
-    return vec4<f32>(linearToSrgb(mapped), 1.0);
+    let ldr = linearToSrgb(mapped);
+    return vec4<f32>(ldr, compositeAlpha(ldr));
 }

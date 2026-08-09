@@ -16,12 +16,29 @@ const SPRITE_INDEX_STRIDE_BYTES = 16;
 const SPRITE_PROPERTIES_STRIDE_BYTES = 80;
 const SPRITE_ATLAS_STRIDE_BYTES = 32;
 
+/**
+ * Fixed number of full-resolution *blurred* cascade texture slots reserved in the lightmap bind
+ * group layout/pipeline, matching the max of the blurCascadeLevelCount tunable - see this
+ * project's plan: "Fix lightmap sprite-blur pixelation on high-contrast content". Doesn't count
+ * the sharp (level 0, unblurred) lightmap itself, which always gets its own separate binding -
+ * see buildLightmapBindGroup. Fixed (not sized to the live tunable) so changing it never requires
+ * rebuilding pipeline layouts - unused slots bind the shared black-texture fallback instead. Must
+ * match sprite.wgsl's own hardcoded slot count (WGSL can't import a TS constant across the
+ * language boundary - same manually-kept-in-sync situation as RaytracedResources.DENSITY_SCALE,
+ * see CLAUDE.md) and denoiser_tunables_panel.ts's blurCascadeLevelCount row max.
+ */
+export const MAX_CASCADE_LEVELS = 4;
+
 interface ResolvedSprite {
     ownerId: number;
     sprite: SceneSprite; // live reference - re-read on every properties update, not just captured at resolve time
     layer: number;
     sortOrder: number;
     isActive: boolean;
+    // Captured once at resolve time, like layer/sortOrder - nothing currently toggles this on a
+    // live sprite. See draw()/drawBypass() and litbox_scene_renderer.ts's render() for how this
+    // routes a sprite around the tonemap curve entirely.
+    bypassTonemapping: boolean;
     texture: GPUTexture;
     transformEntry: Entry; // into the shared TransformResources array
     propertiesEntry: Entry;
@@ -51,6 +68,15 @@ interface ResolvedSprite {
 export class SpriteResources {
     private device: GPUDevice;
     private pipeline: GPURenderPipeline | null = null;
+    // Same shader module/pipeline layout as `pipeline` - only the fragment target format differs
+    // (the canvas's own `-srgb` view format instead of the HDR float format). Used by
+    // drawBypass() to draw Background/Overlay sprites straight into the swapchain, skipping the
+    // tonemap curve entirely - see litbox_scene_renderer.ts's render(). Deliberately not a
+    // WGSL-level variant (no #ifdef, no second entry point): the shader always just outputs
+    // linear color, and it's the destination view's format that decides whether that gets stored
+    // as-is (HDR float) or hardware-gamma-encoded on write (the `-srgb` view), the same mechanism
+    // already used in reverse when sampling an `-srgb` texture auto-decodes on read.
+    private bypassPipeline: GPURenderPipeline | null = null;
     private sharedBindGroupLayout: GPUBindGroupLayout | null = null;
     private textureBindGroupLayout: GPUBindGroupLayout | null = null;
     private lightmapBindGroupLayout: GPUBindGroupLayout | null = null;
@@ -71,6 +97,12 @@ export class SpriteResources {
 
     private textureCache: TextureCache | null = null;
     private transformResources: TransformResources | null = null;
+    /** Stored from loadFromScene purely so draw() can poll it each frame for refreshLightmapCascade's change detection - never used for anything else. */
+    private simulationResources: SimulationResources | null = null;
+    /** SimulationResources.getSpriteBlurMipOffset() as of the last loadFromScene - see writePropertiesData. */
+    private blurMipOffset = 0;
+    /** SimulationResources.getBlurCascadeLevelCount() as of the last refreshLightmapCascade (or loadFromScene) - see writePropertiesData and draw()'s change-detection check. */
+    private blurCascadeLevelCount = -1;
 
     /**
      * True while loadFromScene/removeSprite/removeByOwnerIds is already mid-flight - each of
@@ -92,7 +124,7 @@ export class SpriteResources {
         this.indexArray.onBufferReplaced(() => { this.sharedBindGroupDirty = true; });
     }
 
-    public initialize(cameraBindGroupLayout: GPUBindGroupLayout, hdrFormat: GPUTextureFormat): void {
+    public initialize(cameraBindGroupLayout: GPUBindGroupLayout, hdrFormat: GPUTextureFormat, presentationFormatSrgb: GPUTextureFormat): void {
         this.sharedBindGroupLayout = this.device.createBindGroupLayout({
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }, // spriteIndices
@@ -107,33 +139,54 @@ export class SpriteResources {
                 { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
             ],
         });
-        this.lightmapBindGroupLayout = this.device.createBindGroupLayout({
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-                { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-            ],
-        });
+        // Binding 0: the sharp, unblurred lightmap itself (level 0 - see SimulationResources.
+        // getLightmapView). Bindings 1..MAX_CASCADE_LEVELS: LightmapBlurCascade's full-resolution
+        // blurred levels 1..MAX_CASCADE_LEVELS (getLightmapCascadeViews). Binding
+        // MAX_CASCADE_LEVELS+1: the decimated mip chain past the cascade (getLightmapMipChainView).
+        // Binding MAX_CASCADE_LEVELS+2: shared sampler - one suffices, every texture here is either
+        // single-mip or sampled at an explicit LOD, so mipmapFilter never matters.
+        const lightmapBindGroupLayoutEntries: GPUBindGroupLayoutEntry[] = [];
+        for (let i = 0; i <= MAX_CASCADE_LEVELS + 1; i++) {
+            lightmapBindGroupLayoutEntries.push({ binding: i, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } });
+        }
+        lightmapBindGroupLayoutEntries.push({ binding: MAX_CASCADE_LEVELS + 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } });
+        this.lightmapBindGroupLayout = this.device.createBindGroupLayout({ entries: lightmapBindGroupLayoutEntries });
 
         const shaderModule = this.device.createShaderModule({ code: preprocessShader(spriteShaderCode) });
+        const pipelineLayout = this.device.createPipelineLayout({
+            bindGroupLayouts: [cameraBindGroupLayout, this.sharedBindGroupLayout, this.textureBindGroupLayout, this.lightmapBindGroupLayout],
+        });
+        const vertex: GPUVertexState = {
+            module: shaderModule,
+            entryPoint: 'vertex_main',
+            buffers: [QUAD_VERTEX_BUFFER_LAYOUT],
+        };
+        // Standard straight-alpha "over" blend - also relied on by drawBypass()'s callers (see
+        // litbox_scene_renderer.ts's render()) to composite over whatever's already in the
+        // swapchain rather than overwrite it.
+        const blend: GPUBlendState = {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        };
         this.pipeline = this.device.createRenderPipeline({
-            layout: this.device.createPipelineLayout({
-                bindGroupLayouts: [cameraBindGroupLayout, this.sharedBindGroupLayout, this.textureBindGroupLayout, this.lightmapBindGroupLayout],
-            }),
-            vertex: {
-                module: shaderModule,
-                entryPoint: 'vertex_main',
-                buffers: [QUAD_VERTEX_BUFFER_LAYOUT],
-            },
+            layout: pipelineLayout,
+            vertex,
             fragment: {
                 module: shaderModule,
                 entryPoint: 'fragment_main',
-                targets: [{
-                    format: hdrFormat,
-                    blend: {
-                        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                    },
-                }],
+                targets: [{ format: hdrFormat, blend }],
+            },
+            primitive: { topology: 'triangle-list' },
+        });
+        // Same shaderModule/pipelineLayout/blend as `pipeline` above - only the target format
+        // differs. See the bypassPipeline field doc for why this needs no WGSL changes.
+        this.bypassPipeline = this.device.createRenderPipeline({
+            layout: pipelineLayout,
+            vertex,
+            fragment: {
+                module: shaderModule,
+                entryPoint: 'fragment_main',
+                targets: [{ format: presentationFormatSrgb, blend }],
             },
             primitive: { topology: 'triangle-list' },
         });
@@ -156,6 +209,9 @@ export class SpriteResources {
             throw new Error('SpriteResources.initialize() must be called before loadFromScene().');
         }
         this.textureCache = textureCache;
+        this.simulationResources = simulationResources;
+        this.blurMipOffset = simulationResources.getSpriteBlurMipOffset();
+        this.blurCascadeLevelCount = simulationResources.getBlurCascadeLevelCount();
         this.registerTransformResources(transformResources);
 
         this.bulkOpInProgress = true;
@@ -171,14 +227,7 @@ export class SpriteResources {
             this.sprites = [];
             this.indexEntries = [];
 
-            const lightmapView = simulationResources.getLightmapView();
-            this.lightmapBindGroup = this.device.createBindGroup({
-                layout: this.lightmapBindGroupLayout,
-                entries: [
-                    { binding: 0, resource: lightmapView ?? textureCache.getBlackTexture().createView() },
-                    { binding: 1, resource: simulationResources.getSampler() },
-                ],
-            });
+            this.lightmapBindGroup = this.buildLightmapBindGroup(simulationResources, textureCache);
 
             this.sprites = await Promise.all(scene.sprites.map(sprite => this.resolveSprite(sprite, sceneGraph, textureCache, transformResources)));
         } finally {
@@ -188,26 +237,49 @@ export class SpriteResources {
     }
 
     /**
-     * Draws every visible (active, layerFilter-passing) sprite, walking the draw-ordered list
-     * once and issuing one instanced draw call per maximal run of consecutive, visible entries
-     * that share a texture - a run breaks on a texture change *or* on a non-visible entry in
-     * between (an inactive sprite, or one on the wrong side of layerFilter), since a single
-     * instanced draw can't skip an instance in the middle of its [firstInstance, firstInstance
-     * + instanceCount) range. This never changes draw order, only how many draw calls express
-     * it - see rebuildDrawOrder for why same-texture entries tend to already be adjacent.
+     * Draws every visible (active, layerFilter-passing), non-bypass sprite - the regular HDR
+     * path. See drawBypass() for the complementary Background/Overlay (bypassTonemapping: true)
+     * sprites, which skip this pipeline (and the tonemap curve) entirely.
      */
     public draw(passEncoder: GPURenderPassEncoder, layerFilter: (layer: number) => boolean): void {
-        if (!this.pipeline || !this.lightmapBindGroup) {
+        this.drawFiltered(passEncoder, this.pipeline, resolved => resolved.isActive && layerFilter(resolved.layer) && !resolved.bypassTonemapping);
+    }
+
+    /**
+     * Draws every visible, bypassTonemapping sprite matching layerFilter, using bypassPipeline
+     * (targets the swapchain's own `-srgb` view, not the HDR buffer) instead of the regular
+     * pipeline - see litbox_scene_renderer.ts's render() for where this is called relative to the
+     * tonemap pass (once before it for the layer<=0 "Background" tier, once after for the
+     * layer>=1 "Overlay" tier) and why the swapchain must be cleared opaque beforehand.
+     */
+    public drawBypass(passEncoder: GPURenderPassEncoder, layerFilter: (layer: number) => boolean): void {
+        this.drawFiltered(passEncoder, this.bypassPipeline, resolved => resolved.isActive && layerFilter(resolved.layer) && resolved.bypassTonemapping);
+    }
+
+    /**
+     * Shared draw-order walk behind draw()/drawBypass(): walks the draw-ordered list once and
+     * issues one instanced draw call per maximal run of consecutive, isVisible-passing entries
+     * that share a texture - a run breaks on a texture change *or* on a non-visible entry in
+     * between, since a single instanced draw can't skip an instance in the middle of its
+     * [firstInstance, firstInstance + instanceCount) range. This never changes draw order, only
+     * how many draw calls express it - see rebuildDrawOrder for why same-texture entries tend to
+     * already be adjacent.
+     */
+    private drawFiltered(passEncoder: GPURenderPassEncoder, pipeline: GPURenderPipeline | null, isVisible: (resolved: ResolvedSprite) => boolean): void {
+        if (!pipeline || !this.lightmapBindGroup) {
             return;
         }
         if (this.sharedBindGroupDirty) {
             this.rebuildSharedBindGroup();
         }
+        if (this.simulationResources && this.simulationResources.getBlurCascadeLevelCount() !== this.blurCascadeLevelCount) {
+            this.refreshLightmapCascade();
+        }
         if (!this.sharedBindGroup) {
             return;
         }
 
-        passEncoder.setPipeline(this.pipeline);
+        passEncoder.setPipeline(pipeline);
         passEncoder.setVertexBuffer(0, this.vertexBuffer);
         passEncoder.setBindGroup(1, this.sharedBindGroup);
         passEncoder.setBindGroup(3, this.lightmapBindGroup);
@@ -229,7 +301,7 @@ export class SpriteResources {
 
         for (let i = 0; i < this.sprites.length; i++) {
             const resolved = this.sprites[i];
-            const visible = resolved.isActive && layerFilter(resolved.layer);
+            const visible = isVisible(resolved);
             if (!visible || resolved.texture !== runTexture) {
                 flushRun(i);
             }
@@ -315,7 +387,7 @@ export class SpriteResources {
             return;
         }
         const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
-        this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
+        this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId, this.blurMipOffset, this.blurCascadeLevelCount));
 
         const targetImage = sprite.image;
         if (targetImage !== resolved.lastResolvedImage && resolved.pendingImage !== targetImage) {
@@ -374,7 +446,7 @@ export class SpriteResources {
         const shapeId = resolvePrimitiveShapeId(sprite.primitiveShape);
 
         const transformEntry = transformResources.ensureEntry(sprite.ownerId, sceneGraph);
-        const propertiesEntry = this.propertiesArray.insertStatic((view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId));
+        const propertiesEntry = this.propertiesArray.insertStatic((view, byteOffset) => writePropertiesData(view, byteOffset, sprite, shapeId, this.blurMipOffset, this.blurCascadeLevelCount));
         const atlasEntry = this.atlasArray.insertStatic((view, byteOffset) => writeAtlasData(view, byteOffset, uvTransform));
         this.ensureTextureBindGroup(texture);
 
@@ -384,6 +456,7 @@ export class SpriteResources {
             layer: sprite.layer,
             sortOrder: sprite.sortOrder,
             isActive,
+            bypassTonemapping: sprite.bypassTonemapping,
             texture,
             transformEntry,
             propertiesEntry,
@@ -468,6 +541,42 @@ export class SpriteResources {
         });
     }
 
+    /** Binds the sharp lightmap, LightmapBlurCascade's current blurred levels, and the mip chain, padding any unused cascade slot (below MAX_CASCADE_LEVELS) with the shared black texture - see the lightmapBindGroupLayout comment in initialize(). */
+    private buildLightmapBindGroup(simulationResources: SimulationResources, textureCache: TextureCache): GPUBindGroup {
+        const blackView = textureCache.getBlackTexture().createView();
+        const cascadeViews = simulationResources.getLightmapCascadeViews();
+        const entries: GPUBindGroupEntry[] = [];
+        entries.push({ binding: 0, resource: simulationResources.getLightmapView() ?? blackView });
+        for (let i = 0; i < MAX_CASCADE_LEVELS; i++) {
+            entries.push({ binding: i + 1, resource: cascadeViews[i] ?? blackView });
+        }
+        entries.push({ binding: MAX_CASCADE_LEVELS + 1, resource: simulationResources.getLightmapMipChainView() ?? blackView });
+        entries.push({ binding: MAX_CASCADE_LEVELS + 2, resource: simulationResources.getSampler() });
+        return this.device.createBindGroup({ layout: this.lightmapBindGroupLayout!, entries });
+    }
+
+    /**
+     * Rebinds the lightmap bind group against LightmapBlurCascade's just-reallocated textures and
+     * re-derives every sprite's simBlurBucket/simBlurLod split against the new cascade level
+     * count - see writePropertiesData. Triggered from draw()'s per-frame poll of
+     * SimulationResources.getBlurCascadeLevelCount(), which only actually changes right after the
+     * blurCascadeLevelCount tunable does (see SimulationResources.ensureBlurCascadeAllocated), so
+     * this is cheap to poll but rarely does real work.
+     */
+    private refreshLightmapCascade(): void {
+        if (!this.simulationResources || !this.textureCache || !this.lightmapBindGroupLayout) {
+            return;
+        }
+        this.lightmapBindGroup = this.buildLightmapBindGroup(this.simulationResources, this.textureCache);
+        this.blurCascadeLevelCount = this.simulationResources.getBlurCascadeLevelCount();
+
+        for (const resolved of this.sprites) {
+            const shapeId = resolvePrimitiveShapeId(resolved.sprite.primitiveShape);
+            this.propertiesArray.writeEntry(resolved.propertiesEntry, (view, byteOffset) =>
+                writePropertiesData(view, byteOffset, resolved.sprite, shapeId, this.blurMipOffset, this.blurCascadeLevelCount));
+        }
+    }
+
     private rebuildSharedBindGroup(): void {
         if (!this.sharedBindGroupLayout || !this.transformResources || !this.textureCache) {
             return;
@@ -515,7 +624,7 @@ function writeAtlasData(view: DataView, byteOffset: number, uvTransform: UvTrans
     view.setFloat32(byteOffset + 28, 0, true);
 }
 
-function writePropertiesData(view: DataView, byteOffset: number, sprite: SceneSprite, shapeId: number): void {
+function writePropertiesData(view: DataView, byteOffset: number, sprite: SceneSprite, shapeId: number, blurMipOffset: number, blurCascadeLevelCount: number): void {
     // ambient/emissive/simContribution/colorMod are authored/stored in sRGB (matching Unity's
     // Inspector-authored Color, see color_space.ts) - converted to linear here, at GPU-upload
     // time, since PortfolioSpriteShader.shader declares all 4 corresponding properties
@@ -542,7 +651,27 @@ function writePropertiesData(view: DataView, byteOffset: number, sprite: SceneSp
     view.setFloat32(byteOffset + 56, colorMod.b, true);
     view.setFloat32(byteOffset + 60, colorMod.a, true);
     view.setFloat32(byteOffset + 64, sprite.opacity, true);
-    view.setFloat32(byteOffset + 68, sprite.simBlur, true);
+    // See computeSpriteBlurMipOffset (simulation.ts): simBlur is authored assuming the lightmap's
+    // mip 0 is at the scene's natural resolution, which a scaled-down device profile violates -
+    // clamped to 0 since a negative level isn't valid. Rounded since simBlur is always meant to be
+    // a whole number (see sprite.wgsl's header comment) - defends only against float drift from
+    // the blurMipOffset subtraction, not against genuinely fractional authoring.
+    const level = Math.round(Math.max(0, sprite.simBlur - blurMipOffset));
+    // Split into which texture to sample (simBlurBucket) and the LOD within it (simBlurLod, only
+    // meaningful for the mip-chain bucket - every cascade slot, including the sharp level-0
+    // binding, is single-mip) - see sprite.wgsl's SpriteProperties and this project's plan.
+    // Bucket 0 is the sharp lightmap itself (level 0); buckets 1..cascadeLevelCount are
+    // LightmapBlurCascade's exposed blurred levels (bucket i <-> cascade slot i-1, since level 0
+    // isn't part of that array - see SimulationResources.getLightmapCascadeViews); anything past
+    // cascadeLevelCount falls back to the mip-chain sentinel bucket (MAX_CASCADE_LEVELS+1).
+    // cascadeLevelCount is clamped defensively: blurCascadeLevelCount comes from a live tunable
+    // (or -1 before the first SimulationResources.run() of a session has allocated anything), not
+    // a value this function controls.
+    const cascadeLevelCount = Math.max(0, Math.min(Math.round(blurCascadeLevelCount), MAX_CASCADE_LEVELS));
+    const useMipChain = level > cascadeLevelCount;
+    const simBlurBucket = useMipChain ? MAX_CASCADE_LEVELS + 1 : level;
+    const simBlurLod = useMipChain ? level - cascadeLevelCount - 1 : 0;
+    view.setFloat32(byteOffset + 68, simBlurLod, true);
     view.setUint32(byteOffset + 72, shapeId, true);
-    // Bytes 76-79 are unused padding (WGSL rounds the struct up to a 16-byte multiple).
+    view.setUint32(byteOffset + 76, simBlurBucket, true);
 }

@@ -59,7 +59,28 @@ export class TonemapResources {
         this.pipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
             vertex: { module: shaderModule, entryPoint: 'vertex_main' },
-            fragment: { module: shaderModule, entryPoint: 'fragment_main', targets: [{ format: presentationFormat }] },
+            fragment: {
+                module: shaderModule,
+                entryPoint: 'fragment_main',
+                targets: [{
+                    format: presentationFormat,
+                    // Premultiplied-style "over" blend, NOT the straight-alpha recipe
+                    // sprite_resources.ts's pipelines use: tonemap.wgsl's fragment_main already
+                    // returns the exact intended display color in `ldr` (see compositeAlpha's doc
+                    // comment there) - it isn't unpremultiplied the way a sprite's sampled texture
+                    // color is, so blending with `srcFactor: 'src-alpha'` here would multiply that
+                    // color by its own derived alpha a second time, darkening every pixel that
+                    // isn't already fully black or fully saturated. `srcFactor: 'one'` writes `ldr`
+                    // as-is and only scales down the *destination* by (1 - alpha), which is exactly
+                    // "let the Background-bypass sprite pass's content bleed through in proportion
+                    // to how dark this pixel is" - see litbox_scene_renderer.ts's render() for why
+                    // the swapchain's first clear of the frame must be opaque for this to be safe.
+                    blend: {
+                        color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    },
+                }],
+            },
             primitive: { topology: 'triangle-list' },
         });
 

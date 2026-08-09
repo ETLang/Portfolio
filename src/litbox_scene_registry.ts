@@ -16,4 +16,4 @@ export const SCENE_REGISTRY: Record<string, SceneRegistryEntry> = {
     'battle': { label: 'Battle', load: () => BattleScene.load() },
 };
 
-export const DEFAULT_SCENE_KEY: keyof typeof SCENE_REGISTRY = 'cornell-square';
+export const DEFAULT_SCENE_KEY: keyof typeof SCENE_REGISTRY = 'battle';

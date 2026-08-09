@@ -182,6 +182,27 @@ async function main() {
             }, { key: command.key, value: command.value });
             return { property: `denoiser.${command.key}`, value: command.value };
         }
+        if (command.kind === 'simulation-tunable') {
+            await page.evaluate(({ key, value }) => {
+                window.litboxRenderer.getSimulationResources().simulationTunables[key] = value;
+            }, { key: command.key, value: command.value });
+            return { property: `simulation.${command.key}`, value: command.value };
+        }
+        if (command.kind === 'simulation-size') {
+            // Resolves the OTHER dimension from the simulation's current (device-scaled) effective
+            // resolution, so a single-dimension call still produces a valid resizeSimulation(width,
+            // height) pair - see resizeSimulation's own doc comment for why this is a full async
+            // scene rebuild, not a plain property write like the tunables above.
+            const resolvedSize = await page.evaluate(async ({ dimension, value }) => {
+                const resources = window.litboxRenderer.getSimulationResources();
+                const current = resources.getEffectiveResolution() ?? { width: value, height: value };
+                const width = dimension === 'width' ? value : current.width;
+                const height = dimension === 'height' ? value : current.height;
+                await window.litboxRenderer.resizeSimulation(width, height);
+                return { width, height };
+            }, { dimension: command.dimension, value: command.value });
+            return { property: `simulation.${command.dimension}`, value: command.value, resolvedSize };
+        }
         if (command.kind === 'scene-slider') {
             const result = await page.evaluate(({ label, value }) => {
                 const scene = window.litboxRenderer.getActiveScene();

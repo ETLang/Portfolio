@@ -18,9 +18,10 @@ const LIGHT_KIND_DEFINE: Record<LightKind, string> = {
 // uniform-address-space struct layout rules: mat4x4 at 0 (64 bytes), vec3 at 64 (padded to 16),
 // bounces/seedBase/halfIndex (u32) packed into that vec3's trailing padding at 76/80/84,
 // directionalLightDirection (vec2, 8-byte aligned) at 88, lightPinch at 96, two f32 at 104/108,
-// then directionalLightSegmentStart/Vector (vec2 each, 8-byte aligned) at 112/120 - total 128
-// bytes).
-const UNIFORMS_SIZE_BYTES = 128;
+// directionalLightSegmentStart/Vector (vec2 each, 8-byte aligned) at 112/120, then
+// surfaceBias/ambientScatterSoftness (f32 each) at 128/132, padded out to the struct's overall
+// 16-byte alignment (from the leading mat4x4) - total 144 bytes).
+const UNIFORMS_SIZE_BYTES = 144;
 
 export interface ForwardMonteCarloSwitches {
     /**
@@ -62,6 +63,10 @@ export interface ForwardMonteCarloUniforms {
     integrationIntervalSquared: number;
     /** This light's ray budget for this frame - also the dispatch extent, see updateUniforms. */
     rays: number;
+    /** SimulationTunables.surfaceBias - self-intersection pushback after a bounce (forward_monte_carlo.wgsl's scatterMaterially). */
+    surfaceBias: number;
+    /** SimulationTunables.ambientScatterSoftness - ambient emitLight's direction-perturbation divisor. */
+    ambientScatterSoftness: number;
 }
 
 /**
@@ -188,6 +193,8 @@ export class ForwardMonteCarloOperation extends ComputeOperation {
         view.setFloat32(116, uniforms.directionalLightSegmentStart[1], true);
         view.setFloat32(120, uniforms.directionalLightSegmentVector[0], true);
         view.setFloat32(124, uniforms.directionalLightSegmentVector[1], true);
+        view.setFloat32(128, uniforms.surfaceBias, true);
+        view.setFloat32(132, uniforms.ambientScatterSoftness, true);
 
         let buffer = this.uniformBufferPool[this.nextSlot];
         if (!buffer) {

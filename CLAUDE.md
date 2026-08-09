@@ -118,6 +118,31 @@ op.execute(encoder);
   are only a handful of simulation operations - no indexing, no byte offsets. `updateUniforms`
   always writes to offset 0 of a single buffer, sized lazily from whatever's first written to
   it - no separately-declared size constant to keep in sync with the shader's struct.
+  - **Exception: an operation dispatched more than once per frame needs a per-dispatch buffer
+    pool, not one reused buffer.** `GPUQueue.writeBuffer()` and `GPUQueue.submit()` are ordered
+    strictly by JS call order on the queue's timeline, but recording a compute pass into a
+    `GPUCommandEncoder` does *not* snapshot whatever a bound buffer currently holds - a dispatch
+    only reads the buffer's contents once the GPU actually reaches it, which for every dispatch
+    in a frame is *after* every `writeBuffer()` call issued before that frame's one `submit()`.
+    An operation whose `execute()` is called several times per frame (once per light instance,
+    once per blur pass, etc.), all recorded into the same not-yet-submitted encoder, therefore
+    can't just call `queue.writeBuffer()` on a single persistent buffer before each call - every
+    earlier dispatch will silently end up reading whichever call happened *last*, not the value
+    that was current when it was recorded. Hit twice in this codebase: `ForwardMonteCarloOperation`
+    (each light instance/half wrote to the same buffer - `centerVariance` read as saturated
+    almost everywhere, not real scene noise, until fixed) and `LightmapBlurCascade`'s
+    `GaussianBlurPassOperation` (every blur pass silently read the last-recorded direction,
+    producing blur that looked vertical-only even where a horizontal pass should have run). The
+    fix both times: `uniformBufferPool: GPUBuffer[]` + a `nextSlot` cursor that climbs on every
+    `updateUniforms()` call (allocating one more buffer only the first time it needs to), plus a
+    `beginFrame()` that resets `nextSlot` to 0 once per frame (safe to reuse slot 0 across frames
+    even if the GPU is still processing last frame's submitted work referencing it, since a write
+    issued after last frame's `submit()` - which this always is - is guaranteed to only be
+    visible to subsequently submitted work). See `ForwardMonteCarloOperation.uniformBufferPool`/
+    `GaussianBlurPassOperation` for the pattern to copy. `ComputeOperation.execute()` now throws
+    if it detects the unsafe pattern (same encoder, unchanged uniform bind group, called twice) -
+    but that's a backstop for a mistake already made, not a substitute for using the pool pattern
+    from the start in any new multi-dispatch-per-frame operation.
 - **Dispatch size is computed by the operation itself, not passed in by the caller.**
   `execute(encoder)` takes no width/height/item-count parameters - each subclass knows its own
   dispatch extent from whatever it was last given via `updateOutputs` (e.g. an output

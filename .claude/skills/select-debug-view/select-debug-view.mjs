@@ -4,6 +4,7 @@ import { callDaemon } from '../_shared/litbox-daemon-client.mjs';
 const VALID_VIEWS = [
     'albedo', 'density', 'normal', 'roughness', 'lightmap',
     'irradiance-a', 'irradiance-b', 'combined-irradiance', 'raw-variance', 'filtered-variance',
+    'blur-size',
 ];
 
 function parseArgs(argv) {

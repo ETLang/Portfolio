@@ -14,6 +14,7 @@ const DENOISER_PARAMS: DenoiserParamMeta[] = [
     { key: 'varianceScale', label: 'Variance Scale', min: 0, max: 20, step: 0.1 },
     { key: 'darknessNoiseFloor', label: 'Darkness Noise Floor', min: 0, max: 0.5, step: 0.005 },
     { key: 'maxBlurMip', label: 'Max Blur Mip', min: 0, max: 8, step: 1 },
+    { key: 'densityBlurFalloff', label: 'Density Blur Falloff', min: 0.001, max: 0.1, step: 0.001 },
     { key: 'albedoSensitivity', label: 'Albedo Sensitivity', min: 0, max: 2, step: 0.01 },
     { key: 'densitySensitivity', label: 'Density Sensitivity', min: 0, max: 5, step: 0.05 },
     { key: 'normalSensitivity', label: 'Normal Sensitivity', min: 0, max: 32, step: 0.5 },
@@ -27,6 +28,12 @@ const DENOISER_PARAMS: DenoiserParamMeta[] = [
     { key: 'volatilityThreshold', label: 'Volatility Threshold', min: 0, max: 1, step: 0.01 },
     { key: 'detailThreshold', label: 'Detail Threshold', min: 0, max: 2, step: 0.01 },
     { key: 'varianceGateScale', label: 'Variance Gate Scale', min: 0, max: 100, step: 1 },
+    // LightmapBlurCascade (lightmap_blur_cascade.ts) - see this project's plan: "Fix lightmap
+    // sprite-blur pixelation on high-contrast content". max: 4 must match sprite_resources.ts's
+    // MAX_CASCADE_LEVELS exactly - it's the number of reserved texture slots in the sprite
+    // pipeline's lightmap bind group, not just a UI suggestion.
+    { key: 'blurCascadeLevelCount', label: 'Blur Cascade Level Count', min: 0, max: 4, step: 1 },
+    { key: 'blurCascadeSigma', label: 'Blur Cascade Sigma', min: 0.1, max: 8, step: 0.1 },
 ];
 
 /**

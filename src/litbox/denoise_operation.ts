@@ -29,6 +29,8 @@ export interface DenoiseUniforms {
     darknessNoiseFloor: number;
     /** Ceiling on the starting mip DecideBlurSize can choose - also clamped in-shader to combinedIrradiance's actual mip count. */
     maxBlurMip: number;
+    /** log2(1+opticalDepth) scale at which DecideBlurSize's density attenuation fully suppresses blur - see denoise.wgsl's doc comment for why this is both independent of DecideWeight's own density term and measured in this compressed unit rather than raw optical depth. */
+    densityBlurFalloff: number;
     /** DecideWeight's albedo-distance tolerance - larger allows blending across more different albedos. */
     albedoSensitivity: number;
     /** DecideWeight's optical-depth-distance tolerance. */
@@ -58,7 +60,7 @@ export interface DenoiseUniforms {
     frameIndex: number;
 }
 
-const UNIFORM_FIELD_COUNT = 11;
+const UNIFORM_FIELD_COUNT = 12;
 
 /**
  * Hierarchical guided blur over combinedIrradiance - see denoise.wgsl and this project's denoiser
@@ -95,6 +97,7 @@ export class DenoiseOperation extends ComputeOperation {
             && this.lastUniforms.varianceScale === uniforms.varianceScale
             && this.lastUniforms.darknessNoiseFloor === uniforms.darknessNoiseFloor
             && this.lastUniforms.maxBlurMip === uniforms.maxBlurMip
+            && this.lastUniforms.densityBlurFalloff === uniforms.densityBlurFalloff
             && this.lastUniforms.albedoSensitivity === uniforms.albedoSensitivity
             && this.lastUniforms.densitySensitivity === uniforms.densitySensitivity
             && this.lastUniforms.normalSensitivity === uniforms.normalSensitivity
@@ -121,6 +124,7 @@ export class DenoiseOperation extends ComputeOperation {
             uniforms.varianceScale,
             uniforms.darknessNoiseFloor,
             uniforms.maxBlurMip,
+            uniforms.densityBlurFalloff,
             uniforms.albedoSensitivity,
             uniforms.densitySensitivity,
             uniforms.normalSensitivity,
@@ -160,8 +164,9 @@ export class DenoiseOperation extends ComputeOperation {
         ]);
     }
 
-    public updateOutputs(output: GPUTextureView, width: number, height: number): void {
-        this.setOutputs([{ binding: 0, resource: output }]);
+    /** blurSizeDebug is diagnostic-only (see denoise.wgsl's blurSizeOutput) - written unconditionally every dispatch regardless of whether anything currently reads it via the 'blur-size' debug view. */
+    public updateOutputs(output: GPUTextureView, blurSizeDebug: GPUTextureView, width: number, height: number): void {
+        this.setOutputs([{ binding: 0, resource: output }, { binding: 1, resource: blurSizeDebug }]);
         this.setDispatchExtent(width, height);
     }
 }

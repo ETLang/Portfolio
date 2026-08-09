@@ -28,6 +28,13 @@
       </aside>
       <main class="workspace-viewport">
         <canvas></canvas>
+        <div class="webgpu-error-overlay" style="display: none;">
+          <div class="webgpu-error-content">
+            <h2>⚠️ WebGPU unavailable</h2>
+            <p class="webgpu-error-reason"></p>
+            <ul class="webgpu-error-tips"></ul>
+          </div>
+        </div>
         <div class="terminal-profiler" style="display: none;">
           <!-- Terminal/Profiler content -->
         </div>
@@ -45,7 +52,7 @@
       <footer class="status-bar">
         <div class="status-left">
           <span>branch: main</span>
-          <span>🟢 WebGPU: Active</span>
+          <span id="webgpu-status">🟢 WebGPU: Active</span>
         </div>
         <div class="status-center">
           <span>Click + Drag to rotate camera</span>

@@ -25,7 +25,7 @@ function makeObject(id: number, name: string, parentId: number): SceneObject {
     };
 }
 
-function makeSprite(ownerId: number): SceneSprite {
+function makeSprite(ownerId: number, bypassTonemapping = false): SceneSprite {
     return {
         ownerId,
         layer: 0,
@@ -38,6 +38,7 @@ function makeSprite(ownerId: number): SceneSprite {
         simContribution: WHITE,
         simBlur: 0,
         primitiveShape: 'rect',
+        bypassTonemapping,
     };
 }
 

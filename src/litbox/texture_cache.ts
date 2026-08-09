@@ -3,6 +3,19 @@ import { decodeExr } from './exr_loader.ts';
 
 const IDENTITY_UV_TRANSFORM: UvTransform = { a: 1, b: 0, c: 0, d: 0, e: 1, f: 0 };
 
+// Bakes straight alpha into RGB in place, so bilinear/mip filtering blends toward (0,0,0) at a
+// transparent texel instead of toward whatever arbitrary color the source PNG happened to store
+// there - avoids dark fringing at soft alpha edges. Consumers (sprite.wgsl, raytraced_gbuffer.wgsl)
+// un-premultiply right after sampling to get back a straight color for their own blend math.
+function premultiplyAlpha(pixels: Uint8ClampedArray): void {
+    for (let i = 0; i < pixels.length; i += 4) {
+        const a = pixels[i + 3] / 255;
+        pixels[i] = pixels[i] * a;
+        pixels[i + 1] = pixels[i + 1] * a;
+        pixels[i + 2] = pixels[i + 2] * a;
+    }
+}
+
 // ".bc1" file layout, written by the scene exporter's C# BinaryWriter (little-endian):
 //   char[4]  magic    "BC11"
 //   uint16   version  (currently always 1)
@@ -157,6 +170,7 @@ export class TextureCache {
         const context2d = canvas.getContext('2d')!;
         context2d.drawImage(bitmap, 0, 0);
         const pixels = context2d.getImageData(0, 0, bitmap.width, bitmap.height).data;
+        premultiplyAlpha(pixels);
 
         const texture = this.device.createTexture({
             size: [bitmap.width, bitmap.height],
