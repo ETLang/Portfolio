@@ -65,6 +65,7 @@ export interface CreateSpriteOptions extends CreateObjectOptions {
     simContribution?: Color;
     simBlur?: number;
     primitiveShape?: string;
+    bypassTonemapping?: boolean;
 }
 
 /** CreateObjectOptions plus the subset of RaytracedObject fields worth overriding per call; the rest default to a plain, unshaded white primitive. */
@@ -556,6 +557,7 @@ export abstract class LitboxScene {
             simContribution: options.simContribution ?? { r: 0, g: 0, b: 0, a: 0 },
             simBlur: options.simBlur ?? 0,
             primitiveShape: options.primitiveShape ?? 'rect',
+            bypassTonemapping: options.bypassTonemapping ?? false,
         };
 
         this.data.sprites.push(sprite);
