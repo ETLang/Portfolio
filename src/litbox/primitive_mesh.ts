@@ -34,8 +34,7 @@ export const QUAD_REGION_VERTICES: number[] = [
 ];
 
 // Region 1 (rect): ported from RTRect.cs - 12 vertices / 4 triangles, one triangle per edge (that
-// edge's 2 corners + the center point (0,0)), all 3 vertices of a triangle sharing that edge's
-// outward axis-aligned normal - a faceted "pinwheel" look, not a smooth surface.
+// edge's 2 corners + the center point (0,0)).
 export const RECT_REGION_VERTICES: number[] = [
     // Left triangle: normal (-1,0,0)
     -0.5, 0.5, -1, 0, 0,

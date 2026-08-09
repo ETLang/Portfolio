@@ -26,19 +26,19 @@ describe('primitive_mesh vertex data', () => {
         expect(RECT_REGION_VERTICES).toEqual([
             // Left triangle: normal (-1,0,0)
             -0.5, 0.5, -1, 0, 0,
-            0, 0, -1, 0, 0,
+            0, 0, 0, 0, 1,
             -0.5, -0.5, -1, 0, 0,
             // Top triangle: normal (0,1,0)
             0.5, 0.5, 0, 1, 0,
-            0, 0, 0, 1, 0,
+            0, 0, 0, 0, 1,
             -0.5, 0.5, 0, 1, 0,
             // Right triangle: normal (1,0,0)
             0.5, -0.5, 1, 0, 0,
-            0, 0, 1, 0, 0,
+            0, 0, 0, 0, 1,
             0.5, 0.5, 1, 0, 0,
             // Bottom triangle: normal (0,-1,0)
             -0.5, -0.5, 0, -1, 0,
-            0, 0, 0, -1, 0,
+            0, 0, 0, 0, 1,
             0.5, -0.5, 0, -1, 0,
         ]);
     });
