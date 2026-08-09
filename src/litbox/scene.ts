@@ -73,6 +73,10 @@ export interface SceneSprite {
     simContribution: Color;
     simBlur: number;
     primitiveShape: string;
+    // Skips the tonemap curve entirely - drawn straight into the swapchain, before (layer 0,
+    // "Background") or after (layer >= 1, "Overlay") the main tonemapped scene. See
+    // litbox_scene_renderer.ts's render() and SpriteResources.drawBypass.
+    bypassTonemapping: boolean;
 }
 
 export interface PointLight {
@@ -193,7 +197,11 @@ export function parseScene(json: string): Scene {
         objects: data.objects ?? [],
         cameras: data.cameras ?? [],
         raytraced: (data.raytraced ?? []).map(r => ({ ...r, sortOrder: r.sortOrder ?? 0 })),
-        sprites: (data.sprites ?? []).map(sprite => ({ ...sprite, sortOrder: sprite.sortOrder ?? 0 })),
+        sprites: (data.sprites ?? []).map(sprite => ({
+            ...sprite,
+            sortOrder: sprite.sortOrder ?? 0,
+            bypassTonemapping: sprite.bypassTonemapping ?? false,
+        })),
         pointLights: data.pointLights ?? [],
         spotlights: data.spotlights ?? [],
         laserLights: data.laserLights ?? [],

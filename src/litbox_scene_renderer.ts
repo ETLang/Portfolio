@@ -68,6 +68,8 @@ export class LitboxSceneRenderer {
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
     private presentationFormat!: GPUTextureFormat;
+    /** `${presentationFormat}-srgb` - the view format Background/Overlay bypass sprites render through so the GPU auto-gamma-encodes on write, skipping the tonemap pass entirely. See SpriteResources.drawBypass and render()'s bypass passes. */
+    private presentationFormatSrgb!: GPUTextureFormat;
     private presentationSize!: [number, number];
 
     private hdrFrameTexture!: GPUTexture;
@@ -402,11 +404,17 @@ export class LitboxSceneRenderer {
         }
         this.context = context;
         this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+        // getPreferredCanvasFormat() only ever returns 'bgra8unorm' or 'rgba8unorm' (never an
+        // '-srgb' variant itself - see LitboxCommon.wgsl's linearToSrgb doc), both of which have a
+        // valid '-srgb' sibling. Declared via viewFormats so render() can later request that
+        // sibling view from the same swapchain texture for the bypass sprite passes.
+        this.presentationFormatSrgb = `${this.presentationFormat}-srgb` as GPUTextureFormat;
         this.presentationSize = [this.canvas.width, this.canvas.height];
         this.context.configure({
             device: this.device,
             format: this.presentationFormat,
             alphaMode: 'premultiplied',
+            viewFormats: [this.presentationFormatSrgb],
         });
     }
 
@@ -432,7 +440,7 @@ export class LitboxSceneRenderer {
 
         this.simulationResources.initialize(this.cameraBindGroupLayout, this.lutResources);
         this.raytracedResources.initialize();
-        this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT);
+        this.spriteResources.initialize(this.cameraBindGroupLayout, HDR_FORMAT, this.presentationFormatSrgb);
 
         // Named debug views this renderer can blit in place of the normal render (see
         // debugView) - the first 4 come from the raytraced G-Buffer, 'lightmap' from the
@@ -802,7 +810,9 @@ export class LitboxSceneRenderer {
 
             // Steps 3-6: sprites + additive simulation composite into the offscreen HDR frame buffer.
             // No depth/stencil attachment - It's safe to presume the vast majority of objects have
-            // transparency, so just draw them back to front.
+            // transparency, so just draw them back to front. Non-bypass sprites only - Background/
+            // Overlay (bypassTonemapping: true) sprites skip this buffer and the tonemap curve
+            // entirely (see the two bypass passes below).
             const hdrPass = encoder.beginRenderPass({
                 colorAttachments: [{
                     view: this.hdrFrameTextureView,
@@ -817,12 +827,40 @@ export class LitboxSceneRenderer {
             this.spriteResources.draw(hdrPass, layer => layer >= 1);
             hdrPass.end();
 
-            // Step 7: tonemap the HDR frame buffer to the swapchain.
+            // Step 7: the swapchain texture, viewed two ways this frame - srgbSwapchainView for
+            // the two bypass sprite passes below (drawBypass's pipeline targets this format so the
+            // GPU auto-gamma-encodes on write), plainSwapchainView for the tonemap pass (which does
+            // its own manual gamma-encode in tonemap.wgsl, since it also runs the log curve).
+            const presentationTexture = this.context.getCurrentTexture();
+            const plainSwapchainView = presentationTexture.createView();
+            const srgbSwapchainView = presentationTexture.createView({ format: this.presentationFormatSrgb });
+
+            // Step 7a: Background-tier (layer <= 0) bypass sprites, drawn straight into the
+            // swapchain ahead of the tonemapped scene. This is the frame's first touch of the
+            // swapchain, so it clears - opaque (a: 1), not transparent, so that a scene with no
+            // bypass sprites still ends up solid black wherever the HDR buffer is empty, exactly
+            // as the old unconditionally-opaque tonemap write used to produce. Because the
+            // straight-alpha "over" blend leaves dst alpha at 1 regardless of src alpha once dst
+            // alpha starts at 1, every later blend onto this texture keeps it opaque too - see the
+            // plan doc's "Why clear opaque" note.
+            const backgroundBypassPass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: srgbSwapchainView,
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                    loadOp: 'clear',
+                    storeOp: 'store',
+                }],
+            });
+            backgroundBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
+            this.spriteResources.drawBypass(backgroundBypassPass, layer => layer <= 0);
+            backgroundBypassPass.end();
+
+            // Step 7b: tonemap the HDR frame buffer onto the swapchain, blended over the
+            // Background-bypass content just drawn rather than overwriting it.
             const tonemapPass = encoder.beginRenderPass({
                 colorAttachments: [{
-                    view: this.context.getCurrentTexture().createView(),
-                    clearValue: { r: 0, g: 0, b: 0, a: 0 },
-                    loadOp: 'clear',
+                    view: plainSwapchainView,
+                    loadOp: 'load',
                     storeOp: 'store',
                 }],
             });
@@ -830,6 +868,19 @@ export class LitboxSceneRenderer {
             this.tonemapResources.updateInputs(this.hdrFrameTextureView);
             this.tonemapResources.execute(tonemapPass);
             tonemapPass.end();
+
+            // Step 7c: Overlay-tier (layer >= 1) bypass sprites, drawn on top of the tonemapped
+            // result.
+            const overlayBypassPass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: srgbSwapchainView,
+                    loadOp: 'load',
+                    storeOp: 'store',
+                }],
+            });
+            overlayBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
+            this.spriteResources.drawBypass(overlayBypassPass, layer => layer >= 1);
+            overlayBypassPass.end();
 
             this.device.queue.submit([encoder.finish()]);
             this.cameraUniform.advance();

@@ -32,4 +32,16 @@ describe('parseScene', () => {
             { textureName: 'Moon', atlasName: 'Atlas1', uvTransform: { a: 0.5, b: 0, c: 0, d: 0, e: 0.5, f: 0.5 } },
         ]);
     });
+
+    it('defaults a sprite\'s bypassTonemapping to false when absent, for scenes exported before that field existed', () => {
+        const json = JSON.stringify({ sprites: [{ ownerId: 1, layer: 0, image: '' }] });
+        const scene = parseScene(json);
+        expect(scene.sprites[0].bypassTonemapping).toBe(false);
+    });
+
+    it('preserves an explicit bypassTonemapping value', () => {
+        const json = JSON.stringify({ sprites: [{ ownerId: 1, layer: 0, image: '', bypassTonemapping: true }] });
+        const scene = parseScene(json);
+        expect(scene.sprites[0].bypassTonemapping).toBe(true);
+    });
 });

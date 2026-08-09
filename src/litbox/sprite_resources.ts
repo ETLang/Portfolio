@@ -35,6 +35,10 @@ interface ResolvedSprite {
     layer: number;
     sortOrder: number;
     isActive: boolean;
+    // Captured once at resolve time, like layer/sortOrder - nothing currently toggles this on a
+    // live sprite. See draw()/drawBypass() and litbox_scene_renderer.ts's render() for how this
+    // routes a sprite around the tonemap curve entirely.
+    bypassTonemapping: boolean;
     texture: GPUTexture;
     transformEntry: Entry; // into the shared TransformResources array
     propertiesEntry: Entry;
@@ -64,6 +68,15 @@ interface ResolvedSprite {
 export class SpriteResources {
     private device: GPUDevice;
     private pipeline: GPURenderPipeline | null = null;
+    // Same shader module/pipeline layout as `pipeline` - only the fragment target format differs
+    // (the canvas's own `-srgb` view format instead of the HDR float format). Used by
+    // drawBypass() to draw Background/Overlay sprites straight into the swapchain, skipping the
+    // tonemap curve entirely - see litbox_scene_renderer.ts's render(). Deliberately not a
+    // WGSL-level variant (no #ifdef, no second entry point): the shader always just outputs
+    // linear color, and it's the destination view's format that decides whether that gets stored
+    // as-is (HDR float) or hardware-gamma-encoded on write (the `-srgb` view), the same mechanism
+    // already used in reverse when sampling an `-srgb` texture auto-decodes on read.
+    private bypassPipeline: GPURenderPipeline | null = null;
     private sharedBindGroupLayout: GPUBindGroupLayout | null = null;
     private textureBindGroupLayout: GPUBindGroupLayout | null = null;
     private lightmapBindGroupLayout: GPUBindGroupLayout | null = null;
@@ -111,7 +124,7 @@ export class SpriteResources {
         this.indexArray.onBufferReplaced(() => { this.sharedBindGroupDirty = true; });
     }
 
-    public initialize(cameraBindGroupLayout: GPUBindGroupLayout, hdrFormat: GPUTextureFormat): void {
+    public initialize(cameraBindGroupLayout: GPUBindGroupLayout, hdrFormat: GPUTextureFormat, presentationFormatSrgb: GPUTextureFormat): void {
         this.sharedBindGroupLayout = this.device.createBindGroupLayout({
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }, // spriteIndices
@@ -140,25 +153,40 @@ export class SpriteResources {
         this.lightmapBindGroupLayout = this.device.createBindGroupLayout({ entries: lightmapBindGroupLayoutEntries });
 
         const shaderModule = this.device.createShaderModule({ code: preprocessShader(spriteShaderCode) });
+        const pipelineLayout = this.device.createPipelineLayout({
+            bindGroupLayouts: [cameraBindGroupLayout, this.sharedBindGroupLayout, this.textureBindGroupLayout, this.lightmapBindGroupLayout],
+        });
+        const vertex: GPUVertexState = {
+            module: shaderModule,
+            entryPoint: 'vertex_main',
+            buffers: [QUAD_VERTEX_BUFFER_LAYOUT],
+        };
+        // Standard straight-alpha "over" blend - also relied on by drawBypass()'s callers (see
+        // litbox_scene_renderer.ts's render()) to composite over whatever's already in the
+        // swapchain rather than overwrite it.
+        const blend: GPUBlendState = {
+            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        };
         this.pipeline = this.device.createRenderPipeline({
-            layout: this.device.createPipelineLayout({
-                bindGroupLayouts: [cameraBindGroupLayout, this.sharedBindGroupLayout, this.textureBindGroupLayout, this.lightmapBindGroupLayout],
-            }),
-            vertex: {
-                module: shaderModule,
-                entryPoint: 'vertex_main',
-                buffers: [QUAD_VERTEX_BUFFER_LAYOUT],
-            },
+            layout: pipelineLayout,
+            vertex,
             fragment: {
                 module: shaderModule,
                 entryPoint: 'fragment_main',
-                targets: [{
-                    format: hdrFormat,
-                    blend: {
-                        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                    },
-                }],
+                targets: [{ format: hdrFormat, blend }],
+            },
+            primitive: { topology: 'triangle-list' },
+        });
+        // Same shaderModule/pipelineLayout/blend as `pipeline` above - only the target format
+        // differs. See the bypassPipeline field doc for why this needs no WGSL changes.
+        this.bypassPipeline = this.device.createRenderPipeline({
+            layout: pipelineLayout,
+            vertex,
+            fragment: {
+                module: shaderModule,
+                entryPoint: 'fragment_main',
+                targets: [{ format: presentationFormatSrgb, blend }],
             },
             primitive: { topology: 'triangle-list' },
         });
@@ -209,16 +237,36 @@ export class SpriteResources {
     }
 
     /**
-     * Draws every visible (active, layerFilter-passing) sprite, walking the draw-ordered list
-     * once and issuing one instanced draw call per maximal run of consecutive, visible entries
-     * that share a texture - a run breaks on a texture change *or* on a non-visible entry in
-     * between (an inactive sprite, or one on the wrong side of layerFilter), since a single
-     * instanced draw can't skip an instance in the middle of its [firstInstance, firstInstance
-     * + instanceCount) range. This never changes draw order, only how many draw calls express
-     * it - see rebuildDrawOrder for why same-texture entries tend to already be adjacent.
+     * Draws every visible (active, layerFilter-passing), non-bypass sprite - the regular HDR
+     * path. See drawBypass() for the complementary Background/Overlay (bypassTonemapping: true)
+     * sprites, which skip this pipeline (and the tonemap curve) entirely.
      */
     public draw(passEncoder: GPURenderPassEncoder, layerFilter: (layer: number) => boolean): void {
-        if (!this.pipeline || !this.lightmapBindGroup) {
+        this.drawFiltered(passEncoder, this.pipeline, resolved => resolved.isActive && layerFilter(resolved.layer) && !resolved.bypassTonemapping);
+    }
+
+    /**
+     * Draws every visible, bypassTonemapping sprite matching layerFilter, using bypassPipeline
+     * (targets the swapchain's own `-srgb` view, not the HDR buffer) instead of the regular
+     * pipeline - see litbox_scene_renderer.ts's render() for where this is called relative to the
+     * tonemap pass (once before it for the layer<=0 "Background" tier, once after for the
+     * layer>=1 "Overlay" tier) and why the swapchain must be cleared opaque beforehand.
+     */
+    public drawBypass(passEncoder: GPURenderPassEncoder, layerFilter: (layer: number) => boolean): void {
+        this.drawFiltered(passEncoder, this.bypassPipeline, resolved => resolved.isActive && layerFilter(resolved.layer) && resolved.bypassTonemapping);
+    }
+
+    /**
+     * Shared draw-order walk behind draw()/drawBypass(): walks the draw-ordered list once and
+     * issues one instanced draw call per maximal run of consecutive, isVisible-passing entries
+     * that share a texture - a run breaks on a texture change *or* on a non-visible entry in
+     * between, since a single instanced draw can't skip an instance in the middle of its
+     * [firstInstance, firstInstance + instanceCount) range. This never changes draw order, only
+     * how many draw calls express it - see rebuildDrawOrder for why same-texture entries tend to
+     * already be adjacent.
+     */
+    private drawFiltered(passEncoder: GPURenderPassEncoder, pipeline: GPURenderPipeline | null, isVisible: (resolved: ResolvedSprite) => boolean): void {
+        if (!pipeline || !this.lightmapBindGroup) {
             return;
         }
         if (this.sharedBindGroupDirty) {
@@ -231,7 +279,7 @@ export class SpriteResources {
             return;
         }
 
-        passEncoder.setPipeline(this.pipeline);
+        passEncoder.setPipeline(pipeline);
         passEncoder.setVertexBuffer(0, this.vertexBuffer);
         passEncoder.setBindGroup(1, this.sharedBindGroup);
         passEncoder.setBindGroup(3, this.lightmapBindGroup);
@@ -253,7 +301,7 @@ export class SpriteResources {
 
         for (let i = 0; i < this.sprites.length; i++) {
             const resolved = this.sprites[i];
-            const visible = resolved.isActive && layerFilter(resolved.layer);
+            const visible = isVisible(resolved);
             if (!visible || resolved.texture !== runTexture) {
                 flushRun(i);
             }
@@ -408,6 +456,7 @@ export class SpriteResources {
             layer: sprite.layer,
             sortOrder: sprite.sortOrder,
             isActive,
+            bypassTonemapping: sprite.bypassTonemapping,
             texture,
             transformEntry,
             propertiesEntry,

@@ -7299,7 +7299,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79892,
@@ -7332,7 +7333,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82688,
@@ -7365,7 +7367,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -42440,
@@ -7398,7 +7401,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -60414,
@@ -7431,7 +7435,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80962,
@@ -7464,7 +7469,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82670,
@@ -7497,7 +7503,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79884,
@@ -7530,7 +7537,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82606,
@@ -7563,7 +7571,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80980,
@@ -7596,7 +7605,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59450,
@@ -7629,7 +7639,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81008,
@@ -7662,7 +7673,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82680,
@@ -7695,7 +7707,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -42158,
@@ -7728,7 +7741,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -60416,
@@ -7761,7 +7775,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59068,
@@ -7794,7 +7809,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59658,
@@ -7827,7 +7843,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -50940,
@@ -7860,7 +7877,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80978,
@@ -7893,7 +7911,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -60232,
@@ -7926,7 +7945,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80912,
@@ -7959,7 +7979,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -1450,
@@ -7992,7 +8013,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80914,
@@ -8025,7 +8047,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -53126,
@@ -8058,7 +8081,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82594,
@@ -8091,7 +8115,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79932,
@@ -8124,7 +8149,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81024,
@@ -8157,7 +8183,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82598,
@@ -8190,7 +8217,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -51188,
@@ -8223,7 +8251,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -52830,
@@ -8256,7 +8285,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79924,
@@ -8289,7 +8319,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82672,
@@ -8322,7 +8353,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81026,
@@ -8355,7 +8387,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -43946,
@@ -8388,7 +8421,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -1440,
@@ -8421,7 +8455,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82704,
@@ -8454,7 +8489,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -41720,
@@ -8487,7 +8523,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -73294,
@@ -8520,7 +8557,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82616,
@@ -8553,7 +8591,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80972,
@@ -8586,7 +8625,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80932,
@@ -8619,7 +8659,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -42430,
@@ -8652,7 +8693,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -43814,
@@ -8685,7 +8727,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80986,
@@ -8718,7 +8761,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -44654,
@@ -8751,7 +8795,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -9842,
@@ -8784,7 +8829,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80970,
@@ -8817,7 +8863,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -74204,
@@ -8850,7 +8897,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -56580,
@@ -8883,7 +8931,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -41386,
@@ -8916,7 +8965,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -44422,
@@ -8949,7 +8999,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80956,
@@ -8982,7 +9033,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -56974,
@@ -9015,7 +9067,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81002,
@@ -9048,7 +9101,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80924,
@@ -9081,7 +9135,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59292,
@@ -9114,7 +9169,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80922,
@@ -9147,7 +9203,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79820,
@@ -9180,7 +9237,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80984,
@@ -9213,7 +9271,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -41730,
@@ -9246,7 +9305,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80964,
@@ -9279,7 +9339,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79930,
@@ -9312,7 +9373,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82622,
@@ -9345,7 +9407,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82646,
@@ -9378,7 +9441,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79902,
@@ -9411,7 +9475,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -60596,
@@ -9444,7 +9509,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -51178,
@@ -9477,7 +9543,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79828,
@@ -9510,7 +9577,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -56736,
@@ -9543,7 +9611,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79916,
@@ -9576,7 +9645,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79900,
@@ -9609,7 +9679,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81004,
@@ -9642,7 +9713,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -52568,
@@ -9675,7 +9747,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -1406,
@@ -9708,7 +9781,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80948,
@@ -9741,7 +9815,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82678,
@@ -9774,7 +9849,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -9228,
@@ -9807,7 +9883,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82608,
@@ -9840,7 +9917,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79890,
@@ -9873,7 +9951,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -73284,
@@ -9906,7 +9985,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82648,
@@ -9939,7 +10019,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80954,
@@ -9972,7 +10053,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -8510,
@@ -10005,7 +10087,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -74194,
@@ -10038,7 +10121,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79908,
@@ -10071,7 +10155,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -43936,
@@ -10104,7 +10189,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -74074,
@@ -10137,7 +10223,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79878,
@@ -10170,7 +10257,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -57118,
@@ -10203,7 +10291,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -74600,
@@ -10236,7 +10325,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79844,
@@ -10269,7 +10359,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82706,
@@ -10302,7 +10393,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -44236,
@@ -10335,7 +10427,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59656,
@@ -10368,7 +10461,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -52820,
@@ -10401,7 +10495,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -7146,
@@ -10434,7 +10529,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": ""
+            "primitiveShape": "",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82666,
@@ -10467,7 +10563,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -52558,
@@ -10500,7 +10597,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -74084,
@@ -10533,7 +10631,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79914,
@@ -10566,7 +10665,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -73800,
@@ -10599,7 +10699,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -44246,
@@ -10632,7 +10733,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -56976,
@@ -10665,7 +10767,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80994,
@@ -10698,7 +10801,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -52140,
@@ -10731,7 +10835,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -74610,
@@ -10764,7 +10869,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -52150,
@@ -10797,7 +10903,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82640,
@@ -10830,7 +10937,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -56582,
@@ -10863,7 +10971,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -53116,
@@ -10896,7 +11005,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81010,
@@ -10929,7 +11039,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59452,
@@ -10962,7 +11073,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -44644,
@@ -10995,7 +11107,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79852,
@@ -11028,7 +11141,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80938,
@@ -11061,7 +11175,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -57288,
@@ -11094,7 +11209,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -66514,
@@ -11127,7 +11243,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82654,
@@ -11160,7 +11277,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79860,
@@ -11193,7 +11311,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -57116,
@@ -11226,7 +11345,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81018,
@@ -11259,7 +11379,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82592,
@@ -11292,7 +11413,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -44412,
@@ -11325,7 +11447,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79870,
@@ -11358,7 +11481,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79862,
@@ -11391,7 +11515,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -75324,
@@ -11424,7 +11549,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82664,
@@ -11457,7 +11583,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -73810,
@@ -11490,7 +11617,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -81016,
@@ -11523,7 +11651,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -50930,
@@ -11556,7 +11685,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -41528,
@@ -11589,7 +11719,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82656,
@@ -11622,7 +11753,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -57286,
@@ -11655,7 +11787,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79838,
@@ -11688,7 +11821,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -54916,
@@ -11721,7 +11855,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82630,
@@ -11754,7 +11889,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59066,
@@ -11787,7 +11923,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -59294,
@@ -11820,7 +11957,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80930,
@@ -11853,7 +11991,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -75334,
@@ -11886,7 +12025,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79922,
@@ -11919,7 +12059,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79910,
@@ -11952,7 +12093,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -1416,
@@ -11985,7 +12127,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79846,
@@ -12018,7 +12161,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80996,
@@ -12051,7 +12195,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -60230,
@@ -12084,7 +12229,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82698,
@@ -12117,7 +12263,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -58890,
@@ -12150,7 +12297,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79836,
@@ -12183,7 +12331,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -56734,
@@ -12216,7 +12365,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82624,
@@ -12249,7 +12399,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -66516,
@@ -12282,7 +12433,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80946,
@@ -12315,7 +12467,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79818,
@@ -12348,7 +12501,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -42168,
@@ -12381,7 +12535,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -80940,
@@ -12414,7 +12569,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -41396,
@@ -12447,7 +12603,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79854,
@@ -12480,7 +12637,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82690,
@@ -12513,7 +12671,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -86070,
@@ -12528,9 +12687,9 @@
                 "a": 1.0
             },
             "ambient": {
-                "r": 0.25,
-                "g": 0.25,
-                "b": 0.25,
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
                 "a": 1.0
             },
             "emissive": {
@@ -12546,7 +12705,8 @@
                 "a": 0.0
             },
             "simBlur": 0.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": true
         },
         {
             "ownerId": -43804,
@@ -12579,7 +12739,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79886,
@@ -12612,7 +12773,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -54906,
@@ -12645,7 +12807,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79876,
@@ -12678,7 +12841,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82614,
@@ -12711,7 +12875,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82638,
@@ -12744,7 +12909,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82696,
@@ -12777,7 +12943,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -60598,
@@ -12810,7 +12977,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -41518,
@@ -12843,7 +13011,8 @@
                 "a": 0.0
             },
             "simBlur": 2.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79868,
@@ -12876,7 +13045,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -58888,
@@ -12909,7 +13079,8 @@
                 "a": 0.0
             },
             "simBlur": 4.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -82600,
@@ -12942,7 +13113,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         },
         {
             "ownerId": -79830,
@@ -12975,7 +13147,8 @@
                 "a": 0.0
             },
             "simBlur": 5.0,
-            "primitiveShape": "ellipse"
+            "primitiveShape": "ellipse",
+            "bypassTonemapping": false
         }
     ],
     "pointLights": [
