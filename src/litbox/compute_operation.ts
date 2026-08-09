@@ -19,6 +19,12 @@
  * updateSwitches(...) re-runs preprocessShader(rawShaderSource, defines) itself (translating its
  * typed switch parameters into a ShaderDefines object) and hands the resulting WGSL text to
  * setShaderCode.
+ *
+ * A subclass dispatched more than once per frame (into one shared, not-yet-submitted encoder)
+ * must give each dispatch its own uniform buffer, not reuse one written via repeated
+ * device.queue.writeBuffer() calls - see CLAUDE.md's "Compute-shader operation architecture" for
+ * why, and ForwardMonteCarloOperation/GaussianBlurPassOperation for the buffer-pool pattern that
+ * fixes it. execute() below throws if it detects the unsafe pattern.
  */
 export abstract class ComputeOperation {
     protected device: GPUDevice;
@@ -41,6 +47,9 @@ export abstract class ComputeOperation {
     private dispatchWidth = 0;
     private dispatchHeight = 0;
     private dispatchDepth = 1;
+
+    /** The encoder execute() last ran against, while its uniform bind group is still the one built for that call - see execute()'s stale-uniform-reuse guard. */
+    private lastExecuteEncoder: GPUCommandEncoder | null = null;
 
     protected constructor(device: GPUDevice, shaderCode: string, entryPoint = 'main') {
         this.device = device;
@@ -115,8 +124,33 @@ export abstract class ComputeOperation {
         return this.pipeline;
     }
 
-    /** Rebuilds any dirty bind group and dispatches. A no-op until updateOutputs has established a non-zero dispatch extent. */
+    /**
+     * Rebuilds any dirty bind group and dispatches. A no-op until updateOutputs has established a
+     * non-zero dispatch extent.
+     *
+     * Guards against the uniform-buffer-reuse hazard documented in CLAUDE.md's "Compute-shader
+     * operation architecture": if this operation has a uniform group AND `encoder` is the same
+     * encoder execute() last ran against AND the uniform bind group hasn't changed since (no
+     * updateUniforms() call actually altered it in between), throws rather than silently recording
+     * a second dispatch that will read whatever the LAST updateUniforms() call in the whole frame
+     * happened to write. A subclass dispatched more than once per frame (see
+     * ForwardMonteCarloOperation, GaussianBlurPassOperation) must call its own updateUniforms()
+     * before every execute() - even with values equal to last time - so setUniforms() sees a
+     * genuinely new buffer and marks the group dirty again; that's exactly what the buffer-pool
+     * pattern those two classes use already does unconditionally.
+     */
     public execute(encoder: GPUCommandEncoder): void {
+        if (this.uniformEntries.length > 0 && encoder === this.lastExecuteEncoder && !this.uniformGroupDirty) {
+            throw new Error(
+                'ComputeOperation.execute() called a second time against the same GPUCommandEncoder ' +
+                'with an unchanged uniform bind group. Every dispatch recorded into one not-yet-submitted ' +
+                'encoder needs its own uniform buffer - call updateUniforms() (with a subclass that pools ' +
+                'a fresh buffer per call, see ForwardMonteCarloOperation/GaussianBlurPassOperation) before ' +
+                'every execute(), even if the values are unchanged from last time.',
+            );
+        }
+        this.lastExecuteEncoder = encoder;
+
         const pipeline = this.ensurePipeline();
 
         if (this.uniformGroupDirty) {

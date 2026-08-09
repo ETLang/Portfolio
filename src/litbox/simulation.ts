@@ -997,6 +997,12 @@ export class SimulationResources {
         // same comparison, per the Unity reference this was ported from) - unlike before, nothing
         // here needs to change per level, since the irradiance range check no longer depends on
         // which absolute mip is being examined (see build_denoiser_quadtree.wgsl).
+        // Reset each instance's per-frame uniform-buffer-slot cursor - see
+        // BuildDenoiserQuadtreeOperation.beginFrame's doc comment. buildQuadtreeLevel0 only ever
+        // dispatches once per frame, but resetting it too keeps both instances' usage uniform.
+        this.buildQuadtreeLevel0.beginFrame();
+        this.buildQuadtreeIterate.beginFrame();
+
         const level0Width = Math.max(1, width >> 1);
         const level0Height = Math.max(1, height >> 1);
         this.buildQuadtreeLevel0.updateUniforms({ ...this.denoiserTunables });

@@ -31,15 +31,22 @@ const DEFAULT_SWITCHES: BuildDenoiserQuadtreeSwitches = { level0: true };
  * single instance's switch every frame - see the shader's file header.
  */
 export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
-    private uniformBuffer: GPUBuffer;
+    /**
+     * One small uniform buffer per dispatch within the current frame, not a single buffer reused
+     * across calls - see CLAUDE.md's "Compute-shader operation architecture" and
+     * ForwardMonteCarloOperation.uniformBufferPool for the full explanation. SimulationResources.
+     * buildDenoiserQuadtree calls updateUniforms()+execute() on the iterate instance once per
+     * quadtree level, all recorded into one shared GPUCommandEncoder that isn't submitted until
+     * the very end of the frame - a single reused buffer left every earlier level's dispatch
+     * silently reading whichever level's writeBuffer() call happened last (harmless only by
+     * coincidence here, since every level currently writes the same denoiserTunables-derived
+     * values - but the same unsafe pattern regardless).
+     */
+    private uniformBufferPool: GPUBuffer[] = [];
+    private nextSlot = 0;
 
     constructor(device: GPUDevice) {
         super(device, preprocessShader(shaderCode, toDefines(DEFAULT_SWITCHES)), 'main');
-        this.uniformBuffer = device.createBuffer({
-            size: UNIFORM_FIELD_COUNT * 4,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        this.setUniforms([{ binding: 0, resource: { buffer: this.uniformBuffer } }]);
     }
 
     /** Intended to be called once, right after construction - not part of the per-frame hot path, see the shader's file header. */
@@ -47,8 +54,13 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
         this.setShaderCode(preprocessShader(shaderCode, toDefines(switches)));
     }
 
+    /** Resets the per-frame uniform-buffer-pool slot cursor - call once per frame (see SimulationResources.buildDenoiserQuadtree), before this operation's first updateUniforms() call that frame. See ForwardMonteCarloOperation.beginFrame's doc comment for why reusing slot 0 across frames is safe. */
+    public beginFrame(): void {
+        this.nextSlot = 0;
+    }
+
     public updateUniforms(uniforms: BuildDenoiserQuadtreeUniforms): void {
-        this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([
+        const data = new Float32Array([
             uniforms.albedoLuminanceThreshold,
             uniforms.albedoChromaThreshold,
             uniforms.logDensityThreshold,
@@ -56,7 +68,23 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
             uniforms.detailThreshold,
             uniforms.varianceGateScale,
             uniforms.darknessNoiseFloor,
-        ]));
+        ]);
+
+        let buffer = this.uniformBufferPool[this.nextSlot];
+        if (!buffer) {
+            buffer = this.device.createBuffer({
+                size: UNIFORM_FIELD_COUNT * 4,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            this.uniformBufferPool[this.nextSlot] = buffer;
+        }
+        this.nextSlot++;
+        this.device.queue.writeBuffer(buffer, 0, data);
+        // A distinct buffer object per slot (not a shared one at varying offsets) so
+        // ComputeOperation's own entriesEqual/resourceIdentity dirty-check - which only compares
+        // buffer object identity, not offset - correctly rebuilds the bind group every time the
+        // slot actually changes, with no changes needed to that shared base-class logic.
+        this.setUniforms([{ binding: 0, resource: { buffer } }]);
     }
 
     /** LEVEL0 variant's inputs - raw G-Buffer mip0 + volatility mip0. */
