@@ -249,6 +249,17 @@ export abstract class LitboxScene {
         return null;
     }
 
+    /**
+     * Short human-readable text for the status bar's center panel while this scene is active
+     * (see main.ts, which re-reads this on every scene load/switch rather than hardcoding
+     * anything scene-specific in the status bar markup itself). None of the exported scenes have
+     * any real camera/scene interaction wired up yet, so this is a placeholder describing what's
+     * on screen, not a control hint - override per scene once real interaction exists.
+     */
+    public getStatusText(): string {
+        return 'No interaction yet';
+    }
+
     // --- Scene-authoring API. `name` accepts either a bare unique SceneObject name, or
     // a "/"-separated path (e.g. "Left Wall/Sprite") that resolves each segment as a
     // unique direct child of the previous one - use a path when the bare name is

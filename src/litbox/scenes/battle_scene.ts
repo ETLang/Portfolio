@@ -236,6 +236,10 @@ export class BattleScene extends LitboxScene {
         return DENOISER_TUNABLES;
     }
 
+    public override getStatusText(): string {
+        return 'UFO battle - autonomous, no interaction yet';
+    }
+
     public override onFrame(deltaTimeSeconds: number): void {
         this.sceneTimeSeconds += deltaTimeSeconds;
 

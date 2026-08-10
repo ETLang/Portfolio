@@ -40,4 +40,8 @@ export class CornellSquareScene extends LitboxScene {
     public override getDenoiserTunables(): Partial<DenoiserTunables> {
         return DENOISER_TUNABLES;
     }
+
+    public override getStatusText(): string {
+        return 'Cornell box - adjust light angle from the sidebar';
+    }
 }

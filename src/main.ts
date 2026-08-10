@@ -28,6 +28,12 @@ const webgpuErrorOverlay = document.querySelector('.webgpu-error-overlay') as HT
 const webgpuErrorReason = document.querySelector('.webgpu-error-reason') as HTMLElement;
 const webgpuErrorTips = document.querySelector('.webgpu-error-tips') as HTMLElement;
 const webgpuStatus = document.getElementById('webgpu-status') as HTMLElement;
+const sceneStatusText = document.getElementById('scene-status-text') as HTMLElement;
+
+/** Refreshes the status bar's center panel from the currently active scene - see LitboxScene.getStatusText. */
+function refreshSceneStatusText(renderer: LitboxSceneRenderer): void {
+    sceneStatusText.textContent = renderer.getActiveScene()?.getStatusText() ?? '';
+}
 
 // --- WEBGPU FAILURE DIAGNOSTICS ---
 // initWebGPU() (see litbox_scene_renderer.ts) fails silently by design - it's a background
@@ -429,6 +435,7 @@ sidebarPane.addEventListener('change', async (e: Event) => {
         activeSceneKey = key;
         const scene = await entry.load();
         await litboxRenderer.setScene(scene);
+        refreshSceneStatusText(litboxRenderer);
         // The newly-loaded scene has its own slider set (and its own live values), so the panel
         // needs regenerating rather than just re-reading the same controls in place.
         const scenePropertiesContainer = document.getElementById('scene-properties-container');
@@ -518,6 +525,7 @@ if (canvas) {
                 return;
             }
             litboxRenderer = renderer;
+            refreshSceneStatusText(renderer);
             // Exposed for manual debugging from the devtools console, e.g.
             // `litboxRenderer.debugView = 'lightmap'` - see LitboxSceneRenderer.debugView.
             (window as unknown as { litboxRenderer: LitboxSceneRenderer }).litboxRenderer = renderer;

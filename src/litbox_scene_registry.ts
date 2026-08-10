@@ -12,7 +12,7 @@ export interface SceneRegistryEntry {
 /** Every scene selectable from the configuration page's scene dropdown - add a new scene here to make it selectable. */
 export const SCENE_REGISTRY: Record<string, SceneRegistryEntry> = {
     'cornell-square': { label: 'Cornell Square', load: () => CornellSquareScene.load() },
-    'basic': { label: 'Basic Test', load: () => BasicScene.load() },
+   // 'basic': { label: 'Basic Test', load: () => BasicScene.load() },  // We don't want this one unless we're debugging something
     'battle': { label: 'Battle', load: () => BattleScene.load() },
 };
 
