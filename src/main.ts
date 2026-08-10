@@ -24,6 +24,7 @@ const sidebarPane = document.querySelector('.sidebar-pane') as HTMLElement;
 const workspaceViewport = document.querySelector('.workspace-viewport') as HTMLElement;
 const canvas = document.querySelector('canvas') as HTMLCanvasElement;
 const resumeView = document.querySelector('.resume-view') as HTMLElement;
+const canvasLoadingOverlay = document.querySelector('.canvas-loading-overlay') as HTMLElement;
 const webgpuErrorOverlay = document.querySelector('.webgpu-error-overlay') as HTMLElement;
 const webgpuErrorReason = document.querySelector('.webgpu-error-reason') as HTMLElement;
 const webgpuErrorTips = document.querySelector('.webgpu-error-tips') as HTMLElement;
@@ -33,6 +34,31 @@ const sceneStatusText = document.getElementById('scene-status-text') as HTMLElem
 /** Refreshes the status bar's center panel from the currently active scene - see LitboxScene.getStatusText. */
 function refreshSceneStatusText(renderer: LitboxSceneRenderer): void {
     sceneStatusText.textContent = renderer.getActiveScene()?.getStatusText() ?? '';
+}
+
+// --- CANVAS LOADING SPINNER ---
+// Covers both the initial WebGPU/scene bring-up (start()) and later scene swaps/resizes
+// (setScene()/resizeSimulation()), since both go through the same slow path - GPU resource
+// rebuild plus texture/EXR fetches (see LitboxSceneRenderer.rebuildFromScene) - that's what
+// makes the canvas appear to "hang" for a few seconds without this.
+//
+// Tracked separately from the overlay's own `hidden` state, mirroring webgpuErrorActive above:
+// the overlay lives inside .workspace-viewport, which stays visible on the "about" view (behind
+// resumeView), so it needs to stay hidden there too regardless of whether a load is in flight.
+let canvasLoadingActive = true;
+
+function updateCanvasLoadingVisibility(isAboutView: boolean): void {
+    canvasLoadingOverlay.hidden = !canvasLoadingActive || isAboutView;
+}
+
+function showCanvasLoading(): void {
+    canvasLoadingActive = true;
+    updateCanvasLoadingVisibility(appContainer.dataset.activeView === 'about');
+}
+
+function hideCanvasLoading(): void {
+    canvasLoadingActive = false;
+    updateCanvasLoadingVisibility(appContainer.dataset.activeView === 'about');
 }
 
 // --- WEBGPU FAILURE DIAGNOSTICS ---
@@ -296,6 +322,7 @@ async function updateView(view: ViewKey) {
     resumeView.style.display = isAboutView ? 'block' : 'none';
     canvas.style.display = isAboutView ? 'none' : 'block';
     updateWebGpuErrorVisibility(isAboutView);
+    updateCanvasLoadingVisibility(isAboutView);
 
     updateLayout();
 }
@@ -433,8 +460,10 @@ sidebarPane.addEventListener('change', async (e: Event) => {
             return;
         }
         activeSceneKey = key;
+        showCanvasLoading();
         const scene = await entry.load();
         await litboxRenderer.setScene(scene);
+        hideCanvasLoading();
         refreshSceneStatusText(litboxRenderer);
         // The newly-loaded scene has its own slider set (and its own live values), so the panel
         // needs regenerating rather than just re-reading the same controls in place.
@@ -457,7 +486,9 @@ sidebarPane.addEventListener('change', async (e: Event) => {
         if (Number.isNaN(width) || Number.isNaN(height)) {
             return;
         }
+        showCanvasLoading();
         await litboxRenderer.resizeSimulation(width, height);
+        hideCanvasLoading();
         // resizeSimulation reloads the scene at the new resolution, which resets
         // denoiserTunables/simulationTunables to this scene's defaults the same way an actual
         // scene switch does - regenerate both panels for the same reason as the scene-select
@@ -520,6 +551,7 @@ if (canvas) {
         .then(scene => renderer.setScene(scene))
         .then(() => renderer.start())
         .then(() => {
+            hideCanvasLoading();
             if (renderer.initFailureReason) {
                 showWebGpuError(renderer.initFailureReason);
                 return;
@@ -531,6 +563,7 @@ if (canvas) {
             (window as unknown as { litboxRenderer: LitboxSceneRenderer }).litboxRenderer = renderer;
         })
         .catch(error => {
+            hideCanvasLoading();
             console.error('Failed to start Litbox scene renderer:', error);
             showWebGpuError('device-error');
         });
