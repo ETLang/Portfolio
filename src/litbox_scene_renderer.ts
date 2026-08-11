@@ -29,6 +29,10 @@ const MAX_DELTA_TIME_SECONDS = 0.1;
 // scene predates blackPointLog/whitePointLog and the loaded JSON doesn't carry them.
 const DEFAULT_WHITE_POINT_LOG: Vector3 = { x: 2, y: 2, z: 2 };
 const DEFAULT_BLACK_POINT_LOG: Vector3 = { x: -4, y: -4, z: -4 };
+// Throttled render-loop cadence used only inside the Playwright/CDP automation sandbox (see
+// isAutomatedSandbox) - low enough to noticeably cut host CPU/GPU load while a screenshot session
+// sits idle between commands, but still far more often than any single automation call needs.
+const SANDBOX_FRAME_INTERVAL_MS = 200;
 
 interface ActiveCamera {
     camera: SceneCamera;
@@ -94,6 +98,18 @@ export class LitboxSceneRenderer {
 
     private activeScene: LitboxScene | null = null;
     private lastFrameTimeMs: number | null = null;
+
+    /**
+     * True when this page is being driven by Playwright/CDP automation (see
+     * .claude/skills/start-server/daemon.mjs, the only thing that launches this project's
+     * headless-browser test sandbox) rather than a real visitor's browser - `navigator.webdriver`
+     * is set by the automation-controlled Chromium/Edge itself and stays false in normal manual
+     * use, so this needs no cooperation from daemon.mjs (a query param, etc.) to detect reliably.
+     * Used by render() to throttle frame cadence - see SANDBOX_FRAME_INTERVAL_MS - since an
+     * uncapped requestAnimationFrame loop running headless has been observed to peg host CPU/GPU
+     * far more aggressively than the same loop in a normal windowed/Chromium browser.
+     */
+    private readonly isAutomatedSandbox: boolean = navigator.webdriver === true;
 
     /**
      * Serializes rebuildFromScene() calls (see queueRebuild) - never resolves to a rejection
@@ -888,7 +904,15 @@ export class LitboxSceneRenderer {
             // Third-party WebGPU instrumentation (browser devtools extensions wrapping
             // queue.submit, etc.) can throw after our own work is done. Keep the render
             // loop alive regardless, rather than letting one bad frame permanently kill it.
-            requestAnimationFrame(this.render);
+            if (this.isAutomatedSandbox) {
+                // A plain rAF loop can't be throttled from inside itself with a blocking sleep -
+                // that would also freeze the event loop the automation daemon needs to stay
+                // responsive to its own commands (page.evaluate, clicks, etc.) between frames.
+                // Delaying the next rAF request instead caps frame cadence without blocking JS.
+                setTimeout(() => requestAnimationFrame(this.render), SANDBOX_FRAME_INTERVAL_MS);
+            } else {
+                requestAnimationFrame(this.render);
+            }
         }
     }
 }
