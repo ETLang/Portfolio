@@ -223,6 +223,7 @@ export class LitboxSceneRenderer {
 
     /** Stages (or swaps in) a scene. Safe to call before or after start(). */
     public async setScene(scene: LitboxScene): Promise<void> {
+        this.activeScene?.onUnload();
         this.activeScene = scene;
         scene.onLoad(this);
         if (this.device) {

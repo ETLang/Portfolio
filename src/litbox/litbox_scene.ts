@@ -223,6 +223,15 @@ export abstract class LitboxScene {
     public onFrame(_deltaTimeSeconds: number): void {}
 
     /**
+     * Called once, right before this scene is swapped out by a later LitboxSceneRenderer.setScene
+     * call (never on final teardown of the app itself). Override to release anything onLoad()
+     * acquired outside this scene's own data - e.g. a DOM listener registered on
+     * renderer.getCanvas(), which otherwise outlives this scene instance since the canvas is
+     * shared/persistent across scene switches.
+     */
+    public onUnload(): void {}
+
+    /**
      * Per-scene defaults for DenoiserTunables (see its own doc comment), applied on top of
      * DEFAULT_DENOISER_TUNABLES every time this scene loads (see
      * SimulationResources.loadFromScene) - the ideal denoiser "look" varies enough scene-to-scene
