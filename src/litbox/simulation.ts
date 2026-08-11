@@ -195,7 +195,7 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     // guard against on its own are structurally gone, so it can sit much looser without fireflies
     // creeping back in.
     sigmaLuminanceTight: 1.0,
-    sigmaLuminanceLoose: 2.5,
+    sigmaLuminanceLoose: 3.5,
     kLuminance: 2.0,
     // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
     // doc comment for the seed-relative-texels normalization this is measured in.
