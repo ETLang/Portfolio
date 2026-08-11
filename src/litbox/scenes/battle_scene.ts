@@ -188,6 +188,13 @@ export class BattleScene extends LitboxScene {
     private ufoTemplate!: SceneObject;
     private baseLaserIntensity = 0;
 
+    /** Slider-controlled multipliers - see onLoad's addSlider calls for range/step and where each is applied. */
+    private laserBrightnessMultiplier = 1;
+    private moonBrightnessMultiplier = 1;
+    private ufoSpeedMultiplier = 1;
+    private ufoFrequencyMultiplier = 1;
+    private laserFrequencyMultiplier = 1;
+
     private ufos: UfoInstance[] = [];
     /** Elapsed wall-clock seconds since the scene loaded - the single "current time" every animation below is computed relative to, rather than each animation accumulating its own independent per-frame state. */
     private sceneTimeSeconds = 0;
@@ -209,6 +216,48 @@ export class BattleScene extends LitboxScene {
 
         const templateLaser = this.resolveRelativePath(this.ufoTemplate, 'Laser Gimbal/Laser');
         this.baseLaserIntensity = this.getLight(templateLaser).intensity;
+
+        const moonSprite = this.getSprite(this.getObject('Moon'));
+        const moonBaseColor = { ...moonSprite.colorMod };
+        // The scene's one active static light ("Static Lights/Moonlight" - SpotLight and
+        // DirectionalLight next to it are both authored inactive) - positioned directly above the
+        // Moon sprite with a matching cool-white color, it's the moon's actual light source
+        // (illuminating the haze/clouds), not the emissive sprite alone, so Moon Brightness scales
+        // both together.
+        const moonLight = this.getLight(this.getObject('Moonlight'));
+        const moonLightBaseIntensity = moonLight.intensity;
+
+        this.addSlider('Laser Brightness', 0, 3, 0.05,
+            () => this.laserBrightnessMultiplier,
+            (value) => { this.laserBrightnessMultiplier = value; });
+        this.addSlider('Moon Brightness', 0, 3, 0.05,
+            () => this.moonBrightnessMultiplier,
+            (value) => {
+                this.moonBrightnessMultiplier = value;
+                moonSprite.colorMod = {
+                    ...moonSprite.colorMod,
+                    r: moonBaseColor.r * value,
+                    g: moonBaseColor.g * value,
+                    b: moonBaseColor.b * value,
+                };
+                this.markSpriteDirty(moonSprite);
+                moonLight.intensity = moonLightBaseIntensity * value;
+                this.markLightDirty(moonLight);
+            });
+        // UFO Speed/Frequency and Laser Frequency only take effect for UFOs spawned (or bursts
+        // scheduled) after the slider moves - see spawnUfo/onFrame's spawn scheduling and
+        // nextFireTimeSecondsFor, respectively - rather than retroactively rescaling in-flight
+        // state, which would need to rebase each closed-form position/timing formula's origin to
+        // avoid a visible jump.
+        this.addSlider('UFO Speed', 0.1, 3, 0.05,
+            () => this.ufoSpeedMultiplier,
+            (value) => { this.ufoSpeedMultiplier = value; });
+        this.addSlider('UFO Frequency', 0.1, 3, 0.05,
+            () => this.ufoFrequencyMultiplier,
+            (value) => { this.ufoFrequencyMultiplier = value; });
+        this.addSlider('Laser Frequency', 0.1, 3, 0.05,
+            () => this.laserFrequencyMultiplier,
+            (value) => { this.laserFrequencyMultiplier = value; });
 
         // Cloud_N/Haze_L_N/Haze_R_N counts are arbitrary (not assumed to match whatever's
         // currently authored in battle.json), so these are discovered by name pattern rather than
@@ -250,7 +299,8 @@ export class BattleScene extends LitboxScene {
 
         if (this.sceneTimeSeconds >= this.nextSpawnTimeSeconds) {
             this.nextSpawnTimeSeconds =
-                this.sceneTimeSeconds + randomRange(SPAWN_INTERVAL_MIN_SECONDS, SPAWN_INTERVAL_MAX_SECONDS);
+                this.sceneTimeSeconds +
+                randomRange(SPAWN_INTERVAL_MIN_SECONDS, SPAWN_INTERVAL_MAX_SECONDS) / this.ufoFrequencyMultiplier;
             this.spawnUfo(bounds);
         }
 
@@ -296,7 +346,7 @@ export class BattleScene extends LitboxScene {
 
         // horizontalSpeed alone crosses the simulation area in crossingSeconds; speed is scaled up
         // so its horizontal component still matches that, regardless of how steep angleRadians turned out.
-        const horizontalSpeed = (areaWidth / crossingSeconds) * SPEED_MULTIPLIER;
+        const horizontalSpeed = (areaWidth / crossingSeconds) * SPEED_MULTIPLIER * this.ufoSpeedMultiplier;
         const speed = horizontalSpeed / Math.cos(angleRadians);
         const directionSign = fromLeft ? 1 : -1;
         const velocityX = directionSign * speed * Math.cos(angleRadians);
@@ -370,11 +420,12 @@ export class BattleScene extends LitboxScene {
         });
     }
 
-    /** Per-UFO next-fire time, normalized so the combined firing rate stays population-invariant (times FIRE_FREQUENCY_MULTIPLIER) - see FIRE_FREQUENCY_MULTIPLIER's doc comment. */
+    /** Per-UFO next-fire time, normalized so the combined firing rate stays population-invariant (times FIRE_FREQUENCY_MULTIPLIER, then the Laser Frequency slider). */
     private nextFireTimeSecondsFor(population: number): number {
         return (
             this.sceneTimeSeconds +
-            (randomRange(FIRE_INTERVAL_MIN_SECONDS, FIRE_INTERVAL_MAX_SECONDS) * population) / FIRE_FREQUENCY_MULTIPLIER
+            (randomRange(FIRE_INTERVAL_MIN_SECONDS, FIRE_INTERVAL_MAX_SECONDS) * population) /
+                (FIRE_FREQUENCY_MULTIPLIER * this.laserFrequencyMultiplier)
         );
     }
 
@@ -465,9 +516,10 @@ export class BattleScene extends LitboxScene {
             if (ufo.firingTarget) {
                 this.aimGimbalAt(ufo, ufo.firingTarget);
             }
-            // Oscillates between baseLaserIntensity/2 (low) and baseLaserIntensity (high, the template's own value).
+            // Oscillates between baseLaserIntensity/2 (low) and baseLaserIntensity (high, the template's own
+            // value), both scaled by the Laser Brightness slider.
             const oscillation = 0.5 + 0.5 * Math.sin(2 * Math.PI * LASER_FLICKER_FREQUENCY_HZ * fireElapsed);
-            ufo.laserLight.intensity = (this.baseLaserIntensity / 2) * (1 + oscillation);
+            ufo.laserLight.intensity = ((this.baseLaserIntensity * this.laserBrightnessMultiplier) / 2) * (1 + oscillation);
             this.markLightDirty(ufo.laserLight);
             return;
         }
