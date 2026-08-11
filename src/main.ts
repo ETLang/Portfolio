@@ -300,7 +300,7 @@ async function updateView(view: ViewKey) {
             }
             const scenePropertiesContainer = document.getElementById('scene-properties-container');
             if (scenePropertiesContainer) {
-                scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer?.getActiveScene() ?? null);
+                scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer?.getActiveScene() ?? null, canvasLoadingActive);
             }
 
             const exposureValue = String(litboxRenderer?.exposureOverride ?? 0);
@@ -469,7 +469,7 @@ sidebarPane.addEventListener('change', async (e: Event) => {
         // needs regenerating rather than just re-reading the same controls in place.
         const scenePropertiesContainer = document.getElementById('scene-properties-container');
         if (scenePropertiesContainer) {
-            scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer.getActiveScene());
+            scenePropertiesContainer.innerHTML = getScenePropertiesPanel(litboxRenderer.getActiveScene(), false);
         }
         // setScene() just reset denoiserTunables/simulationTunables to the new scene's own
         // defaults (see LitboxScene.getDenoiserTunables/getSimulationTunables) - regenerate both
@@ -561,6 +561,13 @@ if (canvas) {
             // Exposed for manual debugging from the devtools console, e.g.
             // `litboxRenderer.debugView = 'lightmap'` - see LitboxSceneRenderer.debugView.
             (window as unknown as { litboxRenderer: LitboxSceneRenderer }).litboxRenderer = renderer;
+            // If the user is already sitting on the Litbox tab, its sidebar was built while
+            // litboxRenderer was still null (updateView('litbox') falls back to defaults/empty
+            // panels in that case - see its own comment) - re-run it now so Scene Properties and
+            // the other live-state panels populate without the user needing to tab away and back.
+            if (appContainer.dataset.activeView === 'litbox') {
+                void updateView('litbox');
+            }
         })
         .catch(error => {
             hideCanvasLoading();
