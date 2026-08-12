@@ -1,6 +1,5 @@
 import type { LitboxScene } from './litbox/litbox_scene.ts';
 import { CornellSquareScene } from './litbox/scenes/cornell_square_scene.ts';
-import { BasicScene } from './litbox/scenes/basic_scene.ts';
 import { BattleScene } from './litbox/scenes/battle_scene.ts';
 
 /** One selectable entry in the configuration page's scene dropdown (see main.ts). */
@@ -12,7 +11,6 @@ export interface SceneRegistryEntry {
 /** Every scene selectable from the configuration page's scene dropdown - add a new scene here to make it selectable. */
 export const SCENE_REGISTRY: Record<string, SceneRegistryEntry> = {
     'cornell-square': { label: 'Cornell Square', load: () => CornellSquareScene.load() },
-   // 'basic': { label: 'Basic Test', load: () => BasicScene.load() },  // We don't want this one unless we're debugging something
     'battle': { label: 'Battle', load: () => BattleScene.load() },
 };
 
