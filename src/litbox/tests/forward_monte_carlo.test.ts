@@ -8,6 +8,7 @@ import {
     computeLightToTarget,
     computeDirectionalLightSegment,
     combineWriteCount,
+    layoutJobBatch,
 } from '../forward_monte_carlo.ts';
 
 describe('forward_monte_carlo pure per-light math', () => {
@@ -110,6 +111,40 @@ describe('forward_monte_carlo pure per-light math', () => {
                     expect(outside).toBe(true);
                 }
             }
+        });
+    });
+
+    describe('layoutJobBatch', () => {
+        it('gives the first job a zero rayOffset and totalRays equal to the single job\'s own ray count', () => {
+            const { rayOffsets, totalRays } = layoutJobBatch([128]);
+            expect(rayOffsets).toEqual([0]);
+            expect(totalRays).toBe(128);
+        });
+
+        it('offsets each subsequent job by the running sum of every prior job\'s ray count', () => {
+            const { rayOffsets, totalRays } = layoutJobBatch([64, 192, 128]);
+            expect(rayOffsets).toEqual([0, 64, 256]);
+            expect(totalRays).toBe(384);
+        });
+
+        it('maps every workgroup in a job\'s range to that job\'s index, in order', () => {
+            const { workgroupToJob } = layoutJobBatch([128, 64, 192]);
+            // job 0 -> 2 workgroups, job 1 -> 1 workgroup, job 2 -> 3 workgroups.
+            expect(Array.from(workgroupToJob)).toEqual([0, 0, 1, 2, 2, 2]);
+        });
+
+        it('produces an empty mapping for an empty batch', () => {
+            const { rayOffsets, workgroupToJob, totalRays } = layoutJobBatch([]);
+            expect(rayOffsets).toEqual([]);
+            expect(workgroupToJob.length).toBe(0);
+            expect(totalRays).toBe(0);
+        });
+
+        it('handles the minimum single-workgroup job size (64 rays)', () => {
+            const { rayOffsets, workgroupToJob, totalRays } = layoutJobBatch([64]);
+            expect(rayOffsets).toEqual([0]);
+            expect(Array.from(workgroupToJob)).toEqual([0]);
+            expect(totalRays).toBe(64);
         });
     });
 
