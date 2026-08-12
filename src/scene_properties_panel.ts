@@ -6,15 +6,20 @@ import type { LitboxScene } from './litbox/litbox_scene.ts';
  * denoiser_tunables_panel.ts's getDenoiserTunablesPanel, following the same pairing convention:
  * both controls in a row share the same `data-scene-slider-index` attribute (the slider's index
  * into `scene.getSliders()`) so main.ts's delegated listener can write the right one and keep the
- * paired control in sync. `scene` is null before a scene has finished loading.
+ * paired control in sync. `scene` is null before a scene has finished loading, which is also when
+ * `isLoading` distinguishes "no sliders yet because nothing's loaded" from a scene that's fully
+ * loaded and genuinely has none - see main.ts's `canvasLoadingActive` flag, its source of truth.
  */
-export function getScenePropertiesPanel(scene: LitboxScene | null): string {
+export function getScenePropertiesPanel(scene: LitboxScene | null, isLoading: boolean): string {
     const sliders = scene?.getSliders() ?? [];
     if (sliders.length === 0) {
+        const body = isLoading
+            ? `<div class="scene-properties-loading"><span class="scene-properties-spinner"></span></div>`
+            : `<p class="scene-properties-empty">This scene has no scene-specific properties.</p>`;
         return `
         <details class="scene-properties">
             <summary>Scene Properties</summary>
-            <p class="scene-properties-empty">This scene has no scene-specific properties.</p>
+            ${body}
         </details>`;
     }
 

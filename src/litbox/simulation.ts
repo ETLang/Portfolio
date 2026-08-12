@@ -18,6 +18,8 @@ import { ComputeVolatilityOperation } from './compute_volatility.ts';
 import { BuildDenoiserQuadtreeOperation } from './build_denoiser_quadtree.ts';
 import {
     ForwardMonteCarloOperation,
+    type ForwardMonteCarloFrameUniforms,
+    type ForwardMonteCarloJob,
     luminance,
     computeRayCount,
     resolveBounces,
@@ -195,7 +197,7 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     // guard against on its own are structurally gone, so it can sit much looser without fireflies
     // creeping back in.
     sigmaLuminanceTight: 1.0,
-    sigmaLuminanceLoose: 2.5,
+    sigmaLuminanceLoose: 3.5,
     kLuminance: 2.0,
     // Distance-bias split cutoff (this project's denoiser plan) - see denoise.wgsl's shouldSplit()
     // doc comment for the seed-relative-texels normalization this is measured in.
@@ -210,8 +212,8 @@ export const DEFAULT_DENOISER_TUNABLES: DenoiserTunables = {
     // doubling-target formula these feed). blurCascadeLevelCount default of 2 matches this
     // project's original educated guess at how many full-res levels a laser beam needs to survive
     // before decimation is safe - tunable specifically because that guess wasn't derived.
-    blurCascadeLevelCount: 2,
-    blurCascadeSigma: 3.0,
+    blurCascadeLevelCount: 3,
+    blurCascadeSigma: 1.6,
 };
 
 /**
@@ -260,7 +262,8 @@ export const DEFAULT_SIMULATION_TUNABLES: SimulationTunables = {
  * additively composites it into the HDR frame buffer as a world-space quad.
  *
  * run() drives the whole per-frame simulation pipeline: tracePhotons() dispatches the
- * ForwardMonteCarloOperation tracer once per light instance (see forward_monte_carlo.ts/.wgsl) to
+ * ForwardMonteCarloOperation tracer once per light *kind* present, batching every active instance
+ * of that kind into the one dispatch (see forward_monte_carlo.ts/.wgsl) to
  * populate photonBuffer (an atomic accumulator), then ConvertPhotonIrradianceToHdrOperation
  * converts that into the lightmap's mip 0, combining it with the albedo/density G-Buffer. This is
  * a single-pass, non-accumulating integration - photonBuffer is cleared every frame, not
@@ -736,9 +739,10 @@ export class SimulationResources {
 
     /**
      * Drives the full per-frame simulation + denoiser evidence-gathering pipeline (this project's
-     * denoiser plan): tracePhotons() dispatches the ForwardMonteCarlo tracer twice per light
-     * instance (once per half of the two-way variance-estimation ray split) into the shared
-     * stereo photonBuffer; ConvertPhotonIrradianceToHdrOperation converts each half into its own
+     * denoiser plan): tracePhotons() batches the ForwardMonteCarlo tracer's work into one dispatch
+     * per light kind, with two jobs per light instance (one per half of the two-way
+     * variance-estimation ray split) writing into the shared stereo photonBuffer;
+     * ConvertPhotonIrradianceToHdrOperation converts each half into its own
      * HDR irradiance texture; ComputeVarianceAndMipsOperation fuses mean(A,B)/variance/mip
      * generation into combinedIrradiance (mip0-4) and rawVariance (quarter res); mip generation
      * then continues for the G-Buffer and combinedIrradiance's deeper mips;
@@ -795,12 +799,13 @@ export class SimulationResources {
         // mip0 plus lightmapMipChain's first two mips, each holding mean * albedo * density (with
         // albedo/density box-filtered down through the same shared-memory reduction the mean
         // itself uses) rather than combinedIrradiance's raw irradiance mips - no separate dispatch
-        // (DenoiseOperation's combine-only fast path) or later blur-cascade work is spent on what
-        // this pass already produces for free. lightmapMipChain's mip0/mip1 are exactly half/
-        // quarter of lightmap's resolution, matching this fused pass's own mip1/mip2 sizing, so the
-        // redirect needs no adjustment - see this project's plan: denoiser-disabled is a debug/perf
-        // toggle, not the path the blur-cascade fix targets, so it deliberately keeps this
-        // box-filtered fast path instead of also running LightmapBlurCascade.
+        // (DenoiseOperation's combine-only fast path) needed to get lightmap's mip0 written when
+        // the denoiser is off. lightmapMipChain's mip0/mip1 are exactly half/quarter of lightmap's
+        // resolution, matching this fused pass's own mip1/mip2 sizing, so the redirect needs no
+        // adjustment - those two mips get free by-products of this fused pass, even though the
+        // blur cascade (see run()'s always-on LightmapBlurCascade.regenerate call below - it's a
+        // material property, not a denoising feature, so it runs whether or not the denoiser does)
+        // immediately overwrites them with its own result once it runs later this same frame.
         this.computeVarianceAndMips.updateSwitches({ combineAlbedoDensity: !this.denoiserEnabled });
         const combinedMip0 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(0) : this.lightmap.getMipView(0);
         const combinedMip1 = this.denoiserEnabled ? this.combinedIrradiance.getMipView(1) : this.lightmapMipChain.getMipView(0);
@@ -873,22 +878,25 @@ export class SimulationResources {
             this.ditherFilter.execute(encoder);
         }
         // When denoiserEnabled is false, denoise/ditherFilter never dispatch at all - lightmap's
-        // mip0 and lightmapMipChain's first two mips were already written directly above by
-        // computeVarianceAndMips's combined output; lightmapCascade's own levels are left
-        // unregenerated in that mode (see the comment on that redirect above).
-        if (this.denoiserEnabled) {
-            this.ensureBlurCascadeAllocated(width, height);
-            this.lightmapBlurCascade.regenerate(
-                encoder,
-                this.lightmap.getMipView(0),
-                this.lightmapCascade,
-                this.lightmapCascadeScratch,
-                this.lightmapMipChain,
-                width,
-                height,
-                this.denoiserTunables.blurCascadeSigma,
-            );
-        }
+        // mip0 was already written directly above by computeVarianceAndMips's combined output.
+        // The blur cascade itself is NOT a denoising feature (it's what sprite.wgsl samples for
+        // authored per-sprite blur, a material property - see LightmapBlurCascade's doc comment),
+        // so it always regenerates from lightmap's mip0 regardless of denoiserEnabled; this also
+        // means it overwrites lightmapMipChain's first two mips with its own (superior,
+        // never-decimated-then-decimated) result, superseding computeVarianceAndMips's box-filtered
+        // redirect there - that redirect stays purely because computeVarianceAndMips already
+        // produces those two mips for free as part of its fused mip0 reduction.
+        this.ensureBlurCascadeAllocated(width, height);
+        this.lightmapBlurCascade.regenerate(
+            encoder,
+            this.lightmap.getMipView(0),
+            this.lightmapCascade,
+            this.lightmapCascadeScratch,
+            this.lightmapMipChain,
+            width,
+            height,
+            this.denoiserTunables.blurCascadeSigma,
+        );
     }
 
     /**
@@ -1033,8 +1041,9 @@ export class SimulationResources {
     }
 
     /**
-     * Dispatches the ForwardMonteCarlo tracer once per light instance in the scene (not
-     * deduplicated by kind - matches Unity's ForwardMonteCarlo.Integrate/SimulateLight), each ray
+     * Dispatches the ForwardMonteCarlo tracer once per light *kind* present in the scene (not once
+     * per light instance - see forward_monte_carlo.wgsl's file header and ForwardMonteCarloOperation
+     * for why: every active light of a kind is batched into that one dispatch), each light's own ray
      * budget luminance-weighted from `simulation.raysPerFrame`. See forward_monte_carlo.ts for the
      * per-light math this mirrors, and forward_monte_carlo.wgsl for the actual integration.
      */
@@ -1055,15 +1064,6 @@ export class SimulationResources {
         // Clear every frame - matches Unity's Realtime-mode per-frame Clear()/NewScene() (this is a
         // single-pass, non-accumulating integration - see this project's plan).
         this.device.queue.writeBuffer(this.photonBuffer.buffer, 0, this.photonBufferClearData);
-
-        // Reset each light kind's per-frame uniform-buffer-slot cursor - see
-        // ForwardMonteCarloOperation.beginFrame's doc comment. Unconditional (even for a kind with
-        // no active lights this frame) since it's just a counter reset, no allocation.
-        this.pointOperation.beginFrame();
-        this.spotOperation.beginFrame();
-        this.laserOperation.beginFrame();
-        this.directionalOperation.beginFrame();
-        this.ambientOperation.beginFrame();
 
         const { width, height } = this.simulation;
         const { raysPerFrame, integrationInterval: integrationIntervalRatio, photonBounces, surfaceBias, ambientScatterSoftness } = this.simulationTunables;
@@ -1120,6 +1120,15 @@ export class SimulationResources {
 
         const worldToTargetPixels = computeWorldToTargetPixels(sceneGraph.getWorldTransform(this.simulation.ownerId), width, height);
 
+        const frameUniforms: ForwardMonteCarloFrameUniforms = { integrationInterval, integrationIntervalSquared, surfaceBias, ambientScatterSoftness };
+
+        // Group every (light, A/B half) job by which operation (light kind) it belongs to, so each
+        // kind present this frame gets exactly one batched updateJobs()+execute() call below instead
+        // of one execute() per light instance - see forward_monte_carlo.wgsl's file header for why.
+        // A Map keyed by the operation instance (not by `kind`) since that's what updateJobs is
+        // eventually called on, and it naturally dedupes to at most 5 entries (one per light kind).
+        const jobsByOperation = new Map<ForwardMonteCarloOperation, ForwardMonteCarloJob[]>();
+
         for (let i = 0; i < entries.length; i++) {
             const { kind, light, operation, pinch } = entries[i];
             const { energyRgb } = energies[i];
@@ -1140,23 +1149,22 @@ export class SimulationResources {
             const lightPinch: [number, number] = kind === 'spot' ? [pinchSquared, Math.atan(pinchSquared)] : [0, 0];
             const bounces = resolveBounces(photonBounces, light.bounces);
 
-            operation.updateSwitches({
-                bilinearPhotonDistribution: this.bilinearPhotonDistribution,
-                maxIntegrationSteps,
-            });
-            operation.updateInputs(seedBuffer.buffer, albedoView, densityView, normalRoughnessView, lutResources);
-            operation.updateOutputs(this.photonBuffer.buffer, this.writeCounterBuffer);
+            let jobs = jobsByOperation.get(operation);
+            if (!jobs) {
+                jobs = [];
+                jobsByOperation.set(operation, jobs);
+            }
 
             // Split this light's ray budget into two independent halves - disjoint seedBase
             // sub-ranges within its own seedBases[i]..seedBases[i]+rays[i] slice, each writing
             // into photonBuffer's own half (see its doc comment and this project's denoiser
             // plan). Split at workgroup (64-ray) granularity, not just in two arbitrarily: rays[i]
-            // is always a multiple of 64 (computeRayCount), and ForwardMonteCarloOperation's
-            // dispatch extent rounds *up* to whole workgroups - an unaligned split would let one
-            // half's "overflow" threads run past its intended ray count and collide with the
-            // other half's seed sub-range and photon writes. A light with the minimum single
-            // workgroup (rays[i] === 64) can't be split at all this way - all 64 rays go to half
-            // 0 and half 1 gets none for that light this frame, a rare, low-stakes edge case.
+            // is always a multiple of 64 (computeRayCount), and each job's ray count rounds *up* to
+            // whole workgroups - an unaligned split would let one half's "overflow" threads run past
+            // its intended ray count and collide with the other half's seed sub-range and photon
+            // writes. A light with the minimum single workgroup (rays[i] === 64) can't be split at
+            // all this way - all 64 rays go to half 0 and half 1 gets none for that light this
+            // frame, a rare, low-stakes edge case.
             const workgroupCount = rays[i] / 64;
             const workgroupCountA = Math.floor(workgroupCount / 2);
             const halves: { rays: number; seedBase: number; halfIndex: number }[] = [
@@ -1176,7 +1184,7 @@ export class SimulationResources {
                     energyRgb[1] * photonEnergyScale,
                     energyRgb[2] * photonEnergyScale,
                 ];
-                operation.updateUniforms({
+                jobs.push({
                     lightToTarget,
                     lightEnergy,
                     bounces,
@@ -1186,14 +1194,24 @@ export class SimulationResources {
                     directionalLightSegmentStart,
                     directionalLightSegmentVector,
                     lightPinch,
-                    integrationInterval,
-                    integrationIntervalSquared,
                     rays: half.rays,
-                    surfaceBias,
-                    ambientScatterSoftness,
                 });
-                operation.execute(encoder);
             }
+        }
+
+        for (const [operation, jobs] of jobsByOperation) {
+            if (jobs.length === 0) {
+                continue;
+            }
+            operation.updateSwitches({
+                bilinearPhotonDistribution: this.bilinearPhotonDistribution,
+                maxIntegrationSteps,
+            });
+            operation.updateFrameUniforms(frameUniforms);
+            operation.updateInputs(seedBuffer.buffer, albedoView, densityView, normalRoughnessView, lutResources);
+            operation.updateOutputs(this.photonBuffer.buffer, this.writeCounterBuffer);
+            operation.updateJobs(jobs);
+            operation.execute(encoder);
         }
     }
 

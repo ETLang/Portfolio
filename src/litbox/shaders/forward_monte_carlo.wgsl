@@ -9,43 +9,67 @@
 // single emitLight() this compiled instance needs; unlike Unity's separate kernel entry points
 // this project selects the kernel body via the WGSL preprocessor instead.
 //
-// Dispatched once per light instance (not deduplicated by kind - see SimulationResources), with
-// @workgroup_size(64,1,1) matching Unity's NUMTHREADS_1D so ray counts (always rounded up to a
-// multiple of 64 by the caller) divide evenly into whole workgroups.
+// Dispatched once per light *kind* per frame (not once per light instance): every active light of
+// this kind, each already split into its own A/B half exactly as before, is batched into one
+// dispatch as an array of LightJob entries (group 0, binding 1) plus a workgroupToJob mapping
+// (binding 2) built CPU-side - see ForwardMonteCarloOperation.updateJobs and this project's
+// CLAUDE.md (many small per-instance dispatches writing the same atomic photons/writeCounter
+// buffers forced the GPU to serialize them with a barrier between every single one; batching
+// collapses that to one barrier boundary per kind instead of one per light instance). Ray counts
+// (always rounded up to a multiple of 64 by the caller, unchanged by batching) still divide evenly
+// into whole @workgroup_size(64,1,1) workgroups - what changed is that a single dispatch's
+// workgroups can now belong to different jobs, resolved per-workgroup via workgroupToJob.
 #include "LitboxCommon.wgsl"
 
-struct Uniforms {
+// Frame-constant across every light this frame (derived from resolution/tunables, never per-light) -
+// kept in an actual uniform binding (not the per-job storage array below) so it stays on the fast
+// constant-buffer path rather than sharing bandwidth with the per-job data.
+struct FrameUniforms {
+    integrationInterval: f32,
+    integrationIntervalSquared: f32,
+    // SimulationTunables (simulation.ts) - see its own doc comment for what each controls.
+    surfaceBias: f32,
+    ambientScatterSoftness: f32,
+}
+@group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
+
+struct LightJob {
     // world -> simulation-target-pixel-space transform, already combined with this light's own
     // world transform (SimulationResources) - column-vector convention (M * v), no transpose
     // needed unlike the HLSL original (mul(v, M)).
     lightToTarget: mat4x4<f32>,
     lightEnergy: vec3<f32>,
     bounces: u32,
-    // This light's offset into the shared g_rand buffer - see ComputedDataManager.acquireRandomSeedBuffer.
+    // This job's offset into the shared g_rand buffer - see ComputedDataManager.acquireRandomSeedBuffer.
     // Deliberate improvement over Unity's literal behavior: Unity always indexes g_rand[id.x] from
     // 0 for every light, so two lights dispatched the same frame stomp/advance the same RNG state.
-    // Giving each light a disjoint slice removes that correlation.
+    // Giving each job a disjoint slice removes that correlation.
     seedBase: u32,
     // 0 or 1 - which half of the two-way variance-estimation split (see this project's denoiser
-    // plan) this dispatch's rays accumulate into within the shared, interleaved-per-pixel photons
-    // buffer below. Occupies what would otherwise be layout padding (seedBase's vec2-aligned
-    // trailing gap), not a size increase - see ForwardMonteCarloOperation.updateUniforms.
+    // plan) this job's rays accumulate into within the shared, interleaved-per-pixel photons
+    // buffer below.
     halfIndex: u32,
+    // This job's start offset within THIS DISPATCH's flat global_invocation_id.x range (distinct
+    // from seedBase, which offsets into g_rand instead) - since a batched dispatch packs many
+    // differently-sized jobs back to back, a job can't assume its own rays start at invocation 0
+    // the way a single-job-per-dispatch design could. See main()'s localRayIndex.
+    rayOffset: u32,
     directionalLightDirection: vec2<f32>,
     // (pinch^2, atan(pinch^2)) - spot kind only, computed CPU-side exactly like Unity's g_lightPinch.
     lightPinch: vec2<f32>,
-    integrationInterval: f32,
-    integrationIntervalSquared: f32,
     // Directional kind only - a line segment perpendicular to directionalLightDirection, computed
     // CPU-side (computeDirectionalLightSegment) so it clears the target rect from any direction;
     // lightEnergy is pre-divided by its length so total emitted power stays resolution-independent.
     directionalLightSegmentStart: vec2<f32>,
     directionalLightSegmentVector: vec2<f32>,
-    // SimulationTunables (simulation.ts) - see its own doc comment for what each controls.
-    surfaceBias: f32,
-    ambientScatterSoftness: f32,
 }
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+// Read-only, runtime-sized, indexed by a value read from workgroupToJob below - safe per CLAUDE.md's
+// WGSL indexing gotcha (buffer-backed, not a function-local array literal indexed at runtime).
+@group(0) @binding(1) var<storage, read> jobs: array<LightJob>;
+// One u32 per workgroup in this dispatch, giving that workgroup's index into `jobs` above - built
+// CPU-side from each job's own (64-aligned) ray count, so every thread in a workgroup resolves the
+// same job with a single O(1) storage read instead of a per-invocation search.
+@group(0) @binding(2) var<storage, read> workgroupToJob: array<u32>;
 
 @group(1) @binding(0) var<storage, read_write> g_rand: array<vec4<u32>>;
 @group(1) @binding(1) var albedo: texture_2d<f32>;
@@ -61,7 +85,7 @@ struct Uniforms {
 @group(1) @binding(7) var brdfLut: texture_3d<f32>;
 
 // photons: 6 consecutive atomic<u32> entries per pixel - two interleaved 3-wide (R,G,B) halves,
-// this dispatch's own half selected by uniforms.halfIndex (see this project's denoiser plan: the
+// this invocation's own half selected by job.halfIndex (see this project's denoiser plan: the
 // ray budget is split into two independent halves per light so their disagreement can be used as
 // a variance estimate) - same layout convert_photon_irradiance_to_hdr.wgsl reads. writeCounter: a
 // 2-element manual uint64 (index 0 =
@@ -123,7 +147,7 @@ fn integratorInit(seed: vec4<u32>) -> Integrator {
 
 fn integratorBeginTraversal(integrator: ptr<function, Integrator>) {
     (*integrator).currentSample = 0.0;
-    (*integrator).uSampleTarget = randomNext(&(*integrator).rand) * uniforms.integrationInterval;
+    (*integrator).uSampleTarget = randomNext(&(*integrator).rand) * frameUniforms.integrationInterval;
     (*integrator).transmissibility = 1.0;
 }
 
@@ -150,7 +174,7 @@ fn integratorPropagate(integrator: ptr<function, Integrator>, ctx: ptr<function,
         // Note preserved from Unity: ctx.testUV is a slightly different location than
         // uSampleTarget points to - doesn't seem to impact quality, simpler math this way.
         writeSample(integrator, (*ctx).photon.energy, (*ctx).photon.origin + (*ctx).photon.direction * (*integrator).uSampleTarget);
-        (*integrator).uSampleTarget = ((*integrator).currentSample + (*integrator).uSampleRandomOffset) * uniforms.integrationInterval;
+        (*integrator).uSampleTarget = ((*integrator).currentSample + (*integrator).uSampleRandomOffset) * frameUniforms.integrationInterval;
     }
 
     return true;
@@ -290,7 +314,7 @@ fn scatterMaterially(rand: ptr<function, Random>, origin: ptr<function, vec2<f32
         let reflected = reflect(incoming, normal2D);
 
         let alignment = clamp(alignment0 / len, 0.0, 1.0);
-        *origin -= incoming * uniforms.surfaceBias;
+        *origin -= incoming * frameUniforms.surfaceBias;
         if (alignment > 0.999) {
             return vec4<f32>(reflected, 1.0, 0.0);
         } else if (alignment == 0.0) {
@@ -319,7 +343,7 @@ fn writePhotonIndexed(pixel: vec2<i32>, energy: vec3<f32>, suppressPhoton: bool)
         return;
     }
 
-    let base = (u32(pixel.y) * u32(size.x) + u32(pixel.x)) * 6u + uniforms.halfIndex * 3u;
+    let base = (u32(pixel.y) * u32(size.x) + u32(pixel.x)) * 6u + job.halfIndex * 3u;
     atomicAdd(&photons[base], u32(energy.r));
     atomicAdd(&photons[base + 1u], u32(energy.g));
     atomicAdd(&photons[base + 2u], u32(energy.b));
@@ -351,12 +375,12 @@ fn writePhotonNearest(location: vec2<f32>, energy: vec3<f32>) {
 // tile-friendly realtime denoise pass exists to compensate for the lost smoothing.
 #ifdef BILINEAR_PHOTON_DISTRIBUTION
 fn writeSample(integrator: ptr<function, Integrator>, energy: vec3<f32>, location: vec2<f32>) {
-    let outScatterDensity = uniforms.integrationIntervalSquared * (*integrator).transmissibility;
+    let outScatterDensity = frameUniforms.integrationIntervalSquared * (*integrator).transmissibility;
     writePhotonBilinear(location, energy * outScatterDensity);
 }
 #else
 fn writeSample(integrator: ptr<function, Integrator>, energy: vec3<f32>, location: vec2<f32>) {
-    let outScatterDensity = uniforms.integrationIntervalSquared * (*integrator).transmissibility;
+    let outScatterDensity = frameUniforms.integrationIntervalSquared * (*integrator).transmissibility;
     writePhotonNearest(location, energy * outScatterDensity);
 }
 #endif
@@ -432,13 +456,13 @@ fn integrate(photon: ptr<function, Ray>, bounces: u32, integrator: ptr<function,
 // position by 0.5 here instead, so the transform lookup stays uniform across all 5 light kinds.
 fn emitLight(rand: ptr<function, Random>) -> Ray {
     let pos = randomNextCircle(rand) * 0.5;
-    let origin = (uniforms.lightToTarget * vec4<f32>(pos, 0.0, 1.0)).xy;
+    let origin = (job.lightToTarget * vec4<f32>(pos, 0.0, 1.0)).xy;
     let importantDirection = scatterImportanceLobed(rand, origin);
 
     var emitted: Ray;
     emitted.origin = origin;
     emitted.direction = importantDirection.xy;
-    emitted.energy = uniforms.lightEnergy * importantDirection.z;
+    emitted.energy = job.lightEnergy * importantDirection.z;
     return emitted;
 }
 #endif
@@ -446,12 +470,12 @@ fn emitLight(rand: ptr<function, Random>) -> Ray {
 #ifdef LIGHT_KIND_SPOT
 fn emitLight(rand: ptr<function, Random>) -> Ray {
     var pinched = 2.0 * randomNext(rand) - 1.0;
-    pinched = tan(pinched * uniforms.lightPinch.y) / uniforms.lightPinch.x;
+    pinched = tan(pinched * job.lightPinch.y) / job.lightPinch.x;
 
     var emitted: Ray;
-    emitted.origin = (uniforms.lightToTarget * vec4<f32>(randomNext(rand) - 0.5, randomNext(rand) - 0.5, 0.0, 1.0)).xy;
-    emitted.direction = normalize((uniforms.lightToTarget * vec4<f32>(pinched, -1.0, 0.0, 0.0)).xy);
-    emitted.energy = uniforms.lightEnergy;
+    emitted.origin = (job.lightToTarget * vec4<f32>(randomNext(rand) - 0.5, randomNext(rand) - 0.5, 0.0, 1.0)).xy;
+    emitted.direction = normalize((job.lightToTarget * vec4<f32>(pinched, -1.0, 0.0, 0.0)).xy);
+    emitted.energy = job.lightEnergy;
     return emitted;
 }
 #endif
@@ -459,9 +483,9 @@ fn emitLight(rand: ptr<function, Random>) -> Ray {
 #ifdef LIGHT_KIND_LASER
 fn emitLight(rand: ptr<function, Random>) -> Ray {
     var emitted: Ray;
-    emitted.origin = (uniforms.lightToTarget * vec4<f32>(randomNext(rand) - 0.5, randomNext(rand), 0.0, 1.0)).xy;
-    emitted.direction = normalize((uniforms.lightToTarget * vec4<f32>(0.0, -1.0, 0.0, 0.0)).xy);
-    emitted.energy = uniforms.lightEnergy;
+    emitted.origin = (job.lightToTarget * vec4<f32>(randomNext(rand) - 0.5, randomNext(rand), 0.0, 1.0)).xy;
+    emitted.direction = normalize((job.lightToTarget * vec4<f32>(0.0, -1.0, 0.0, 0.0)).xy);
+    emitted.energy = job.lightEnergy;
     return emitted;
 }
 #endif
@@ -469,9 +493,9 @@ fn emitLight(rand: ptr<function, Random>) -> Ray {
 #ifdef LIGHT_KIND_DIRECTIONAL
 fn emitLight(rand: ptr<function, Random>) -> Ray {
     var emitted: Ray;
-    emitted.direction = uniforms.directionalLightDirection;
-    emitted.origin = uniforms.directionalLightSegmentStart + uniforms.directionalLightSegmentVector * randomNext(rand);
-    emitted.energy = uniforms.lightEnergy;
+    emitted.direction = job.directionalLightDirection;
+    emitted.origin = job.directionalLightSegmentStart + job.directionalLightSegmentVector * randomNext(rand);
+    emitted.energy = job.lightEnergy;
     return emitted;
 }
 #endif
@@ -483,8 +507,8 @@ fn emitLight(rand: ptr<function, Random>) -> Ray {
 
     var emitted: Ray;
     emitted.origin = nOrigin * targetSize;
-    emitted.direction = normalize(randomNextDirection(rand) - (nOrigin * 2.0 - vec2<f32>(1.0, 1.0)) / uniforms.ambientScatterSoftness);
-    emitted.energy = uniforms.lightEnergy;
+    emitted.direction = normalize(randomNextDirection(rand) - (nOrigin * 2.0 - vec2<f32>(1.0, 1.0)) / frameUniforms.ambientScatterSoftness);
+    emitted.energy = job.lightEnergy;
     return emitted;
 }
 #endif
@@ -496,19 +520,35 @@ fn emitLight(rand: ptr<function, Random>) -> Ray {
 var<workgroup> sharedWriteCounter: atomic<u32>;
 var<workgroup> sharedLiveThreads: atomic<i32>;
 
+// This invocation's resolved job (see the LightJob doc comment above) - every function in this file
+// that used to read the single per-dispatch `uniforms` now reads this instead. Per-invocation
+// private storage rather than a workgroup-shared read-once-and-broadcast, since a single indexed
+// storage read per invocation is already trivial next to this shader's own ray-march cost, and this
+// avoids needing a second workgroupBarrier just to publish it.
+var<private> job: LightJob;
+
 @compute @workgroup_size(64, 1, 1)
-fn main(@builtin(global_invocation_id) globalId: vec3<u32>, @builtin(local_invocation_index) localIndex: u32) {
+fn main(
+    @builtin(global_invocation_id) globalId: vec3<u32>,
+    @builtin(local_invocation_index) localIndex: u32,
+    @builtin(workgroup_id) workgroupId: vec3<u32>,
+) {
+    job = jobs[workgroupToJob[workgroupId.x]];
+
     if (localIndex == 0u) {
         atomicStore(&sharedWriteCounter, 0u);
         atomicStore(&sharedLiveThreads, 64);
     }
     workgroupBarrier();
 
-    let seedIndex = uniforms.seedBase + globalId.x;
+    // Local ray index within this job's own range, not this whole (possibly multi-job) dispatch -
+    // see LightJob.rayOffset's doc comment.
+    let localRayIndex = globalId.x - job.rayOffset;
+    let seedIndex = job.seedBase + localRayIndex;
     var integrator = integratorInit(g_rand[seedIndex]);
     var photon = emitLight(&integrator.rand);
 
-    integrate(&photon, uniforms.bounces, &integrator);
+    integrate(&photon, job.bounces, &integrator);
 
     g_rand[seedIndex] = integrator.rand.state;
 

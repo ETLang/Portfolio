@@ -23,8 +23,8 @@ const UNIFORM_BUFFER_SIZE = 16; // direction: vec2<f32> (8) + radius: i32 (4) + 
 export class GaussianBlurPassOperation extends ComputeOperation {
     /**
      * One small uniform buffer per dispatch within the current frame, not a single buffer reused
-     * across calls - same fix, same reason, as ForwardMonteCarloOperation.uniformBufferPool (see
-     * its doc comment for the full explanation): LightmapBlurCascade calls updateUniforms()+
+     * across calls - see CLAUDE.md's "Compute-shader operation architecture" for the general
+     * pattern this fixes: LightmapBlurCascade calls updateUniforms()+
      * execute() on this SAME instance many times per frame (two passes per cascade/bridging
      * level), all recorded into one shared GPUCommandEncoder that isn't submitted until the very
      * end of the frame. GPUQueue.writeBuffer() is ordered strictly by JS call order on the queue's
@@ -42,7 +42,6 @@ export class GaussianBlurPassOperation extends ComputeOperation {
         super(device, preprocessShader(shaderCode), 'main');
     }
 
-    /** Resets the per-frame uniform-buffer-pool slot cursor - call once per frame (see LightmapBlurCascade.regenerate), before this operation's first updateUniforms() call that frame. Safe to reuse slot 0 again even though the GPU may still be processing last frame's submitted work referencing that same buffer - see ForwardMonteCarloOperation.beginFrame's doc comment for why. */
     public beginFrame(): void {
         this.nextSlot = 0;
     }

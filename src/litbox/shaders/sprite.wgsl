@@ -205,7 +205,7 @@ fn fragment_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let light = lightSample * props.simContribution + props.ambient;
     var color = baseColor * light * props.colorMod;
-    color = vec4<f32>(color.rgb + props.emissive.rgb, color.a);
+    color = vec4<f32>(color.rgb + props.emissive.rgb * color.a, color.a);
     color = color * props.opacity;
 
     let coverage = shapeCoverage(props.primitiveShapeId, in.uv);

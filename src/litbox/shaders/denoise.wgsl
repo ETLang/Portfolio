@@ -116,12 +116,54 @@ fn hasNearbyDetail(uv: vec2<f32>) -> bool {
 #endif
 }
 
+// Exact median of 9 values via a sorting network (Morgan McGuire, "A Fast, Small-Radius GPU Median
+// Filter") - deliberately not a mean/box-average. A firefly is a MINORITY, spatially-isolated
+// outlier within its own 3x3 neighborhood, so the median excludes it outright (exact rejection,
+// regardless of how extreme it is), whereas a mean only dilutes it - confirmed insufficient even
+// at a 16-sample (mip2) dilution, since the outlier still pulls the average toward itself. A real,
+// spatially-coherent feature (most of the neighborhood agrees it's bright) is exactly what a
+// median still faithfully reports, unlike widening a similarity threshold instead - see this
+// project's denoiser plan for why that alternative was tried and reverted (fixes the halo but also
+// dissolves a real feature into it, since a wide tolerance can't distinguish "genuinely different
+// neighborhood" from "one outlier pixel" the way a median can).
+fn median9(v0: f32, v1: f32, v2: f32, v3: f32, v4: f32, v5: f32, v6: f32, v7: f32, v8: f32) -> f32 {
+    var s0 = v0; var s1 = v1; var s2 = v2; var s3 = v3; var s4 = v4;
+    var s5 = v5; var s6 = v6; var s7 = v7; var s8 = v8;
+    var t: f32;
+
+    t = s0; s0 = min(s0, s3); s3 = max(t, s3);
+    t = s1; s1 = min(s1, s4); s4 = max(t, s4);
+    t = s2; s2 = min(s2, s5); s5 = max(t, s5);
+    t = s0; s0 = min(s0, s1); s1 = max(t, s1);
+    t = s0; s0 = min(s0, s2); s2 = max(t, s2);
+    t = s4; s4 = min(s4, s5); s5 = max(t, s5);
+    t = s3; s3 = min(s3, s5); s5 = max(t, s5);
+
+    t = s1; s1 = min(s1, s2); s2 = max(t, s2);
+    t = s3; s3 = min(s3, s4); s4 = max(t, s4);
+    t = s1; s1 = min(s1, s3); s3 = max(t, s3);
+    t = s1; s1 = min(s1, s6); s6 = max(t, s6);
+    t = s4; s4 = min(s4, s6); s6 = max(t, s6);
+    t = s2; s2 = min(s2, s6); s6 = max(t, s6);
+
+    t = s2; s2 = min(s2, s3); s3 = max(t, s3);
+    t = s4; s4 = min(s4, s7); s7 = max(t, s7);
+    t = s2; s2 = min(s2, s4); s4 = max(t, s4);
+    t = s3; s3 = min(s3, s7); s7 = max(t, s7);
+
+    t = s4; s4 = min(s4, s8); s8 = max(t, s8);
+    t = s3; s3 = min(s3, s8); s8 = max(t, s8);
+    t = s3; s3 = min(s3, s4); s4 = max(t, s4);
+
+    return s4;
+}
+
 fn decideWeight(
     queryUv: vec2<f32>,
     centerAlbedo: vec3<f32>,
     centerNormal: vec3<f32>,
     centerOpticalDepth: f32,
-    centerLuminance: f32,
+    radianceReferenceLuminance: f32,
     sigmaAdaptive: f32,
     seedTexelSize: vec2<f32>,
     node: TreeSampleNode,
@@ -164,7 +206,7 @@ fn decideWeight(
     // sigma can mean consistently regardless of a scene's overall light energy - a smaller,
     // independent robustness improvement alongside the wNormal fix above (this one wasn't confirmed
     // to be the reported bug's root cause, but doesn't regress cornell_square either).
-    let radianceWeight = gaussianWeight(abs(logLuminance(centerLuminance, uniforms.darknessNoiseFloor) - logLuminance(sampleLuminance, uniforms.darknessNoiseFloor)), sigmaAdaptive);
+    let radianceWeight = gaussianWeight(abs(logLuminance(radianceReferenceLuminance, uniforms.darknessNoiseFloor) - logLuminance(sampleLuminance, uniforms.darknessNoiseFloor)), sigmaAdaptive);
 
     let distanceInSeeds = length(node.uv - queryUv) / max(seedTexelSize.x, seedTexelSize.y);
     let spatialWeight = exp(-distanceInSeeds * distanceInSeeds);
@@ -253,7 +295,23 @@ fn main(
             smoothstep(0.0, 1.0 / uniforms.kLuminance, centerVariance)),
         uniforms.sigmaLuminanceTight,
         hasNearbyDetail(uv));
-    let centerLuminance = luminance(centerIrradiance);
+
+    // radianceWeight's comparison baseline - the median (not mean) of the query's own immediate
+    // 3x3 mip0 neighborhood, deliberately not centerIrradiance's raw single-pixel value. See
+    // median9()'s doc comment for the full firefly-vs-real-feature argument. textureLoad's defined
+    // zero-fill for out-of-bounds coordinates (same convention compute_volatility.wgsl already
+    // relies on for its own 4-neighborhood read) makes edge clamping unnecessary here.
+    let radianceReferenceLuminance = median9(
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>(-1, -1), 0).rgb),
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>( 0, -1), 0).rgb),
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>( 1, -1), 0).rgb),
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>(-1,  0), 0).rgb),
+        luminance(centerIrradiance),
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>( 1,  0), 0).rgb),
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>(-1,  1), 0).rgb),
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>( 0,  1), 0).rgb),
+        luminance(textureLoad(combinedIrradiance, coords + vec2<i32>( 1,  1), 0).rgb),
+    );
 
     // exp2(blurSize), not f32(1u << u32(startMip)) - continuous, not stepped in powers of two.
     // This is what actually makes the blur-size transition smooth despite startMip itself being a
@@ -321,7 +379,7 @@ fn main(
         // version silently drops a node's energy when it can't split due to stack overflow
         // (falls through to leaf code that only accumulates at mip 0); resolving as a coarser
         // leaf here instead bounds worst-case quality degradation without losing energy.
-        accumulated += decideWeight(uv, centerAlbedo, centerNormal, centerOpticalDepth, centerLuminance,
+        accumulated += decideWeight(uv, centerAlbedo, centerNormal, centerOpticalDepth, radianceReferenceLuminance,
             sigmaAdaptive, seedTexelSize, current, nodeSize);
     }
 

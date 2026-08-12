@@ -124,25 +124,71 @@ op.execute(encoder);
     `GPUCommandEncoder` does *not* snapshot whatever a bound buffer currently holds - a dispatch
     only reads the buffer's contents once the GPU actually reaches it, which for every dispatch
     in a frame is *after* every `writeBuffer()` call issued before that frame's one `submit()`.
-    An operation whose `execute()` is called several times per frame (once per light instance,
-    once per blur pass, etc.), all recorded into the same not-yet-submitted encoder, therefore
-    can't just call `queue.writeBuffer()` on a single persistent buffer before each call - every
-    earlier dispatch will silently end up reading whichever call happened *last*, not the value
-    that was current when it was recorded. Hit twice in this codebase: `ForwardMonteCarloOperation`
-    (each light instance/half wrote to the same buffer - `centerVariance` read as saturated
-    almost everywhere, not real scene noise, until fixed) and `LightmapBlurCascade`'s
-    `GaussianBlurPassOperation` (every blur pass silently read the last-recorded direction,
-    producing blur that looked vertical-only even where a horizontal pass should have run). The
-    fix both times: `uniformBufferPool: GPUBuffer[]` + a `nextSlot` cursor that climbs on every
-    `updateUniforms()` call (allocating one more buffer only the first time it needs to), plus a
-    `beginFrame()` that resets `nextSlot` to 0 once per frame (safe to reuse slot 0 across frames
-    even if the GPU is still processing last frame's submitted work referencing it, since a write
-    issued after last frame's `submit()` - which this always is - is guaranteed to only be
-    visible to subsequently submitted work). See `ForwardMonteCarloOperation.uniformBufferPool`/
-    `GaussianBlurPassOperation` for the pattern to copy. `ComputeOperation.execute()` now throws
-    if it detects the unsafe pattern (same encoder, unchanged uniform bind group, called twice) -
-    but that's a backstop for a mistake already made, not a substitute for using the pool pattern
-    from the start in any new multi-dispatch-per-frame operation.
+    An operation whose `execute()` is called several times per frame, all recorded into the same
+    not-yet-submitted encoder, therefore can't just call `queue.writeBuffer()` on a single
+    persistent buffer before each call - every earlier dispatch will silently end up reading
+    whichever call happened *last*, not the value that was current when it was recorded. Hit in
+    this codebase by `LightmapBlurCascade`'s `GaussianBlurPassOperation` (every blur pass
+    silently read the last-recorded direction, producing blur that looked vertical-only even
+    where a horizontal pass should have run) and `BuildDenoiserQuadtreeOperation` (one dispatch
+    per quadtree level). The fix: `uniformBufferPool: GPUBuffer[]` + a `nextSlot` cursor that
+    climbs on every `updateUniforms()` call (allocating one more buffer only the first time it
+    needs to), plus a `beginFrame()` that resets `nextSlot` to 0 once per frame (safe to reuse
+    slot 0 across frames even if the GPU is still processing last frame's submitted work
+    referencing it, since a write issued after last frame's `submit()` - which this always is -
+    is guaranteed to only be visible to subsequently submitted work). See
+    `GaussianBlurPassOperation.uniformBufferPool` for the pattern to copy.
+    `ComputeOperation.execute()` throws if it detects the unsafe pattern (same encoder, unchanged
+    uniform bind group, called twice) - but that's a backstop for a mistake already made, not a
+    substitute for using the pool pattern from the start in any new multi-dispatch-per-frame
+    operation. `ForwardMonteCarloOperation` used to be a third example of this (one dispatch per
+    light instance/half - `centerVariance` read as saturated almost everywhere, not real scene
+    noise, until fixed), but has since moved off per-instance dispatch entirely - see the batched
+    single-dispatch pattern below, which was a better fit for its specific shape (many small,
+    same-pipeline work items, all writing into the same shared output buffer).
+  - **A different shape entirely: batch many same-pipeline work items into one dispatch, instead
+    of dispatching once per item.** Applies when an operation would otherwise need `execute()`
+    called once per light/particle/instance/etc. *and* every one of those dispatches writes into
+    the same shared output resource (e.g. via atomics) - `ForwardMonteCarloOperation`
+    (`forward_monte_carlo.ts`/`.wgsl`) is the example: it used to dispatch once per light
+    instance (per this project's old per-dispatch-pool pattern above), all writing into the same
+    atomic `photons`/`writeCounter` buffers. That many small dispatches sharing a writable
+    resource is doubly expensive: each `execute()` pays its own fixed CPU-side cost
+    (`beginComputePass`/`createBindGroup`), *and* because WebGPU's resource-hazard tracking for
+    storage buffers is whole-buffer granularity (not byte-range), the implementation must insert
+    a full barrier between every pair of dispatches that write the same buffer - even when, as
+    here, each dispatch's writes are actually disjoint (each light's own half of `photons`) -
+    forcing the GPU to fully serialize dispatches it could otherwise overlap. Fix: batch every
+    active work item into one dispatch per pipeline (here, per light *kind*, since kind is a
+    compile-time `#define` selecting a different shader body, so items of different kinds still
+    can't share a dispatch). Shape:
+    - Per-item data (whatever varies per light instance/half) goes in a `var<storage, read>
+      array<Job>` (group 0), indexed via a second `var<storage, read> array<u32>` mapping each
+      *workgroup* to its owning item's index - built CPU-side from each item's own (workgroup-
+      aligned) size, so every thread in a workgroup resolves the same item with one O(1) storage
+      read (`workgroupToJob[workgroup_id.x]`), not a per-invocation search. Both are safe to index
+      at runtime per this file's WGSL indexing gotcha above (buffer-backed, not a function-local
+      array literal).
+    - Whatever's genuinely constant across every item this frame (not per-item) moves to its own
+      small `var<uniform>` binding instead of being duplicated into every `Job` entry - keeps it
+      on the fast constant-buffer path and off the storage array's per-item bandwidth.
+    - Each item's resolved struct is read once per invocation into a `var<private>` module-scope
+      variable near the top of `main()`, so every other function in the shader keeps referencing
+      it exactly as if it were still the single per-dispatch uniform - no signature threading
+      needed through the call graph.
+    - Dispatch extent becomes the *sum* of every item's own extent; an item that needs to recover
+      its own local index within the shared invocation range (e.g. for per-item RNG-stream
+      slicing) needs an explicit per-item offset field for that, distinct from any of its other
+      buffer offsets that live in unrelated address spaces (`ForwardMonteCarloJob.rayOffset` vs.
+      `seedBase` - the former offsets into *this dispatch's* flat range, the latter into the
+      unrelated shared RNG buffer).
+    - Since the operation is back to being dispatched at most once per frame, it no longer needs
+      the per-dispatch buffer pool above - an ordinary grow-only buffer (matching
+      `ComputedDataManager.acquireRandomSeedBuffer`'s "keep if big enough, else destroy and
+      reallocate" pattern) is enough.
+    - This doesn't help across pipelines (can't batch a point light's dispatch with a spot
+      light's - different compiled shaders), only within one - going from "up to 2×instance
+      count" dispatches to "one per active kind" already captures effectively the whole win.
 - **Dispatch size is computed by the operation itself, not passed in by the caller.**
   `execute(encoder)` takes no width/height/item-count parameters - each subclass knows its own
   dispatch extent from whatever it was last given via `updateOutputs` (e.g. an output

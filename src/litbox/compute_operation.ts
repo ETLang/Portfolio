@@ -23,8 +23,10 @@
  * A subclass dispatched more than once per frame (into one shared, not-yet-submitted encoder)
  * must give each dispatch its own uniform buffer, not reuse one written via repeated
  * device.queue.writeBuffer() calls - see CLAUDE.md's "Compute-shader operation architecture" for
- * why, and ForwardMonteCarloOperation/GaussianBlurPassOperation for the buffer-pool pattern that
- * fixes it. execute() below throws if it detects the unsafe pattern.
+ * why, and GaussianBlurPassOperation/BuildDenoiserQuadtreeOperation for the buffer-pool pattern
+ * that fixes it (ForwardMonteCarloOperation used to need this too, before it switched to batching
+ * every light of a kind into one dispatch per frame instead - see its class doc comment).
+ * execute() below throws if it detects the unsafe pattern.
  */
 export abstract class ComputeOperation {
     protected device: GPUDevice;
@@ -134,10 +136,10 @@ export abstract class ComputeOperation {
      * updateUniforms() call actually altered it in between), throws rather than silently recording
      * a second dispatch that will read whatever the LAST updateUniforms() call in the whole frame
      * happened to write. A subclass dispatched more than once per frame (see
-     * ForwardMonteCarloOperation, GaussianBlurPassOperation) must call its own updateUniforms()
+     * GaussianBlurPassOperation, BuildDenoiserQuadtreeOperation) must call its own updateUniforms()
      * before every execute() - even with values equal to last time - so setUniforms() sees a
      * genuinely new buffer and marks the group dirty again; that's exactly what the buffer-pool
-     * pattern those two classes use already does unconditionally.
+     * pattern those classes use already does unconditionally.
      */
     public execute(encoder: GPUCommandEncoder): void {
         if (this.uniformEntries.length > 0 && encoder === this.lastExecuteEncoder && !this.uniformGroupDirty) {

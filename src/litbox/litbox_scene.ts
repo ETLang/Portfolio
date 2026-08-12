@@ -223,6 +223,15 @@ export abstract class LitboxScene {
     public onFrame(_deltaTimeSeconds: number): void {}
 
     /**
+     * Called once, right before this scene is swapped out by a later LitboxSceneRenderer.setScene
+     * call (never on final teardown of the app itself). Override to release anything onLoad()
+     * acquired outside this scene's own data - e.g. a DOM listener registered on
+     * renderer.getCanvas(), which otherwise outlives this scene instance since the canvas is
+     * shared/persistent across scene switches.
+     */
+    public onUnload(): void {}
+
+    /**
      * Per-scene defaults for DenoiserTunables (see its own doc comment), applied on top of
      * DEFAULT_DENOISER_TUNABLES every time this scene loads (see
      * SimulationResources.loadFromScene) - the ideal denoiser "look" varies enough scene-to-scene
@@ -249,35 +258,52 @@ export abstract class LitboxScene {
         return null;
     }
 
+    /**
+     * Short human-readable text for the status bar's center panel while this scene is active
+     * (see main.ts, which re-reads this on every scene load/switch rather than hardcoding
+     * anything scene-specific in the status bar markup itself). None of the exported scenes have
+     * any real camera/scene interaction wired up yet, so this is a placeholder describing what's
+     * on screen, not a control hint - override per scene once real interaction exists.
+     */
+    public getStatusText(): string {
+        return 'No interaction yet';
+    }
+
     // --- Scene-authoring API. `name` accepts either a bare unique SceneObject name, or
     // a "/"-separated path (e.g. "Left Wall/Sprite") that resolves each segment as a
     // unique direct child of the previous one - use a path when the bare name is
     // ambiguous (see resolvePath).
 
-    /** Marks the named object's transform dynamic (re-derived/re-uploaded every frame) and returns its live struct. */
-    public makeTransformDynamic(name: string): SceneObject {
-        const obj = this.resolvePath(name);
+    /**
+     * Marks the named (or directly referenced) object's transform dynamic (re-derived/re-uploaded
+     * every frame) and returns its live struct. Pass a direct SceneObject reference (e.g. one
+     * returned by cloneObject) instead of a name/path once more than one object shares that name,
+     * since resolvePath can no longer find it unambiguously - same reference-form rationale as
+     * markTransformDirty.
+     */
+    public makeTransformDynamic(target: string | SceneObject): SceneObject {
+        const obj = typeof target === 'string' ? this.resolvePath(target) : target;
         this.transformFlags.markDynamic(obj);
         return obj;
     }
 
-    /** Marks the named object's Nth owned light (combined across all light kinds) dynamic and returns its live struct. */
-    public makeLightDynamic(name: string, index = 0): AnyLight {
-        const light = this.findLightByOwner(this.resolvePath(name), index);
+    /** Marks the named (or directly referenced) object's Nth owned light (combined across all light kinds) dynamic and returns its live struct - see makeTransformDynamic for the reference form. */
+    public makeLightDynamic(target: string | AnyLight, index = 0): AnyLight {
+        const light = typeof target === 'string' ? this.findLightByOwner(this.resolvePath(target), index) : target;
         this.lightFlags.markDynamic(light);
         return light;
     }
 
-    /** Marks the named object's Nth owned sprite dynamic and returns its live struct. */
-    public makeSpriteDynamic(name: string, index = 0): SceneSprite {
-        const sprite = this.findSpriteByOwner(this.resolvePath(name), index);
+    /** Marks the named (or directly referenced) object's Nth owned sprite dynamic and returns its live struct - see makeTransformDynamic for the reference form. */
+    public makeSpriteDynamic(target: string | SceneSprite, index = 0): SceneSprite {
+        const sprite = typeof target === 'string' ? this.findSpriteByOwner(this.resolvePath(target), index) : target;
         this.spriteFlags.markDynamic(sprite);
         return sprite;
     }
 
-    /** Marks the named object's Nth owned raytraced entry dynamic and returns its live struct. */
-    public makeRayTracedDynamic(name: string, index = 0): RaytracedObject {
-        const entry = this.findRaytracedByOwner(this.resolvePath(name), index);
+    /** Marks the named (or directly referenced) object's Nth owned raytraced entry dynamic and returns its live struct - see makeTransformDynamic for the reference form. */
+    public makeRayTracedDynamic(target: string | RaytracedObject, index = 0): RaytracedObject {
+        const entry = typeof target === 'string' ? this.findRaytracedByOwner(this.resolvePath(target), index) : target;
         this.raytracedFlags.markDynamic(entry);
         return entry;
     }
