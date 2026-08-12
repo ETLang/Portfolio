@@ -34,7 +34,7 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
     /**
      * One small uniform buffer per dispatch within the current frame, not a single buffer reused
      * across calls - see CLAUDE.md's "Compute-shader operation architecture" and
-     * ForwardMonteCarloOperation.uniformBufferPool for the full explanation. SimulationResources.
+     * GaussianBlurPassOperation.uniformBufferPool for the full explanation. SimulationResources.
      * buildDenoiserQuadtree calls updateUniforms()+execute() on the iterate instance once per
      * quadtree level, all recorded into one shared GPUCommandEncoder that isn't submitted until
      * the very end of the frame - a single reused buffer left every earlier level's dispatch
@@ -54,7 +54,6 @@ export class BuildDenoiserQuadtreeOperation extends ComputeOperation {
         this.setShaderCode(preprocessShader(shaderCode, toDefines(switches)));
     }
 
-    /** Resets the per-frame uniform-buffer-pool slot cursor - call once per frame (see SimulationResources.buildDenoiserQuadtree), before this operation's first updateUniforms() call that frame. See ForwardMonteCarloOperation.beginFrame's doc comment for why reusing slot 0 across frames is safe. */
     public beginFrame(): void {
         this.nextSlot = 0;
     }
