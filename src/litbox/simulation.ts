@@ -1095,10 +1095,12 @@ export class SimulationResources {
             // this is that same Energy computation, just with the intensity² already folded into
             // `intensity` upstream.
             const energyRgb: [number, number, number] = [srgbToLinear(color.r) * intensity, srgbToLinear(color.g) * intensity, srgbToLinear(color.b) * intensity];
-            return { luma: luminance(energyRgb), energyRgb };
+            // sqrt(luma), not luma, is this light's ray-budget weight - see computeRayCount's doc
+            // comment for why luma-linear allocation makes dim lights disproportionately grainy.
+            return { rayWeight: Math.sqrt(luminance(energyRgb)), energyRgb };
         });
-        const totalLuma = energies.reduce((sum, energy) => sum + energy.luma, 0);
-        if (totalLuma === 0) {
+        const totalRayWeight = energies.reduce((sum, energy) => sum + energy.rayWeight, 0);
+        if (totalRayWeight === 0) {
             return;
         }
 
@@ -1110,8 +1112,8 @@ export class SimulationResources {
         const rays: number[] = [];
         const seedBases: number[] = [];
         let seedBase = 0;
-        for (const { luma } of energies) {
-            const lightRays = computeRayCount(luma, totalLuma, raysPerFrame);
+        for (const { rayWeight } of energies) {
+            const lightRays = computeRayCount(rayWeight, totalRayWeight, raysPerFrame);
             rays.push(lightRays);
             seedBases.push(seedBase);
             seedBase += lightRays;
