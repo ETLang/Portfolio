@@ -1,18 +1,27 @@
 import type { TextureAtlasKey, UvTransform } from './scene.ts';
 import { decodeExr } from './exr_loader.ts';
+import { srgbToLinear } from './color_space.ts';
 
 const IDENTITY_UV_TRANSFORM: UvTransform = { a: 1, b: 0, c: 0, d: 0, e: 1, f: 0 };
 
-// Bakes straight alpha into RGB in place, so bilinear/mip filtering blends toward (0,0,0) at a
-// transparent texel instead of toward whatever arbitrary color the source PNG happened to store
-// there - avoids dark fringing at soft alpha edges. Consumers (sprite.wgsl, raytraced_gbuffer.wgsl)
-// un-premultiply right after sampling to get back a straight color for their own blend math.
-function premultiplyAlpha(pixels: Uint8ClampedArray): void {
+// Every PNG this pipeline loads through loadImageTexture is sRGB-encoded color data - the
+// exporter's TextureAtlasBaker.Classify() only accepts RGBA32/RGB24/DXT1/DXT5 source textures
+// (the ones that end up as a PNG atlas page, as opposed to an RFloat/RGBAFloat page written as
+// EXR) when Unity's own isDataSRGB flag is true, and round-trips their gamma-encoded bytes
+// through unchanged (confirmed byte-for-byte against the Unity source PNGs). The texture
+// format used to upload here ('rgba8unorm', not 'rgba8unorm-srgb') never asks the GPU to decode
+// that gamma encoding, so it must be decoded here instead, in the same pass as premultiplying
+// alpha (see decodeSrgbAndPremultiplyAlpha) - GPU-side decode can't be used for this because it
+// would apply to the *premultiplied* value, not the straight color, corrupting the alpha falloff
+// everywhere the color isn't pure white (where gamma-decode(x) happens to equal x for x in {0,1}
+// regardless of alpha, masking the bug for white/near-white sources like the cloud and particle
+// atlas members while it stayed visible - as washed-out color - on the moon/sky's real color data).
+function decodeSrgbAndPremultiplyAlpha(pixels: Uint8ClampedArray): void {
     for (let i = 0; i < pixels.length; i += 4) {
         const a = pixels[i + 3] / 255;
-        pixels[i] = pixels[i] * a;
-        pixels[i + 1] = pixels[i + 1] * a;
-        pixels[i + 2] = pixels[i + 2] * a;
+        pixels[i] = srgbToLinear(pixels[i] / 255) * a * 255;
+        pixels[i + 1] = srgbToLinear(pixels[i + 1] / 255) * a * 255;
+        pixels[i + 2] = srgbToLinear(pixels[i + 2] / 255) * a * 255;
     }
 }
 
@@ -53,6 +62,9 @@ interface AtlasKeyEntry {
 export class TextureCache {
     private device: GPUDevice;
     private cache = new Map<string, GPUTexture>();
+    // Loads already in flight, keyed the same as `cache` - see resolveTexture's dedup check for
+    // why this exists.
+    private pending = new Map<string, Promise<GPUTexture>>();
     private atlasKeys = new Map<string, AtlasKeyEntry>();
     // Directory (relative to Vite's BASE_URL) containing the active scene's JSON file - see
     // LitboxScene.baseUrl. Every texture path, atlas-member or not, is a path relative to the
@@ -137,23 +149,44 @@ export class TextureCache {
             return cached;
         }
 
-        try {
-            const url = `${import.meta.env.BASE_URL}${this.baseUrl}${name}`;
-            const lowerName = name.toLowerCase();
-            const texture = lowerName.endsWith('.bc1')
-                ? await this.loadBc1Texture(url, name)
-                : lowerName.endsWith('.exr')
-                    ? await this.loadExrTexture(url)
-                    : await this.loadImageTexture(url);
-
-            this.cache.set(cacheKey, texture);
-            return texture;
-        } catch (error) {
-            console.error(`Litbox texture cache: failed to load "${name}":`, error);
-            const fallbackTexture = fallback === 'white' ? this.whiteTexture : this.blackTexture;
-            this.cache.set(cacheKey, fallbackTexture);
-            return fallbackTexture;
+        // A scene load resolves every raytraced/sprite entry's textures concurrently (see
+        // RaytracedResources/SpriteResources' own loadFromScene, both Promise.all over their
+        // whole object list), so with N objects sharing one atlas, N concurrent calls can land
+        // here before the very first one finishes and populates `cache` above. Without this
+        // dedup, each would independently re-fetch/decode/rasterize the same atlas image and
+        // allocate its own GPUTexture - fine on desktop's memory headroom, but enough to exhaust
+        // an iPhone Safari tab's much tighter budget on a scene with a large shared atlas
+        // (confirmed as the cause of battle_scene.ts's intermittent "problem repeatedly
+        // occurred" load failures on iPhone - a memory spike from dozens of redundant in-flight
+        // decodes of the same 2048x2048 atlas, not an actual hang).
+        const inFlight = this.pending.get(cacheKey);
+        if (inFlight) {
+            return inFlight;
         }
+
+        const loadPromise = (async (): Promise<GPUTexture> => {
+            try {
+                const url = `${import.meta.env.BASE_URL}${this.baseUrl}${name}`;
+                const lowerName = name.toLowerCase();
+                const texture = lowerName.endsWith('.bc1')
+                    ? await this.loadBc1Texture(url, name)
+                    : lowerName.endsWith('.exr')
+                        ? await this.loadExrTexture(url)
+                        : await this.loadImageTexture(url);
+
+                this.cache.set(cacheKey, texture);
+                return texture;
+            } catch (error) {
+                console.error(`Litbox texture cache: failed to load "${name}":`, error);
+                const fallbackTexture = fallback === 'white' ? this.whiteTexture : this.blackTexture;
+                this.cache.set(cacheKey, fallbackTexture);
+                return fallbackTexture;
+            } finally {
+                this.pending.delete(cacheKey);
+            }
+        })();
+        this.pending.set(cacheKey, loadPromise);
+        return loadPromise;
     }
 
     // Deliberately not copyExternalImageToTexture: confirmed on a Pixel 10 Pro XL (Imagination
@@ -170,7 +203,7 @@ export class TextureCache {
         const context2d = canvas.getContext('2d')!;
         context2d.drawImage(bitmap, 0, 0);
         const pixels = context2d.getImageData(0, 0, bitmap.width, bitmap.height).data;
-        premultiplyAlpha(pixels);
+        decodeSrgbAndPremultiplyAlpha(pixels);
 
         const texture = this.device.createTexture({
             size: [bitmap.width, bitmap.height],

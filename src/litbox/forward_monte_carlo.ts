@@ -345,13 +345,22 @@ export function luminance(energyRgb: readonly [number, number, number]): number 
 }
 
 /**
- * This light's luminance-weighted share of `raysPerFrame`, rounded up to a multiple of 64 (so ray
- * counts divide evenly into @workgroup_size(64,1,1) workgroups) - matches SimulateLight's C#
- * truncating-division rounding exactly, including its minimum of 64 rays even for a light with
- * zero luminance share (a real, faithfully-ported quirk of that rounding trick, not a bug here).
+ * This light's share of `raysPerFrame` (by whatever per-light `weight`/`totalWeight` the caller
+ * passes in), rounded up to a multiple of 64 (so ray counts divide evenly into
+ * @workgroup_size(64,1,1) workgroups) - matches SimulateLight's C# truncating-division rounding
+ * exactly, including its minimum of 64 rays even for a light with zero weight share (a real,
+ * faithfully-ported quirk of that rounding trick, not a bug here).
+ *
+ * Deliberately not luminance-linear: `simulation.ts` weights by sqrt(luminance), not luminance
+ * itself. Splitting a light's total emitted energy across N photons makes each photon's energy
+ * ∝ 1/N, so that light's own relative variance (grain) works out to ∝ 1/N regardless of its
+ * intensity - a pure luminance-linear N (N ∝ I) therefore leaves relative grain ∝ 1/I, exactly
+ * the "dim lights look grainy" symptom. sqrt-weighting is the Neyman-style compromise between
+ * that (minimizes total absolute variance across lights) and equal-N-per-light (minimizes/
+ * equalizes each light's own relative variance, ignoring how much it matters to the final image).
  */
-export function computeRayCount(luma: number, totalLuma: number, raysPerFrame: number): number {
-    const raysRaw = Math.trunc((luma / totalLuma) * raysPerFrame);
+export function computeRayCount(weight: number, totalWeight: number, raysPerFrame: number): number {
+    const raysRaw = Math.trunc((weight / totalWeight) * raysPerFrame);
     return (Math.trunc((raysRaw - 1) / 64) + 1) * 64;
 }
 
