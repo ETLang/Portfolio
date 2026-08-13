@@ -98,18 +98,39 @@ const TRACER_FLICKER_FREQUENCY_MAX_HZ = 20;
 // but (mirroring UFO_SHOOTDOWN_CHANCE) not every impact reads as a kill, since UFOs have no HP pool.
 const TRACER_HIT_DOWN_CHANCE = 0.3;
 
-// Searchlight_N sweeps slowly around its own authored resting angle (captured as scanCenterDegrees
-// at discovery) until it decides to lock onto a random 'flying' UFO for a while, then releases back
-// to scanning - same "independent per-instance schedule" idiom as UFO hover/fire, but without their
-// population-normalization (searchlight count is fixed for the scene's lifetime, unlike UFOs).
+// Searchlight_N lazily sweeps around its own authored resting angle (captured as scanCenterDegrees
+// at discovery) and only ever notices a UFO that actually crosses through its beam - the narrow
+// cone dead ahead of wherever the beam currently, physically points (SEARCHLIGHT_DETECTION_HALF_ANGLE_DEGREES),
+// not any 'flying' UFO scene-wide regardless of where the beam happens to be aimed. Each such
+// crossing (the UFO entering that cone, tracked per-instance via ufosInBeam so it's a one-shot
+// event on entry, not re-rolled every frame it lingers) is an independent coin flip
+// (SEARCHLIGHT_ACQUIRE_CHANCE) for whether the light bothers to lock onto it. Once locked, it
+// tracks that UFO for as long as it stays 'flying' - only a destroyed/exited target releases the
+// lock, back to lazy scanning (and a cleared ufosInBeam, so re-acquiring needs a fresh crossing,
+// not credit for whatever already happened to be sitting in the cone at release time). Whatever the
+// current desired aim is (scanning or locked), the beam only ever turns toward it at a bounded rate
+// (see SEARCHLIGHT_MAX_TURN_RATE_DEGREES_PER_SECOND and updateSearchlights' use of stepAngleTowards)
+// rather than snapping straight to it - a real searchlight is physically swung by a motor, so its
+// rotation can never simply teleport ("pop") to a new angle, whether that's from scanning to a
+// freshly acquired lock, from one target to a farther-away replacement, or across the +-180 degree
+// wraparound seam.
 const SEARCHLIGHT_SCAN_AMPLITUDE_MIN_DEGREES = 15;
 const SEARCHLIGHT_SCAN_AMPLITUDE_MAX_DEGREES = 30;
 const SEARCHLIGHT_SCAN_FREQUENCY_MIN_HZ = 0.05;
 const SEARCHLIGHT_SCAN_FREQUENCY_MAX_HZ = 0.12;
-const SEARCHLIGHT_DECISION_INTERVAL_MIN_SECONDS = 4;
-const SEARCHLIGHT_DECISION_INTERVAL_MAX_SECONDS = 7;
-const SEARCHLIGHT_LOCK_DURATION_MIN_SECONDS = 2;
-const SEARCHLIGHT_LOCK_DURATION_MAX_SECONDS = 4;
+// Half-width of the beam's detection cone - a UFO more than this many degrees off the beam's
+// current aim isn't "in front of it" yet, regardless of how interesting a target it'd make.
+const SEARCHLIGHT_DETECTION_HALF_ANGLE_DEGREES = 6;
+// Chance a crossing UFO actually gets noticed and locked onto, rolled once per crossing (see
+// ufosInBeam above) rather than continuously - a miss just means this particular light didn't
+// happen to catch that particular pass, not that it stops looking.
+const SEARCHLIGHT_ACQUIRE_CHANCE = 0.25;
+// Still faster than the scan sweep's own max angular speed (amplitude * 2*pi*frequency tops out
+// around 23deg/s at this range's upper bounds), so a lock-on still reads as turning toward its
+// target rather than lagging behind it, but slow enough to read as a heavy, motor-driven swing
+// rather than a snap - a UFO can still outrun a locked beam's turn rate before it reaches the
+// UFO's current bearing, letting a fast enough target visibly pull away instead of being pinned.
+const SEARCHLIGHT_MAX_TURN_RATE_DEGREES_PER_SECOND = 40;
 
 /** 6 high-saturation primary/secondary body colors a spawned UFO picks from. */
 const BODY_COLORS: ReadonlyArray<{ r: number; g: number; b: number }> = [
@@ -260,9 +281,14 @@ interface TurretState {
 }
 
 /**
- * A Searchlight_N - scans a slow sweep around its own authored resting angle (scanCenterDegrees)
- * until it locks onto a random 'flying' UFO for a while, then releases back to scanning. worldX/
- * worldY are captured once at discovery (these lights never move, only rotate).
+ * A Searchlight_N - lazily scans a slow sweep around its own authored resting angle
+ * (scanCenterDegrees) until a 'flying' UFO crosses through its beam and a coin flip decides to lock
+ * onto it (see the doc comment above SEARCHLIGHT_DETECTION_HALF_ANGLE_DEGREES), tracking it until
+ * it's no longer 'flying' (destroyed or exited), then releases back to scanning until another
+ * crossing. worldX/worldY are captured once at discovery (these lights never move, only rotate).
+ * currentRotationDegrees is the beam's actual, physically-grounded aim - it only ever approaches
+ * whatever the desired aim is (scanCenterDegrees's sweep, or the locked target's bearing) at up to
+ * SEARCHLIGHT_MAX_TURN_RATE_DEGREES_PER_SECOND, so it never pops straight to a new angle.
  */
 interface SearchlightInstance {
     root: SceneObject;
@@ -273,9 +299,9 @@ interface SearchlightInstance {
     scanFrequencyHz: number;
     scanPhase0: number;
     lockedTarget: UfoInstance | null;
-    nextDecisionTimeSeconds: number;
-    lockStartTimeSeconds: number;
-    lockDurationSeconds: number;
+    /** 'flying' UFOs inside the beam's detection cone as of last frame - see ufosInBeam's use in updateSearchlights for why this is what makes a crossing a one-shot, entry-edge-triggered event rather than a per-frame coin flip. */
+    ufosInBeam: Set<UfoInstance>;
+    currentRotationDegrees: number;
 }
 
 /** A still-'flying' UFO's body world transform, cached once per frame (not once per bullet) - see BattleScene.computeFlyingUfoCollisionInfo. */
@@ -454,9 +480,8 @@ export class BattleScene extends LitboxScene {
                     scanFrequencyHz: randomRange(SEARCHLIGHT_SCAN_FREQUENCY_MIN_HZ, SEARCHLIGHT_SCAN_FREQUENCY_MAX_HZ),
                     scanPhase0: Math.random() * Math.PI * 2,
                     lockedTarget: null,
-                    nextDecisionTimeSeconds: randomRange(SEARCHLIGHT_DECISION_INTERVAL_MIN_SECONDS, SEARCHLIGHT_DECISION_INTERVAL_MAX_SECONDS),
-                    lockStartTimeSeconds: 0,
-                    lockDurationSeconds: 0,
+                    ufosInBeam: new Set(),
+                    currentRotationDegrees: obj.rotation,
                 });
             }
         }
@@ -525,7 +550,7 @@ export class BattleScene extends LitboxScene {
         this.despawnExited(bounds);
 
         this.updateTurretAndTracers(this.sceneTimeSeconds, deltaTimeSeconds, bounds);
-        this.updateSearchlights(this.sceneTimeSeconds);
+        this.updateSearchlights(this.sceneTimeSeconds, deltaTimeSeconds);
 
         if (!this.cloudVelocitiesInitialized) {
             for (const cloud of this.clouds) {
@@ -930,6 +955,36 @@ export class BattleScene extends LitboxScene {
     }
 
     /**
+     * Shortest signed difference (-180,180] from `fromDegrees` to `toDegrees` - JS `%` keeps the
+     * sign of its left operand, so a single modulo only guarantees a result in (-360,360); the
+     * second adjustment folds that into the shortest-path range. Shared by stepAngleTowards (how
+     * far a searchlight beam still needs to turn) and updateSearchlights' detection-cone check (how
+     * far off-boresight a candidate UFO currently is).
+     */
+    private angleDifferenceDegrees(fromDegrees: number, toDegrees: number): number {
+        let delta = (toDegrees - fromDegrees) % 360;
+        if (delta > 180) {
+            delta -= 360;
+        } else if (delta < -180) {
+            delta += 360;
+        }
+        return delta;
+    }
+
+    /**
+     * Steps `currentDegrees` toward `targetDegrees` by at most `maxDeltaDegrees`, always turning
+     * the short way around the +-180 degree wraparound seam - the physically-grounded alternative
+     * to just assigning `targetDegrees` outright (which is what let the searchlights "pop" straight
+     * to a new aim). Used by updateSearchlights for both the scan sweep and lock-on tracking, so
+     * neither can ever produce an instantaneous jump.
+     */
+    private stepAngleTowards(currentDegrees: number, targetDegrees: number, maxDeltaDegrees: number): number {
+        const delta = this.angleDifferenceDegrees(currentDegrees, targetDegrees);
+        const clampedDelta = Math.max(-maxDeltaDegrees, Math.min(maxDeltaDegrees, delta));
+        return currentDegrees + clampedDelta;
+    }
+
+    /**
      * The turret's current accuracy spread, 0 (perfectly aimed) to 1 (max jitter) - a closed-form
      * formula relative to a snapshot taken at the moment firing last toggled (turret.spreadAtToggle/
      * toggleTimeSeconds, set in handlePointerDown/Up), not an accumulated per-frame delta. This is
@@ -1153,39 +1208,57 @@ export class BattleScene extends LitboxScene {
     }
 
     /**
-     * Scan/lock-on update for every Searchlight_N, independent per instance. A lock releases back
-     * to scanning both when its duration expires and when its target is no longer a valid
-     * 'flying' UFO (destroyed or shot down mid-lock) - either way rescheduling a fresh decision
-     * time, so a released lock doesn't immediately re-trigger the same frame.
+     * Scan/lock-on update for every Searchlight_N, independent per instance. Once locked, a light
+     * keeps tracking its target for as long as it stays a valid 'flying' UFO; a lock only releases
+     * when the target is gone (destroyed or exited), back to lazily scanning. While scanning, the
+     * light doesn't go looking for a target scene-wide - it only notices a 'flying' UFO that's
+     * currently within its beam's own detection cone (SEARCHLIGHT_DETECTION_HALF_ANGLE_DEGREES of
+     * the beam's actual current aim, currentRotationDegrees), and only on the frame that UFO enters
+     * the cone (tracked via ufosInBeam, so lingering inside it doesn't re-roll every frame) - each
+     * such crossing is an independent SEARCHLIGHT_ACQUIRE_CHANCE coin flip for whether the light
+     * bothers to lock on. Either way, the light's actual rotation never jumps straight to the
+     * desired aim - it's turned toward it at a bounded rate via stepAngleTowards, so switching
+     * between scanning and tracking, or between one target and the next, is always a
+     * physically-grounded swing rather than a pop.
      */
-    private updateSearchlights(nowSeconds: number): void {
+    private updateSearchlights(nowSeconds: number, deltaTimeSeconds: number): void {
         for (const light of this.searchlights) {
             const targetInvalid =
                 light.lockedTarget !== null &&
                 (!this.ufos.includes(light.lockedTarget) || light.lockedTarget.state !== 'flying');
-            const lockExpired =
-                light.lockedTarget !== null && nowSeconds - light.lockStartTimeSeconds >= light.lockDurationSeconds;
-            if (light.lockedTarget && (targetInvalid || lockExpired)) {
+            if (light.lockedTarget && targetInvalid) {
                 light.lockedTarget = null;
-                light.nextDecisionTimeSeconds =
-                    nowSeconds + randomRange(SEARCHLIGHT_DECISION_INTERVAL_MIN_SECONDS, SEARCHLIGHT_DECISION_INTERVAL_MAX_SECONDS);
+                // Cleared, not carried forward - re-acquiring after a release needs a fresh
+                // crossing, not credit for whatever already happened to be sitting in the cone.
+                light.ufosInBeam.clear();
             }
 
-            if (!light.lockedTarget && nowSeconds >= light.nextDecisionTimeSeconds) {
-                const candidates = this.ufos.filter(u => u.state === 'flying');
-                if (candidates.length > 0) {
-                    light.lockedTarget = candidates[Math.floor(Math.random() * candidates.length)];
-                    light.lockStartTimeSeconds = nowSeconds;
-                    light.lockDurationSeconds = randomRange(SEARCHLIGHT_LOCK_DURATION_MIN_SECONDS, SEARCHLIGHT_LOCK_DURATION_MAX_SECONDS);
-                } else {
-                    light.nextDecisionTimeSeconds =
-                        nowSeconds + randomRange(SEARCHLIGHT_DECISION_INTERVAL_MIN_SECONDS, SEARCHLIGHT_DECISION_INTERVAL_MAX_SECONDS);
+            if (!light.lockedTarget) {
+                const inBeamNow = new Set<UfoInstance>();
+                for (const ufo of this.ufos) {
+                    if (ufo.state !== 'flying') {
+                        continue;
+                    }
+                    const bearingDegrees = this.angleToDegrees(light.worldX, light.worldY, ufo.root.position.x, ufo.root.position.y) + 90;
+                    const offBoresightDegrees = Math.abs(this.angleDifferenceDegrees(light.currentRotationDegrees, bearingDegrees));
+                    if (offBoresightDegrees > SEARCHLIGHT_DETECTION_HALF_ANGLE_DEGREES) {
+                        continue;
+                    }
+                    inBeamNow.add(ufo);
+                    if (!light.ufosInBeam.has(ufo) && Math.random() < SEARCHLIGHT_ACQUIRE_CHANCE) {
+                        light.lockedTarget = ufo;
+                        break;
+                    }
                 }
+                light.ufosInBeam = inBeamNow;
             }
 
-            light.root.rotation = light.lockedTarget
+            const desiredRotationDegrees = light.lockedTarget
                 ? this.angleToDegrees(light.worldX, light.worldY, light.lockedTarget.root.position.x, light.lockedTarget.root.position.y) + 90
                 : light.scanCenterDegrees + light.scanAmplitudeDegrees * Math.sin(2 * Math.PI * light.scanFrequencyHz * nowSeconds + light.scanPhase0);
+            light.currentRotationDegrees = this.stepAngleTowards(
+                light.currentRotationDegrees, desiredRotationDegrees, SEARCHLIGHT_MAX_TURN_RATE_DEGREES_PER_SECOND * deltaTimeSeconds);
+            light.root.rotation = light.currentRotationDegrees;
             // No markTransformDirty call - see the makeTransformDynamic call at discovery time.
         }
     }

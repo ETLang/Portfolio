@@ -3302,7 +3302,7 @@
             "depth": -1.0,
             "rotation": 0.0,
             "scale": {
-                "x": 1.1299999952316285,
+                "x": 1.1100000143051148,
                 "y": 1.2100000381469727
             }
         },
@@ -4854,8 +4854,8 @@
             "depth": -1.0,
             "rotation": 0.0,
             "scale": {
-                "x": 1.1699999570846558,
-                "y": 1.1699999570846558
+                "x": 1.1200000047683716,
+                "y": 1.1200000047683716
             }
         },
         {
@@ -6472,6 +6472,22 @@
             "scale": {
                 "x": 1.0,
                 "y": 1.0
+            }
+        },
+        {
+            "active": true,
+            "id": -41044,
+            "name": "Sky",
+            "parentId": 88388,
+            "position": {
+                "x": -1.2877000570297242,
+                "y": 0.15410000085830689
+            },
+            "depth": -1.0,
+            "rotation": 0.0,
+            "scale": {
+                "x": 18.299999237060548,
+                "y": 10.0
             }
         },
         {
@@ -10248,6 +10264,40 @@
     ],
     "sprites": [
         {
+            "ownerId": -41044,
+            "layer": 0,
+            "sortOrder": -100,
+            "opacity": 1.0,
+            "image": "Sky",
+            "colorMod": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 1.0
+            },
+            "ambient": {
+                "r": 0.15094339847564698,
+                "g": 0.15094339847564698,
+                "b": 0.15094339847564698,
+                "a": 1.0
+            },
+            "emissive": {
+                "r": 0.0,
+                "g": 0.0,
+                "b": 0.0,
+                "a": 1.0
+            },
+            "simContribution": {
+                "r": 1.0,
+                "g": 1.0,
+                "b": 1.0,
+                "a": 0.0
+            },
+            "simBlur": 0.0,
+            "primitiveShape": "",
+            "bypassTonemapping": true
+        },
+        {
             "ownerId": -38102,
             "layer": 1,
             "sortOrder": 0,
@@ -12489,7 +12539,7 @@
             },
             "simBlur": 0.0,
             "primitiveShape": "",
-            "bypassTonemapping": false
+            "bypassTonemapping": true
         },
         {
             "ownerId": -19596,
@@ -12625,7 +12675,7 @@
             },
             "simBlur": 0.0,
             "primitiveShape": "",
-            "bypassTonemapping": false
+            "bypassTonemapping": true
         },
         {
             "ownerId": -19830,
@@ -13135,7 +13185,7 @@
             },
             "simBlur": 0.0,
             "primitiveShape": "",
-            "bypassTonemapping": false
+            "bypassTonemapping": true
         },
         {
             "ownerId": -19798,
@@ -14121,7 +14171,7 @@
             },
             "simBlur": 0.0,
             "primitiveShape": "",
-            "bypassTonemapping": false
+            "bypassTonemapping": true
         },
         {
             "ownerId": -20860,
@@ -18575,7 +18625,7 @@
                 "b": 0.0,
                 "a": 0.0
             },
-            "intensity": 0.0015999999595806003,
+            "intensity": 0.0008999999845400453,
             "bounces": 3
         }
     ],
@@ -18583,9 +18633,9 @@
         {
             "ownerId": 88264,
             "color": {
-                "r": 0.8820754885673523,
-                "g": 0.9309976696968079,
-                "b": 1.0,
+                "r": 1.0,
+                "g": 0.958122193813324,
+                "b": 0.8254716992378235,
                 "a": 0.0
             },
             "intensity": 0.004900000058114529,
@@ -18595,9 +18645,9 @@
         {
             "ownerId": 87892,
             "color": {
-                "r": 0.8820754885673523,
-                "g": 0.9309976696968079,
-                "b": 1.0,
+                "r": 1.0,
+                "g": 0.958122193813324,
+                "b": 0.8254716992378235,
                 "a": 0.0
             },
             "intensity": 0.004900000058114529,
@@ -18648,22 +18698,27 @@
         {
             "textureName": "Cloud_Texture2D",
             "atlasName": "battle_atlases/atlas_rgba32_srgb_0.png",
-            "uvTransform": "[[0.25, 0, 0.2529297], [0, 0.25, 0.0009765625]]"
+            "uvTransform": "[[0.125, 0, 0.6274414], [0, 0.125, 0.0004882813]]"
+        },
+        {
+            "textureName": "Sky",
+            "atlasName": "battle_atlases/atlas_rgba32_srgb_0.png",
+            "uvTransform": "[[0.5, 0, 0.0004882813], [0, 0.2727051, 0.0004882813]]"
         },
         {
             "textureName": "Cloud_Foreground_Texture2D",
             "atlasName": "battle_atlases/atlas_rgba32_srgb_0.png",
-            "uvTransform": "[[0.25, 0, 0.0009765625], [0, 0.25, 0.0009765625]]"
+            "uvTransform": "[[0.125, 0, 0.5014648], [0, 0.125, 0.0004882813]]"
         },
         {
             "textureName": "Default-Particle",
             "atlasName": "battle_atlases/atlas_rgba32_srgb_0.png",
-            "uvTransform": "[[0.03125, 0, 0.6987305], [0, 0.03125, 0.0009765625]]"
+            "uvTransform": "[[0.015625, 0, 0.8503418], [0, 0.015625, 0.0004882813]]"
         },
         {
             "textureName": "Moon",
             "atlasName": "battle_atlases/atlas_rgba32_srgb_0.png",
-            "uvTransform": "[[0.1918945, 0, 0.5048828], [0, 0.1918945, 0.0009765625]]"
+            "uvTransform": "[[0.09594727, 0, 0.753418], [0, 0.09594727, 0.0004882813]]"
         }
     ]
 }
