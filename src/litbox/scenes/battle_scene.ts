@@ -96,7 +96,7 @@ const TRACER_FLICKER_FREQUENCY_MIN_HZ = 8;
 const TRACER_FLICKER_FREQUENCY_MAX_HZ = 20;
 // Fraction of tracer hits that actually down the target UFO - a hit always consumes the bullet,
 // but (mirroring UFO_SHOOTDOWN_CHANCE) not every impact reads as a kill, since UFOs have no HP pool.
-const TRACER_HIT_DOWN_CHANCE = 0.3;
+const TRACER_HIT_DOWN_CHANCE = 0.5;
 
 // Searchlight_N lazily sweeps around its own authored resting angle (captured as scanCenterDegrees
 // at discovery) and only ever notices a UFO that actually crosses through its beam - the narrow
