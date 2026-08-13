@@ -323,6 +323,11 @@ async function updateView(view: ViewKey) {
     canvas.style.display = isAboutView ? 'none' : 'block';
     updateWebGpuErrorVisibility(isAboutView);
     updateCanvasLoadingVisibility(isAboutView);
+    // Stop the render loop entirely while the canvas is hidden behind this view - see
+    // LitboxSceneRenderer.setActive's doc comment for why leaving it running was a real bug, not
+    // just wasted background work. Set before updateLayout() below so its manual render() call
+    // (and the loop's own resumption) reflects the new state immediately.
+    litboxRenderer?.setActive(!isAboutView);
 
     updateLayout();
 }

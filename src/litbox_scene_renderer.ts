@@ -196,6 +196,70 @@ export class LitboxSceneRenderer {
     /** Owner id of the camera exposureOverride was last synced to - see syncExposureToActiveCamera. */
     private lastActiveCameraOwnerId: number | null = null;
 
+    /**
+     * Set by main.ts (see setActive) to false while the canvas is hidden behind another view
+     * (e.g. the "About" tab, which occupies the same browser tab rather than a backgrounded one -
+     * requestAnimationFrame is never throttled by the browser in that case). render() skips all
+     * GPU work while false, rather than continuing to run the full simulation/G-Buffer/composite/
+     * tonemap pipeline every frame for an invisible canvas.
+     *
+     * Deliberately gates only the *work*, inside render() itself, never any
+     * requestAnimationFrame *scheduling* - see frameLoop's doc comment for why the self-
+     * perpetuating loop has to live entirely outside render(), which two earlier, broken
+     * versions of this flag both got wrong in different ways.
+     */
+    private isActive = true;
+
+    /** See isActive. */
+    public setActive(active: boolean): void {
+        this.isActive = active;
+    }
+
+    /**
+     * The renderer's one and only self-perpetuating requestAnimationFrame loop, started once by
+     * start() below and never re-entered from anywhere else - this is the sole rAF call site in
+     * the whole class. Deliberately NOT folded into render() itself: render() is also called
+     * directly, synchronously, as a one-off ("draw exactly one frame right now") by main.ts's
+     * updateLayout() after a canvas resize, and an earlier version of this class had render()'s
+     * own finally block reschedule itself via requestAnimationFrame(this.render) - which meant
+     * *every* ad-hoc call to render() silently spun up a brand-new, fully independent, permanently
+     * self-perpetuating loop running alongside the real one, forever, on top of whatever work the
+     * original loop was already doing.
+     *
+     * That bug was genuinely nasty to track down because it's deterministic, not timing-sensitive:
+     * main.ts's "About" view removes the sidebar's 400px grid column (see style.css's
+     * `[data-active-view="about"]`), so the canvas's rendered width genuinely differs between that
+     * view and every other one - meaning updateLayout() detects a real resize and calls render()
+     * directly on essentially every view switch, regardless of how fast or slow the switches
+     * happen. Each such switch therefore permanently added one more concurrent loop: confirmed via
+     * instrumentation that steady-state (no switching in progress) createBindGroup calls/second
+     * climbed 500 -> 1750 -> 2756 -> 3875 after each of the first few round trips before
+     * saturating (more concurrent loops than the GPU/CPU can actually push through per frame stops
+     * increasing the measured rate, but doesn't stop the loops from existing) - exactly matching a
+     * bug report of "reported FPS stays fine, but felt performance completely tanks after 3-4
+     * round trips regardless of switch speed." An arrow-function class field (auto-bound, no
+     * `.bind(this)` needed) rather than a method, specifically so it can never be invoked any way
+     * other than by requestAnimationFrame itself calling this exact reference back.
+     */
+    private frameLoop = (timeMs: number): void => {
+        try {
+            this.render(timeMs);
+        } finally {
+            // Third-party WebGPU instrumentation (browser devtools extensions wrapping
+            // queue.submit, etc.) can throw after our own work is done. Keep the render
+            // loop alive regardless, rather than letting one bad frame permanently kill it.
+            if (this.isAutomatedSandbox) {
+                // A plain rAF loop can't be throttled from inside itself with a blocking sleep -
+                // that would also freeze the event loop the automation daemon needs to stay
+                // responsive to its own commands (page.evaluate, clicks, etc.) between frames.
+                // Delaying the next rAF request instead caps frame cadence without blocking JS.
+                setTimeout(() => requestAnimationFrame(this.frameLoop), SANDBOX_FRAME_INTERVAL_MS);
+            } else {
+                requestAnimationFrame(this.frameLoop);
+            }
+        }
+    };
+
     constructor(canvas?: HTMLCanvasElement) {
         this.canvas = canvas || document.createElement('canvas');
         if (!canvas) {
@@ -215,8 +279,7 @@ export class LitboxSceneRenderer {
             await this.queueRebuild(this.activeScene);
         }
 
-        this.render = this.render.bind(this);
-        requestAnimationFrame(this.render);
+        requestAnimationFrame(this.frameLoop);
 
         void this.pollPhotonWriteRate();
     }
@@ -771,8 +834,14 @@ export class LitboxSceneRenderer {
         return { x: worldPoint[0], y: worldPoint[1] };
     }
 
+    /**
+     * Draws exactly one frame and returns - no scheduling of any kind. Called by frameLoop as
+     * part of the renderer's continuous loop, and also directly by main.ts's updateLayout() for
+     * an immediate one-off repaint right after a canvas resize (see frameLoop's doc comment for
+     * why this method must never itself call requestAnimationFrame).
+     */
     public render(timeMs: number = performance.now()): void {
-        if (!this.device) {
+        if (!this.device || !this.isActive) {
             return;
         }
 
@@ -789,131 +858,116 @@ export class LitboxSceneRenderer {
             this.createHdrFrameTexture();
         }
 
-        try {
-            const encoder = this.device.createCommandEncoder();
+        const encoder = this.device.createCommandEncoder();
 
-            // Step 1: render the G-Buffer (albedo/alpha, density, normal/roughness) for
-            // raytraced objects. Runs unconditionally (even in debug-view mode below) so the
-            // G-Buffer stays live against scene changes.
-            this.raytracedResources.renderGBuffer(encoder);
+        // Step 1: render the G-Buffer (albedo/alpha, density, normal/roughness) for
+        // raytraced objects. Runs unconditionally (even in debug-view mode below) so the
+        // G-Buffer stays live against scene changes.
+        this.raytracedResources.renderGBuffer(encoder);
 
-            // Step 2: run the simulation (trace photons, then convert the photon-receptor buffer
-            // into the lightmap). No-op without an active scene graph, same as `!this.simulation`
-            // guards inside SimulationResources.run() itself.
-            if (this.sceneGraph) {
-                this.simulationResources.run(encoder, this.raytracedResources, this.lightResources, this.lutResources, this.sceneGraph);
-            }
+        // Step 2: run the simulation (trace photons, then convert the photon-receptor buffer
+        // into the lightmap). No-op without an active scene graph, same as `!this.simulation`
+        // guards inside SimulationResources.run() itself.
+        if (this.sceneGraph) {
+            this.simulationResources.run(encoder, this.raytracedResources, this.lightResources, this.lutResources, this.sceneGraph);
+        }
 
-            if (this.debugView) {
-                const view = this.debugViews.get(this.debugView);
-                const sourceView = view?.getSourceView() ?? null;
-                if (view && sourceView) {
-                    const debugPass = encoder.beginRenderPass({
-                        colorAttachments: [{
-                            view: this.context.getCurrentTexture().createView(),
-                            clearValue: { r: 0, g: 0, b: 0, a: 1 },
-                            loadOp: 'clear',
-                            storeOp: 'store',
-                        }],
-                    });
-                    this.debugViewBlitResources.apply(debugPass, sourceView, view.mode, this.debugViewScale, this.debugViewMipLevel);
-                    debugPass.end();
-                    this.device.queue.submit([encoder.finish()]);
-                    return;
-                }
-            }
-
-            const { exposure, whitePointLog, blackPointLog } = this.writeCameraUniform(this.getActiveCamera());
-
-            // Steps 3-6: sprites + additive simulation composite into the offscreen HDR frame buffer.
-            // No depth/stencil attachment - It's safe to presume the vast majority of objects have
-            // transparency, so just draw them back to front. Non-bypass sprites only - Background/
-            // Overlay (bypassTonemapping: true) sprites skip this buffer and the tonemap curve
-            // entirely (see the two bypass passes below).
-            const hdrPass = encoder.beginRenderPass({
-                colorAttachments: [{
-                    view: this.hdrFrameTextureView,
-                    clearValue: { r: 0, g: 0, b: 0, a: 0 },
-                    loadOp: 'clear',
-                    storeOp: 'store',
-                }],
-            });
-            hdrPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
-            this.spriteResources.draw(hdrPass, layer => layer <= 0);
-            this.simulationResources.compositeInto(hdrPass);
-            this.spriteResources.draw(hdrPass, layer => layer >= 1);
-            hdrPass.end();
-
-            // Step 7: the swapchain texture, viewed two ways this frame - srgbSwapchainView for
-            // the two bypass sprite passes below (drawBypass's pipeline targets this format so the
-            // GPU auto-gamma-encodes on write), plainSwapchainView for the tonemap pass (which does
-            // its own manual gamma-encode in tonemap.wgsl, since it also runs the log curve).
-            const presentationTexture = this.context.getCurrentTexture();
-            const plainSwapchainView = presentationTexture.createView();
-            const srgbSwapchainView = presentationTexture.createView({ format: this.presentationFormatSrgb });
-
-            // Step 7a: Background-tier (layer <= 0) bypass sprites, drawn straight into the
-            // swapchain ahead of the tonemapped scene. This is the frame's first touch of the
-            // swapchain, so it clears - opaque (a: 1), not transparent, so that a scene with no
-            // bypass sprites still ends up solid black wherever the HDR buffer is empty, exactly
-            // as the old unconditionally-opaque tonemap write used to produce. Because the
-            // straight-alpha "over" blend leaves dst alpha at 1 regardless of src alpha once dst
-            // alpha starts at 1, every later blend onto this texture keeps it opaque too - see the
-            // plan doc's "Why clear opaque" note.
-            const backgroundBypassPass = encoder.beginRenderPass({
-                colorAttachments: [{
-                    view: srgbSwapchainView,
-                    clearValue: { r: 0, g: 0, b: 0, a: 1 },
-                    loadOp: 'clear',
-                    storeOp: 'store',
-                }],
-            });
-            backgroundBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
-            this.spriteResources.drawBypass(backgroundBypassPass, layer => layer <= 0);
-            backgroundBypassPass.end();
-
-            // Step 7b: tonemap the HDR frame buffer onto the swapchain, blended over the
-            // Background-bypass content just drawn rather than overwriting it.
-            const tonemapPass = encoder.beginRenderPass({
-                colorAttachments: [{
-                    view: plainSwapchainView,
-                    loadOp: 'load',
-                    storeOp: 'store',
-                }],
-            });
-            this.tonemapResources.updateUniforms({ exposure, enabled: this.tonemapEnabled, whitePointLog, blackPointLog });
-            this.tonemapResources.updateInputs(this.hdrFrameTextureView);
-            this.tonemapResources.execute(tonemapPass);
-            tonemapPass.end();
-
-            // Step 7c: Overlay-tier (layer >= 1) bypass sprites, drawn on top of the tonemapped
-            // result.
-            const overlayBypassPass = encoder.beginRenderPass({
-                colorAttachments: [{
-                    view: srgbSwapchainView,
-                    loadOp: 'load',
-                    storeOp: 'store',
-                }],
-            });
-            overlayBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
-            this.spriteResources.drawBypass(overlayBypassPass, layer => layer >= 1);
-            overlayBypassPass.end();
-
-            this.device.queue.submit([encoder.finish()]);
-            this.cameraUniform.advance();
-        } finally {
-            // Third-party WebGPU instrumentation (browser devtools extensions wrapping
-            // queue.submit, etc.) can throw after our own work is done. Keep the render
-            // loop alive regardless, rather than letting one bad frame permanently kill it.
-            if (this.isAutomatedSandbox) {
-                // A plain rAF loop can't be throttled from inside itself with a blocking sleep -
-                // that would also freeze the event loop the automation daemon needs to stay
-                // responsive to its own commands (page.evaluate, clicks, etc.) between frames.
-                // Delaying the next rAF request instead caps frame cadence without blocking JS.
-                setTimeout(() => requestAnimationFrame(this.render), SANDBOX_FRAME_INTERVAL_MS);
-            } else {
-                requestAnimationFrame(this.render);
+        if (this.debugView) {
+            const view = this.debugViews.get(this.debugView);
+            const sourceView = view?.getSourceView() ?? null;
+            if (view && sourceView) {
+                const debugPass = encoder.beginRenderPass({
+                    colorAttachments: [{
+                        view: this.context.getCurrentTexture().createView(),
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                        loadOp: 'clear',
+                        storeOp: 'store',
+                    }],
+                });
+                this.debugViewBlitResources.apply(debugPass, sourceView, view.mode, this.debugViewScale, this.debugViewMipLevel);
+                debugPass.end();
+                this.device.queue.submit([encoder.finish()]);
+                return;
             }
         }
+
+        const { exposure, whitePointLog, blackPointLog } = this.writeCameraUniform(this.getActiveCamera());
+
+        // Steps 3-6: sprites + additive simulation composite into the offscreen HDR frame buffer.
+        // No depth/stencil attachment - It's safe to presume the vast majority of objects have
+        // transparency, so just draw them back to front. Non-bypass sprites only - Background/
+        // Overlay (bypassTonemapping: true) sprites skip this buffer and the tonemap curve
+        // entirely (see the two bypass passes below).
+        const hdrPass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: this.hdrFrameTextureView,
+                clearValue: { r: 0, g: 0, b: 0, a: 0 },
+                loadOp: 'clear',
+                storeOp: 'store',
+            }],
+        });
+        hdrPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
+        this.spriteResources.draw(hdrPass, layer => layer <= 0);
+        this.simulationResources.compositeInto(hdrPass);
+        this.spriteResources.draw(hdrPass, layer => layer >= 1);
+        hdrPass.end();
+
+        // Step 7: the swapchain texture, viewed two ways this frame - srgbSwapchainView for
+        // the two bypass sprite passes below (drawBypass's pipeline targets this format so the
+        // GPU auto-gamma-encodes on write), plainSwapchainView for the tonemap pass (which does
+        // its own manual gamma-encode in tonemap.wgsl, since it also runs the log curve).
+        const presentationTexture = this.context.getCurrentTexture();
+        const plainSwapchainView = presentationTexture.createView();
+        const srgbSwapchainView = presentationTexture.createView({ format: this.presentationFormatSrgb });
+
+        // Step 7a: Background-tier (layer <= 0) bypass sprites, drawn straight into the
+        // swapchain ahead of the tonemapped scene. This is the frame's first touch of the
+        // swapchain, so it clears - opaque (a: 1), not transparent, so that a scene with no
+        // bypass sprites still ends up solid black wherever the HDR buffer is empty, exactly
+        // as the old unconditionally-opaque tonemap write used to produce. Because the
+        // straight-alpha "over" blend leaves dst alpha at 1 regardless of src alpha once dst
+        // alpha starts at 1, every later blend onto this texture keeps it opaque too - see the
+        // plan doc's "Why clear opaque" note.
+        const backgroundBypassPass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: srgbSwapchainView,
+                clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                loadOp: 'clear',
+                storeOp: 'store',
+            }],
+        });
+        backgroundBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
+        this.spriteResources.drawBypass(backgroundBypassPass, layer => layer <= 0);
+        backgroundBypassPass.end();
+
+        // Step 7b: tonemap the HDR frame buffer onto the swapchain, blended over the
+        // Background-bypass content just drawn rather than overwriting it.
+        const tonemapPass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: plainSwapchainView,
+                loadOp: 'load',
+                storeOp: 'store',
+            }],
+        });
+        this.tonemapResources.updateUniforms({ exposure, enabled: this.tonemapEnabled, whitePointLog, blackPointLog });
+        this.tonemapResources.updateInputs(this.hdrFrameTextureView);
+        this.tonemapResources.execute(tonemapPass);
+        tonemapPass.end();
+
+        // Step 7c: Overlay-tier (layer >= 1) bypass sprites, drawn on top of the tonemapped
+        // result.
+        const overlayBypassPass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: srgbSwapchainView,
+                loadOp: 'load',
+                storeOp: 'store',
+            }],
+        });
+        overlayBypassPass.setBindGroup(0, this.cameraUniform.getBindGroup(), [this.cameraUniform.getCurrentOffset()]);
+        this.spriteResources.drawBypass(overlayBypassPass, layer => layer >= 1);
+        overlayBypassPass.end();
+
+        this.device.queue.submit([encoder.finish()]);
+        this.cameraUniform.advance();
     }
 }
