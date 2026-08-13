@@ -187,6 +187,13 @@ canvas {
     width: 100%;
     height: 100%;
     display: block; /* remove extra space below canvas */
+    /* Suppress iOS Safari's press-and-hold text-selection/callout menu on the canvas -
+       scene interaction is handled entirely via Pointer Events (see battle_scene.ts),
+       so the browser's default touch gestures here are never needed. */
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .canvas-loading-overlay {
