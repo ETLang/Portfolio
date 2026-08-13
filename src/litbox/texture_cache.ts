@@ -53,6 +53,9 @@ interface AtlasKeyEntry {
 export class TextureCache {
     private device: GPUDevice;
     private cache = new Map<string, GPUTexture>();
+    // Loads already in flight, keyed the same as `cache` - see resolveTexture's dedup check for
+    // why this exists.
+    private pending = new Map<string, Promise<GPUTexture>>();
     private atlasKeys = new Map<string, AtlasKeyEntry>();
     // Directory (relative to Vite's BASE_URL) containing the active scene's JSON file - see
     // LitboxScene.baseUrl. Every texture path, atlas-member or not, is a path relative to the
@@ -137,23 +140,44 @@ export class TextureCache {
             return cached;
         }
 
-        try {
-            const url = `${import.meta.env.BASE_URL}${this.baseUrl}${name}`;
-            const lowerName = name.toLowerCase();
-            const texture = lowerName.endsWith('.bc1')
-                ? await this.loadBc1Texture(url, name)
-                : lowerName.endsWith('.exr')
-                    ? await this.loadExrTexture(url)
-                    : await this.loadImageTexture(url);
-
-            this.cache.set(cacheKey, texture);
-            return texture;
-        } catch (error) {
-            console.error(`Litbox texture cache: failed to load "${name}":`, error);
-            const fallbackTexture = fallback === 'white' ? this.whiteTexture : this.blackTexture;
-            this.cache.set(cacheKey, fallbackTexture);
-            return fallbackTexture;
+        // A scene load resolves every raytraced/sprite entry's textures concurrently (see
+        // RaytracedResources/SpriteResources' own loadFromScene, both Promise.all over their
+        // whole object list), so with N objects sharing one atlas, N concurrent calls can land
+        // here before the very first one finishes and populates `cache` above. Without this
+        // dedup, each would independently re-fetch/decode/rasterize the same atlas image and
+        // allocate its own GPUTexture - fine on desktop's memory headroom, but enough to exhaust
+        // an iPhone Safari tab's much tighter budget on a scene with a large shared atlas
+        // (confirmed as the cause of battle_scene.ts's intermittent "problem repeatedly
+        // occurred" load failures on iPhone - a memory spike from dozens of redundant in-flight
+        // decodes of the same 2048x2048 atlas, not an actual hang).
+        const inFlight = this.pending.get(cacheKey);
+        if (inFlight) {
+            return inFlight;
         }
+
+        const loadPromise = (async (): Promise<GPUTexture> => {
+            try {
+                const url = `${import.meta.env.BASE_URL}${this.baseUrl}${name}`;
+                const lowerName = name.toLowerCase();
+                const texture = lowerName.endsWith('.bc1')
+                    ? await this.loadBc1Texture(url, name)
+                    : lowerName.endsWith('.exr')
+                        ? await this.loadExrTexture(url)
+                        : await this.loadImageTexture(url);
+
+                this.cache.set(cacheKey, texture);
+                return texture;
+            } catch (error) {
+                console.error(`Litbox texture cache: failed to load "${name}":`, error);
+                const fallbackTexture = fallback === 'white' ? this.whiteTexture : this.blackTexture;
+                this.cache.set(cacheKey, fallbackTexture);
+                return fallbackTexture;
+            } finally {
+                this.pending.delete(cacheKey);
+            }
+        })();
+        this.pending.set(cacheKey, loadPromise);
+        return loadPromise;
     }
 
     // Deliberately not copyExternalImageToTexture: confirmed on a Pixel 10 Pro XL (Imagination
