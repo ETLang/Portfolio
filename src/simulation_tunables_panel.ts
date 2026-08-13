@@ -11,7 +11,7 @@ interface SimulationParamMeta {
 
 /** Order matches ForwardMonteCarloOperation's uniform fields each feeds - see SimulationTunables. raysPerFrame is deliberately excluded - see getSimulationTunablesPanel's own doc comment. */
 const SIMULATION_PARAMS: SimulationParamMeta[] = [
-    { key: 'integrationInterval', label: 'Integration Interval', min: 0.0005, max: 0.05, step: 0.0005 },
+    { key: 'integrationInterval', label: 'Integration Interval', min: 0.005, max: 0.3, step: 0.0005 },
     { key: 'photonBounces', label: 'Photon Bounces (Override)', min: -1, max: 8, step: 1 },
     { key: 'surfaceBias', label: 'Surface Bias', min: 0, max: 10, step: 0.1 },
     { key: 'ambientScatterSoftness', label: 'Ambient Scatter Softness', min: 0.1, max: 5, step: 0.05 },
