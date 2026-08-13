@@ -67,6 +67,25 @@
   - Any future image-upload code path needs the same real-mobile-hardware confirmation
     before being trusted - this bug and the WGSL one above are both invisible without it.
 
+- **Any async, per-name resource cache (texture, atlas, etc.) needs its check-then-load kept
+  atomic against concurrent callers, or dedupe the in-flight load.** `TextureCache.resolve`
+  is awaited from `RaytracedResources`/`SpriteResources`' own `loadFromScene`, both of which
+  resolve every object in the scene concurrently via `Promise.all` - a scene with N objects
+  sharing one atlas (e.g. `battle_scene.ts`, ~360 raytraced-map/sprite texture lookups
+  against a single 2048x2048 PNG) sends N calls into `resolveTexture` before the very first
+  one has populated the cache, and without a dedup each one independently re-fetches,
+  re-decodes (`createImageBitmap` -> canvas -> `getImageData`, ~16MB per decode for that
+  atlas), and allocates its own `GPUTexture` for the same image. Desktop has enough memory
+  headroom that this is just wasted work; on an iPhone Safari tab's much smaller memory
+  budget it was enough to get the page killed mid-load - surfacing as Safari's "a problem
+  repeatedly occurred" message (a repeated WebContent-process crash, not a hang), and
+  intermittent because it depends on how many callers pile up before the first load
+  resolves. Fixed via an in-flight `Map<key, Promise<GPUTexture>>` in
+  `src/litbox/texture_cache.ts` (`pending`) that concurrent callers await instead of each
+  starting their own load - see `resolveTexture`. Fixing this also made battle_scene's load
+  noticeably faster even on desktop, not just safer on mobile, since it collapsed hundreds of
+  redundant decode+upload cycles into one.
+
 ## Compute-shader operation architecture
 
 The raytracing simulation's compute passes (photon emission/tracing/accumulation, etc. - see
