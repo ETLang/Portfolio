@@ -132,14 +132,22 @@ const SEARCHLIGHT_ACQUIRE_CHANCE = 0.25;
 // UFO's current bearing, letting a fast enough target visibly pull away instead of being pinned.
 const SEARCHLIGHT_MAX_TURN_RATE_DEGREES_PER_SECOND = 40;
 
-/** 6 high-saturation primary/secondary body colors a spawned UFO picks from. */
+/**
+ * 6 muted primary/secondary body colors a spawned UFO picks from. Each hue's "off" channel(s) are
+ * lifted from 0 to BODY_COLOR_MIN and its "on" channel(s) pulled down from 1 to BODY_COLOR_MAX -
+ * same hue angle as a pure RGB primary/secondary, just far less saturated, so the UFOs read as
+ * painted metal against the scene's muted night-sky/desert palette instead of popping out as
+ * cartoon-bright primaries.
+ */
+const BODY_COLOR_MAX = 0.8;
+const BODY_COLOR_MIN = 0.36;
 const BODY_COLORS: ReadonlyArray<{ r: number; g: number; b: number }> = [
-    { r: 1, g: 0, b: 0 }, // red
-    { r: 0, g: 1, b: 0 }, // green
-    { r: 0, g: 0, b: 1 }, // blue
-    { r: 1, g: 1, b: 0 }, // yellow
-    { r: 0, g: 1, b: 1 }, // cyan
-    { r: 1, g: 0, b: 1 }, // magenta
+    { r: BODY_COLOR_MAX, g: BODY_COLOR_MIN, b: BODY_COLOR_MIN }, // red
+    { r: BODY_COLOR_MIN, g: BODY_COLOR_MAX, b: BODY_COLOR_MIN }, // green
+    { r: BODY_COLOR_MIN, g: BODY_COLOR_MIN, b: BODY_COLOR_MAX }, // blue
+    { r: BODY_COLOR_MAX, g: BODY_COLOR_MAX, b: BODY_COLOR_MIN }, // yellow
+    { r: BODY_COLOR_MIN, g: BODY_COLOR_MAX, b: BODY_COLOR_MAX }, // cyan
+    { r: BODY_COLOR_MAX, g: BODY_COLOR_MIN, b: BODY_COLOR_MAX }, // magenta
 ];
 
 interface SimulationBounds {
