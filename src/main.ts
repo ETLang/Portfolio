@@ -79,8 +79,9 @@ const WEBGPU_FAILURE_MESSAGES: Record<WebGpuInitFailureReason, { reason: string;
     'no-adapter': {
         reason: "Your browser supports WebGPU, but couldn't find or allocate a GPU for it to use.",
         tips: [
-            "Reboot the device - browsers disable GPU acceleration after repeated GPU-process crashes, and this usually clears on restart.",
+            "On Chrome, enable Vulkan at chrome://flags/#enable-vulkan and restart the browser.",
             "On Chrome, visit chrome://gpu and check the \"Problems Detected\" section for the specific cause.",
+            "Reboot the device - browsers disable GPU acceleration after repeated GPU-process crashes, and this usually clears on restart.",
             "Turn off battery saver / low-power mode, which can restrict GPU access.",
             "Close other GPU-heavy tabs or apps and try again.",
             "Make sure the browser and OS are up to date.",
